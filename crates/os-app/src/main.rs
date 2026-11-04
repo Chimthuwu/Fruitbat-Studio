@@ -42,6 +42,7 @@ mod control;
 mod cpu;
 mod data_folder;
 mod device;
+mod device_rack;
 mod dialog;
 mod floating;
 mod filedlg;

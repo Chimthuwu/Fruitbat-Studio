@@ -10,6 +10,7 @@ pub mod cabledebug;
 pub mod channel_win;
 pub mod container;
 pub mod data_folder;
+pub mod device_rack;
 pub mod factory_folder;
 pub mod dialog;
 pub mod menus;
@@ -175,10 +176,12 @@ pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo) -> usize {
     ui.c.clear(ui.t.workspace);
     ui.c.set_cover(None);
 
-    // Workspace (§9): the theme's picture or the watermark, then docked windows on top.
+    // Workspace (§9): the theme's picture or the watermark, then docked windows on top. The device rack panel
+    // (Linear mode, spec model/track-model.md §7) takes the bottom; nothing else changes in Classic mode.
     let left = if s.show_browser { browser_w(s) } else { 0.0 };
     let top = work_y(s);
-    let work = Rect::new(left, top, w - left, h - top);
+    let bottom = crate::device_rack::height(s);
+    let work = Rect::new(left, top, w - left, h - top - bottom);
     let docked = s.docked();
     // spec: ui/flstheme.md §3 (BackMode, BackPicFilename); no watermark over a picture (`wallpaper`).
     if docked.is_none() && !crate::wallpaper::paint(ui, work) {
@@ -195,8 +198,12 @@ pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo) -> usize {
     let docked_at = s.z.iter().rposition(|&w| s.is_max(w));
     // Each part is skipped by a repaint that misses it (`Ui::part`).
     if s.show_browser {
-        let r = Rect::new(0.0, top, browser_w(s), h - top);
+        let r = Rect::new(0.0, top, browser_w(s), h - top - bottom);
         ui.part(Seg::Browser, r, |ui| browser::paint(ui, s, r));
+    }
+    if bottom > 0.0 {
+        let r = Rect::new(0.0, h - bottom, w, bottom);
+        ui.part(Seg::DeviceRack, r, |ui| device_rack::paint(ui, s, r));
     }
     let _ = work;
     for (i, &win) in s.z.iter().enumerate() {
@@ -267,6 +274,8 @@ pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo) -> usize {
         playlist::paint_overlays(ui, s);
     }
     rack::paint_fill(ui, s);
+    // An open device header menu goes over the windows and panels.
+    device_rack::paint_menu(ui, s);
     patterns::paint(ui, s);
     if s.settings.open {
         settings::paint(ui, s);

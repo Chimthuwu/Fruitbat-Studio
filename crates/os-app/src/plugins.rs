@@ -1207,9 +1207,36 @@ impl Plugins {
         if let Some(h) = self.hosted.get_mut(&row) {
             h.detached = on;
             if let Some(w) = &h.window {
+                // Leaving a device-rack tile un-pins it (spec model/track-model.md §7).
+                if on {
+                    w.set_pinned(false);
+                }
                 w.set_detached(owner, on);
             }
         }
+    }
+
+    /// Whether `row`'s instance stopped after a crash (its editor's tile degrades to a placeholder, and its
+    /// window never reopens for it).
+    pub fn is_stopped(&self, row: usize) -> bool {
+        self.hosted.get(&row).is_some_and(|h| h.stop_told)
+    }
+
+    /// Pins `row`'s docked window into a device-rack tile: it moves and sizes to `rect` (the main window's client
+    /// area, physical px) and stays there until it is un-pinned (`set_detached(.., true)`) or closed. A detached
+    /// window, or one without a host link yet, is left alone.
+    #[cfg(plugin_windows)]
+    pub fn pin_window(&mut self, row: usize, rect: [i32; 4]) {
+        let Some(h) = self.hosted.get(&row) else { return };
+        let Some(w) = h.window.as_ref() else { return };
+        if w.detached() {
+            return;
+        }
+        w.set_pinned(true);
+        let k = w.scale();
+        w.move_to(rect[0], rect[1]);
+        let (fw, fh) = (((rect[2] - rect[0]) as f32 / k).round().max(80.0), ((rect[3] - rect[1]) as f32 / k).round().max(40.0));
+        w.set_editor_size((fw, fh));
     }
 
     /// Switch all plugin editors to ▸ (spec: ui/channel-rack.md §17): every instance's window, rack rows' and mixer
