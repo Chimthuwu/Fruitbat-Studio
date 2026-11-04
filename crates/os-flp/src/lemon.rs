@@ -44,6 +44,11 @@ pub const NOTE_LOCKS: u8 = 202;
 pub const TRACKS: u8 = 203;
 /// `LMex` event: whether the project is in Linear mode (spec: model/track-model.md).
 pub const LINEAR_MODE: u8 = 204;
+/// `LMex` event: Linear mode's per-track automation lanes ([`os_model::AutoLane`]; spec: model/track-model.md §6b).
+/// Lemon Studio's design: the lanes are view state over the automation (which stays automation-clip channels +
+/// clips), so the original has no such event and an `.flp` round trip loses them, like the rest of the Lemon-only
+/// state.
+pub const LANE_BINDINGS: u8 = 205;
 
 /// Whether `file` is a `.lemon` file (its first chunk is `LMhd`).
 pub fn is_lemon(file: &FlpFile) -> bool {

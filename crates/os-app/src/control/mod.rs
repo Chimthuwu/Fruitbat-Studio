@@ -253,6 +253,8 @@ fn op(c: &Command) -> &'static str {
         Command::TrackCreate { .. } => "track_create",
         Command::TrackDelete { .. } => "track_delete",
         Command::TrackSet { .. } => "track_set",
+        Command::AutomationLaneBind { .. } => "automation_lane_bind",
+        Command::AutomationLaneUnbind { .. } => "automation_lane_unbind",
         Command::SetParam { .. } => "set_param",
         Command::Put(_) => "put",
     }

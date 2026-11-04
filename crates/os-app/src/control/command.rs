@@ -248,6 +248,14 @@ pub enum Command {
         #[serde(default)]
         color: Option<String>,
     },
+    /// Binds one of the track's automation lanes to `target` (an automation target id, spec:
+    /// plugins/plugin-parameters.md §5): Linear mode stacks the lane beneath the track's lane, showing the target's
+    /// automation clips. The target must be one of the track's own controls (a knob of the track's channel, or a
+    /// parameter of its mixer strip or a slot's plugin), and unbound. The result names the track's id again.
+    AutomationLaneBind { track: u32, target: u32 },
+    /// Takes a lane's binding off again: its clips (the target's automation) go back to the Unassigned group. The
+    /// undo puts the lane back. Linear mode only.
+    AutomationLaneUnbind { track: u32, target: u32 },
 
     // ----- Plugins
     /// Parameter `param` (the plugin's own parameter id) of the instance playing channel or slot `owner` to `value`
@@ -626,6 +634,8 @@ impl Command {
             Command::TrackCreate { .. } => "Add track",
             Command::TrackDelete { .. } => "Delete track",
             Command::TrackSet { .. } => "Track settings",
+            Command::AutomationLaneBind { .. } => "Bind automation lane",
+            Command::AutomationLaneUnbind { .. } => "Unbind automation lane",
             Command::SetParam { .. } => PLUGIN_PARAMETER,
             Command::Put(_) => "Undo",
         }
@@ -666,7 +676,9 @@ impl Command {
             | Command::DeletePattern { .. }
             | Command::TrackCreate { .. }
             | Command::TrackDelete { .. }
-            | Command::TrackSet { .. } => Taken::Project(Box::new(Side::of(s))),
+            | Command::TrackSet { .. }
+            | Command::AutomationLaneBind { .. }
+            | Command::AutomationLaneUnbind { .. } => Taken::Project(Box::new(Side::of(s))),
             Command::Put(t) => match &**t {
                 Taken::Settings(_) => Taken::Settings(Box::new(Settings::of(s))),
                 Taken::Channel(c) => Taken::Channel(Box::new(p.channels[channel_row(p, c.id.0)?].clone())),
@@ -1126,6 +1138,15 @@ impl Command {
                 if length == Some(0) {
                     return Err("a clip's length can't be 0".into());
                 }
+                // Linear mode (spec: model/track-model.md §6b): an automation clip is bound to its track's lane (or
+                // the Unassigned group); it cannot be dragged vertically off it.
+                if track.is_some()
+                    && let Some(cur) = s.project.arrangement().and_then(|a| a.clips.get(i))
+                    && let Some(row) = crate::playlist::locked_track(s, cur)
+                    && usize::from(row) != usize::from(track.unwrap() - 1)
+                {
+                    return Err("the automation clip is bound to its track's lane (Linear mode)".into());
+                }
                 let sel = selected_clips(s);
                 let a = crate::playlist::arr_mut(s);
                 let mut c = a.clips.remove(i);
@@ -1216,9 +1237,44 @@ impl Command {
                 let id = s.project.tracks.last().map_or(Id::NONE, |t| t.id);
                 Ok(id_result("track", id))
             }
+            Command::AutomationLaneBind { track, target } => {
+                if !s.project.linear_mode {
+                    return Err("automation lanes are a Linear-mode feature (track_create makes a project Linear)".into());
+                }
+                let at = s.project.tracks.iter().position(|t| t.id.0 == track).ok_or_else(|| format!("no track {track}"))?;
+                if let Some(other) = crate::track_links::track_of_target(s, target) {
+                    if other != at {
+                        return Err(format!("the target is not one of track {track}'s controls"));
+                    }
+                } else {
+                    return Err("the target has no track: the main controls and a Classic-mode mixer target take no lane".into());
+                }
+                if s.project.auto_lanes.iter().any(|l| l.target == target) {
+                    return Err(format!("target {target:#x} is bound already"));
+                }
+                // A lane just bound shows its clips (spec: model/track-model.md §6b "collapsed by default except
+                // when the user adds one").
+                s.project.auto_lanes.push(os_model::AutoLane { track: at as u16, target, collapsed: false });
+                none
+            }
+            Command::AutomationLaneUnbind { track, target } => {
+                if !s.project.linear_mode {
+                    return Err("automation lanes are a Linear-mode feature (track_create makes a project Linear)".into());
+                }
+                let n = s.project.tracks.iter().position(|t| t.id.0 == track).ok_or_else(|| format!("no track {track}"))?;
+                let before = s.project.auto_lanes.len();
+                s.project.auto_lanes.retain(|l| !(l.track as usize == n && l.target == target));
+                if s.project.auto_lanes.len() == before {
+                    return Err(format!("track {track} has no lane bound to {target:#x}"));
+                }
+                none
+            }
             Command::TrackDelete { track } => {
                 let at = s.project.tracks.iter().position(|t| t.id.0 == track).ok_or_else(|| format!("no track {track}"))?;
                 let t = s.project.tracks.remove(at);
+                // The removed track's automation lanes go, the later tracks' follow the removal (`auto_lane_track_deleted`).
+                // For a bus (no lane) this is the only cleanup: `track_lane_deleted` below finds no track to remove.
+                s.project.auto_lane_track_deleted(at as u16);
                 // The lane first: it and its clips go (the playlist track's Delete, `playlist::delete_track`'s
                 // loops), in every arrangement (the lane's number is the same one in all of them).
                 if t.playlist_lane > 0 {

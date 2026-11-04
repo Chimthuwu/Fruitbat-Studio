@@ -53,6 +53,10 @@ pub fn events(s: &State, plugins: &Plugins) -> Vec<Event> {
     v.push(note_locks(s));
     v.push(linear_tracks(s));
     v.push(linear_mode(s));
+    // The lanes only when there are any: Classic mode's file has none (zero change).
+    if !s.project.auto_lanes.is_empty() {
+        v.push(lane_bindings(s));
+    }
     v
 }
 
@@ -81,6 +85,9 @@ pub fn apply(s: &mut State, plugins: &mut Plugins, file: &FlpFile) {
     }
     if let Some(d) = read(lemon::TRACKS) {
         s.project.tracks = read_tracks(&d[1..]);
+    }
+    if let Some(d) = read(lemon::LANE_BINDINGS) {
+        s.project.auto_lanes = read_lane_bindings(&d[1..], &s.project.tracks);
     }
     if let Some(&flags) = read(lemon::MIXER).as_deref().and_then(|d| d.get(1)) {
         s.project.pdc_off = flags & PDC_AUTO == 0;
@@ -420,6 +427,37 @@ fn linear_mode(s: &State) -> Event {
     Event::new(lemon::LINEAR_MODE, Value::var([LAYOUT, u8::from(s.project.linear_mode)]))
 }
 
+/// Reads [`lemon::LANE_BINDINGS`]'s payload after its layout byte, resolving each lane's track position against the
+/// just-read [`os_model::Project::tracks`] (the layout check: a lane whose track is gone, or a target bound twice, is
+/// left out).
+fn read_lane_bindings(d: &[u8], tracks: &[os_model::Track]) -> Vec<os_model::AutoLane> {
+    let mut r = Reader(d);
+    let mut v = Vec::new();
+    for _ in 0..r.u32().unwrap_or(0) {
+        let (Some(at), Some(target), Some(collapsed)) = (r.u32(), r.u32(), r.u8()) else { break };
+        let Some(track) = u16::try_from(at).ok().filter(|&at| usize::from(at) < tracks.len()) else { continue };
+        if v.iter().any(|l: &os_model::AutoLane| l.target == target) {
+            continue;
+        }
+        v.push(os_model::AutoLane { track, target, collapsed: collapsed != 0 });
+    }
+    v
+}
+
+/// [`lemon::LANE_BINDINGS`]: a u32 count, then per automation lane (in [`os_model::Project::auto_lanes`] order) the
+/// owning track's position in [`os_model::Project::tracks`] (u32), the bound target (u32) and the collapsed flag (u8).
+/// The track is stored by its position, the order the `TRACKS` event restores it in; the apply resolves it to the
+/// track (a lane whose track is gone is dropped, the layout check).
+fn lane_bindings(s: &State) -> Event {
+    let mut b = start(s.project.auto_lanes.len());
+    for l in &s.project.auto_lanes {
+        b.extend_from_slice(&u32::from(l.track).to_le_bytes());
+        b.extend_from_slice(&l.target.to_le_bytes());
+        b.push(u8::from(l.collapsed));
+    }
+    Event::new(lemon::LANE_BINDINGS, Value::var(b))
+}
+
 /// A payload's layout version and entry count.
 fn start(count: usize) -> Vec<u8> {
     let mut b = vec![LAYOUT];
@@ -637,6 +675,47 @@ mod tests {
         back.open(flp_path);
         let s = &back.state;
         assert!(!s.project.linear_mode && s.project.tracks.is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The automation lanes (event 205, spec: model/track-model.md §6b) come back through a .lemon file, their
+    /// targets and collapsed flags with them; a lane whose track is gone (or a target bound twice) is left out; an
+    /// FLP saved from the same state has none.
+    #[test]
+    fn lane_bindings_round_trip_through_a_lemon_file() {
+        let d = dir("lanes");
+        let (lemon_path, flp_path) = (d.join("Lanes.lemon"), d.join("Lanes.flp"));
+        let mut app = with_state();
+        app.state.project.linear_mode = true;
+        app.state.project.tracks.push(os_model::Track::new(os_model::TrackKind::Midi, 1, 5, Some(0)));
+        let tgt = os_model::target::channel(0, os_model::target::CHANNEL_VOLUME);
+        let gone = os_model::target::mixer(9, os_model::target::MIXER_VOLUME);
+        app.state.project.auto_lanes = vec![
+            os_model::AutoLane { track: 0, target: tgt, collapsed: false },
+            os_model::AutoLane { track: 0, target: gone, collapsed: true },
+            os_model::AutoLane { track: 7, target: os_model::target::TEMPO, collapsed: false },
+        ];
+        app.save_to(lemon_path.clone());
+        app.save_to(flp_path.clone());
+        let file = os_flp::FlpFile::parse(&std::fs::read(&lemon_path).unwrap()).unwrap();
+        let mut want = vec![LAYOUT, 3, 0, 0, 0];
+        for (track, target, collapsed) in [(0u32, tgt, 0u8), (0, gone, 1), (7, os_model::target::TEMPO, 0)] {
+            want.extend_from_slice(&track.to_le_bytes());
+            want.extend_from_slice(&target.to_le_bytes());
+            want.push(collapsed);
+        }
+        assert_eq!(lemon::data(&file, lemon::LANE_BINDINGS), Some(want));
+        let mut back = App::new(None);
+        back.open(lemon_path.clone());
+        assert!(!back.unsaved(), "the lanes read back are the saved ones");
+        // The lane whose track is gone is left out (the layout check).
+        assert_eq!(
+            back.state.project.auto_lanes,
+            vec![os_model::AutoLane { track: 0, target: tgt, collapsed: false }, os_model::AutoLane { track: 0, target: gone, collapsed: true }]
+        );
+        // The FLP saved from the same state: no lanes (an FLP has no place for them).
+        back.open(flp_path);
+        assert!(back.state.project.auto_lanes.is_empty());
         let _ = std::fs::remove_dir_all(&d);
     }
 

@@ -136,6 +136,24 @@ pub struct Project {
     /// FLP: a `.lemon` file keeps them in its own events (os-app `lemon_state`); an `.flp` round trip loses them,
     /// like the rest of the Lemon-only state.
     pub tracks: Vec<Track>,
+    /// The linear mode's per-track automation lanes, in binding order (spec: model/track-model.md §6b): lemon-side
+    /// view state over the automation (which stays automation-clip channels + clips), not in the FLP. A `.lemon`
+    /// file keeps them in its own events (os-app `lemon_state`); an `.flp` round trip loses them, like the rest of
+    /// the Lemon-only state. A lane names its track by its position in [`Project::tracks`].
+    pub auto_lanes: Vec<AutoLane>,
+}
+
+/// One automation lane of a linear track (spec: model/track-model.md §6b): a view and a placement constraint over one
+/// automation target's automation; the storage stays automation-clip channels + clips. Its identity is the
+/// (`track`, `target`) pair — a target is bound at most once, a lane holds one target.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AutoLane {
+    /// The owning track's position in [`Project::tracks`] (0-based; the ids are not stable across a save).
+    pub track: u16,
+    /// The bound automation target.
+    pub target: u32,
+    /// A collapsed lane shows only its name strip; a lane just bound shows its clips.
+    pub collapsed: bool,
 }
 
 /// What a [`Track`] is (spec: model/track-model.md): an **Audio** track plays clips through its mixer strip, a
@@ -2245,12 +2263,47 @@ impl Project {
     /// `playlist::delete_track`): that lane's track is dropped (the conservative choice: a lane that is gone cannot
     /// host its track; spec: model/track-model.md "Remap discipline"), the lanes below it move up.
     pub fn track_lane_deleted(&mut self, at0: u16) {
+        let at = self.tracks.iter().position(|t| t.playlist_lane == u32::from(at0) + 1);
         self.tracks.retain_mut(|t| {
             if t.playlist_lane == u32::from(at0) + 1 {
                 return false;
             }
             if t.playlist_lane > u32::from(at0) {
                 t.playlist_lane -= 1;
+            }
+            true
+        });
+        // The lanes follow the track list's order, the lanes' `track` names a position in it.
+        if let Some(at) = at {
+            self.auto_lane_track_deleted(at as u16);
+        }
+    }
+
+    /// The lanes of the linear track at `at` in [`Project::tracks`], in binding order (spec: model/track-model.md §6b).
+    pub fn auto_lanes_of(&self, at: u16) -> impl Iterator<Item = &AutoLane> {
+        self.auto_lanes.iter().filter(move |l| l.track == at)
+    }
+
+    /// The lane bound to `target`, if any (a target is bound at most once).
+    pub fn auto_lane_of(&self, target: u32) -> Option<&AutoLane> {
+        self.auto_lanes.iter().find(|l| l.target == target)
+    }
+
+    /// The playlist lane a lane-bound automation clip of `target` lives on: its track's `playlist_lane` less 1
+    /// (0-based row), `None` when the target has no track or lane (spec: model/track-model.md §6b).
+    pub fn auto_lane_row_of(&self, target: u32) -> Option<u16> {
+        let l = self.auto_lane_of(target)?;
+        Some((self.tracks.get(usize::from(l.track))?.playlist_lane.max(1) - 1) as u16)
+    }
+
+    /// A linear track at `at` went away (or its lane): its lanes go, and the later tracks' lanes follow the removal.
+    pub fn auto_lane_track_deleted(&mut self, at: u16) {
+        self.auto_lanes.retain_mut(|l| {
+            if l.track == at {
+                return false;
+            }
+            if l.track > at {
+                l.track -= 1;
             }
             true
         });

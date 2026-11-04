@@ -270,6 +270,45 @@ pub fn lane_track(s: &State, row: u16) -> Option<&os_model::Track> {
     s.project.tracks.iter().find(|tr| tr.playlist_lane > 0 && tr.playlist_lane as u16 == row + 1)
 }
 
+/// The position in [`os_model::Project::tracks`] of the track a target's control sits on (spec: model/track-model.md
+/// §6b): a channel target the track whose channel plays it, a mixer or slot target the track whose strip holds it,
+/// `None` for the main controls and everything with no track (a Classic-mode mixer target). `None` also when the
+/// channel or strip belongs to no track's record.
+pub fn track_of_target(s: &State, tgt: u32) -> Option<usize> {
+    let p = &s.project;
+    let at_channel = |ch: u16| p.tracks.iter().position(|t| t.channel == Some(ch));
+    let at_strip = |m: u16| p.tracks.iter().position(|t| t.mixer_strip == m);
+    match os_model::target::decode(tgt) {
+        os_model::target::Target::ChannelVolume(ch)
+        | os_model::target::Target::ChannelPan(ch)
+        | os_model::target::Target::ChannelPitch(ch)
+        | os_model::target::Target::ChannelLevel(ch, _)
+        | os_model::target::Target::ChannelOn(ch)
+        | os_model::target::Target::ChannelMixerTrack(ch)
+        | os_model::target::Target::ChannelParam(ch, _) => at_channel(ch),
+        os_model::target::Target::MixerVolume(m)
+        | os_model::target::Target::MixerPan(m)
+        | os_model::target::Target::MixerSeparation(m)
+        | os_model::target::Target::MixerEq(m, ..)
+        | os_model::target::Target::MixerSend(m, _)
+        | os_model::target::Target::SlotOn(m, _)
+        | os_model::target::Target::SlotMix(m, _)
+        | os_model::target::Target::SlotParam(m, ..) => at_strip(m),
+        os_model::target::Target::Tempo | os_model::target::Target::MainSwing | os_model::target::Target::MainPitch | os_model::target::Target::Other(_) => None,
+    }
+}
+
+/// A lane's name: the name of the automation channel bound to its target (what "Create automation clip" named after
+/// the control), else the target's hex id (spec: model/track-model.md §6b "named after the target").
+pub fn lane_name(s: &State, target: u32) -> String {
+    s.project
+        .automations
+        .iter()
+        .find(|a| a.targets.first() == Some(&target))
+        .and_then(|a| s.project.channel(a.channel).and_then(|c| c.name.clone()))
+        .unwrap_or_else(|| format!("Target {:x}", target))
+}
+
 /// The Track mode ▸ submenu for track `t`: Unassigned, Audio track ▸ (a new mixer track, then every insert), Instrument
 /// track ▸ (every channel an instrument track can play); on an audio track also its options, which act on its mixer
 /// track: Select audio input ▸ (as the mixer track's input menu, the current input marked), Arm recording (ticked while

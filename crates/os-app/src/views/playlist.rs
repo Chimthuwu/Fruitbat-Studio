@@ -192,7 +192,7 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
     ui.hit(grid, Action::PlaylistArea, "Arranger");
     let mut visible = Vec::new();
     let mut row = g.track_at(grid.y);
-    while row < TRACKS && g.y_of(row) < grid.bottom() {
+    while row <= TRACKS && g.y_of(row) < grid.bottom() {
         visible.push(row);
         row += 1;
     }
@@ -208,9 +208,18 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
         let (y, h) = (g.y_of(row), g.rows.height(row));
         let c = if pl::track_on(s, row) { t.grid } else { t.grid.mix(t.grid_gap, 0.5) };
         let c = if g.rows.strip(row) { c.mix(t.grid_gap, 0.5) } else { c };
-        ui.c.fill_rect(Rect::new(grid_x, y, grid_w, h - gap_of(row)), c);
+        // The track's own part of the row (Linear mode's automation lanes stack under it, spec: model/track-model.md
+        // §6b); the Unassigned group's band is the row.
+        let main_h = if g.rows.strip(row) || row == TRACKS { h } else { g.rows.row_h };
+        ui.c.fill_rect(Rect::new(grid_x, y, grid_w, main_h - gap_of(row)), c);
         // Under the gap line, which a theme's line strength may make see-through.
-        ui.c.fill_rect(Rect::new(grid_x, y + h - gap_of(row), grid_w, gap_of(row)), t.grid);
+        ui.c.fill_rect(Rect::new(grid_x, y + main_h - gap_of(row), grid_w, gap_of(row)), t.grid);
+        // The lane bands: darker panels, each followed by its gap (which a theme's line strength may make
+        // see-through).
+        for b in g.rows.lanes(row) {
+            ui.c.fill_rect(Rect::new(grid_x, b.y0, grid_w, b.h - gap_of(row)), t.grid.mix(t.grid_gap, 0.35));
+            ui.c.fill_rect(Rect::new(grid_x, b.y0 + b.h - gap_of(row), grid_w, gap_of(row)), t.grid);
+        }
     }
     let start = pl::start_marker(s);
     if let Some(p) = start {
@@ -220,8 +229,13 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
     grid_lines(ui, &g, bar_w, start_bar(&g, start));
     for &row in &visible {
         let (y, h) = (g.y_of(row), g.rows.height(row));
-        // The gap line at the theme's line strength (spec: ui/flstheme.md §3, PLGridContrast).
-        ui.c.fill_rect(Rect::new(grid_x, y + h - gap_of(row), grid_w, gap_of(row)), t.pl_line(t.grid_gap));
+        let main_h = if g.rows.strip(row) || row == TRACKS { h } else { g.rows.row_h };
+        // The gap line at the theme's line strength (spec: ui/flstheme.md §3, PLGridContrast), the track's and each
+        // lane band's own (spec: model/track-model.md §6b).
+        ui.c.fill_rect(Rect::new(grid_x, y + main_h - gap_of(row), grid_w, gap_of(row)), t.pl_line(t.grid_gap));
+        for b in g.rows.lanes(row) {
+            ui.c.fill_rect(Rect::new(grid_x, b.y0 + b.h - gap_of(row), grid_w, gap_of(row)), t.pl_line(t.grid_gap));
+        }
     }
     // Time selection (§7).
     if let Some((a, b)) = s.playlist.range {
@@ -1277,6 +1291,17 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
     let t = ui.t;
     let (y, h) = (g.y_of(row), g.rows.height(row));
     let strip = g.rows.strip(row);
+    if row == TRACKS {
+        // The Unassigned group's header (Linear mode, spec: model/track-model.md §6b): the band below the last track
+        // holds the automation clips whose target no track owns.
+        let hr = Rect::new(x, y, w, (h - 3.0).max(8.0));
+        let base = t.track_header.shade(-0.15);
+        let (top, bottom) = if super::lemon(ui) { (base, base) } else { (base.shade(0.035), base.shade(-0.03)) };
+        ui.c.fill_rect_gradient(hr, top, bottom, 4.0);
+        ui.hit(hr, Action::PlHeader(row), "Unassigned: automation clips whose target no track owns");
+        ui.c.text_clip(Font::new(14), hr.x + 4.0, hr.y + 2.0, hr.w - 8.0, t.text_faint, "Unassigned");
+        return;
+    }
     let leader = pl::group_track(s, row);
     let lead = pl::is_group_track(s, row);
     let member = leader.is_some();
@@ -1290,7 +1315,9 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
     let base = if on { base } else { base.mix(t.grid_gap, 0.4) };
     let (bx, bw) = if member { (x + INDENT, w - INDENT) } else { (x, w) };
     let gap = if strip { 1.0 } else { 3.0 };
-    let bh = if joins_below { h } else { h - gap };
+    // A track with automation lanes keeps its header at the row height; the lanes stack under it (spec:
+    // model/track-model.md §6b).
+    let bh = (if joins_below { h } else { h - gap }).min(g.rows.row_h.max(8.0)).max(6.0);
     let hr = Rect::new(bx, y, bw, bh);
     if member {
         // The indent beside the members: a dark strip (FL dithers it).
@@ -1314,7 +1341,7 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
     // The LED and "…" keep their distance from the row's bottom when the track height changes (Alt+wheel); short
     // rows drop the "…" and keep the name clear of the LED.
     let short = g.rows.row_h < pl::ROW_H - 8.0;
-    let led = Rect::new(hr.right() - 19.0, (h - gap - 15.0).max(1.0) + hr.y, 14.0, 14.0);
+    let led = Rect::new(hr.right() - 19.0, (bh - 16.0).max(1.0) + hr.y, 14.0, 14.0);
     // Linear mode (spec: model/track-model.md §5): the lane's Track adds its mixer strip's meter and mini-fader in a
     // column at the header's right edge, so the LED (and what sits beside it) moves left of that column. Classic
     // mode's header is exactly as before.
@@ -1389,6 +1416,25 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
     }
     if let (Some(tr), Some(mix)) = (lane, mix) {
         linear_mix(ui, s, mix, tr);
+    }
+    // The track's automation lane headers (Linear mode, spec: model/track-model.md §6b): a slim strip each, named
+    // after its target, in the track's colour; the arrow toggles the lane's clips.
+    for b in g.rows.lanes(row) {
+        let base = base.shade(-0.18);
+        let (top, bottom) = if super::lemon(ui) { (base, base) } else { (base.shade(0.035), base.shade(-0.03)) };
+        let lr = Rect::new(bx, b.y0, bw, (b.h - 2.0).max(8.0));
+        ui.c.fill_rect_gradient(lr, top, bottom, k);
+        ui.hit(lr, Action::PlHeader(row), "Automation lane (right-click: menu)");
+        let a = Rect::new(lr.right() - 16.0, lr.y + 1.0, 14.0, 14.0);
+        let hov = ui.hit(a, Action::PlLaneArrow(row, b.target), "Collapse / expand the automation lane");
+        let col = if hov { ui.t.tx(0xffffff) } else { text.shade(-0.1) };
+        let (cx, cy) = (a.cx(), a.cy());
+        if b.collapsed {
+            ui.c.fill_polygon(&[(cx - 4.0, cy - 4.0), (cx - 4.0, cy + 4.0), (cx + 4.0, cy)], col);
+        } else {
+            ui.c.fill_polygon(&[(cx - 4.0, cy + 4.0), (cx + 4.0, cy + 4.0), (cx, cy - 4.0)], col);
+        }
+        ui.c.text_clip(Font::new(12), lr.x + 3.0, lr.y + 1.0, lr.w - 20.0, text.shade(-0.2), &crate::track_links::lane_name(s, b.target));
     }
 }
 

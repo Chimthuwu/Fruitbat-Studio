@@ -92,6 +92,13 @@ fn every_command_undoes_and_redoes() {
     ] {
         round_trip(&mut a, c);
     }
+    // The automation lanes (spec: model/track-model.md §6b): the track_create made the project Linear and gave the
+    // strip its track names; a mixer target on that strip binds, and the unbind takes the lane off again.
+    let trk = a.state.project.tracks.last().unwrap().id.0;
+    let strip = a.state.project.tracks.last().unwrap().mixer_strip;
+    let tgt = os_model::target::mixer(strip as u16, os_model::target::MIXER_VOLUME);
+    round_trip(&mut a, json!({"op": "automation_lane_bind", "track": trk, "target": tgt}));
+    round_trip(&mut a, json!({"op": "automation_lane_unbind", "track": trk, "target": tgt}));
     // The playlist: a clip added, edited and deleted.
     let r = round_trip(&mut a, json!({"op": "add_clip", "track": 3, "position": 384, "pattern": pat}));
     let clip = r[0]["clip"].as_u64().unwrap();
@@ -1089,4 +1096,37 @@ fn track_create_set_and_delete_undo_and_redo() {
     round_trip(&mut a, json!({"op": "track_delete", "track": bus}));
     assert_eq!(a.state.project.channels.len(), n_channels, "a bus has no channel");
     assert!(a.state.project.tracks.is_empty());
+}
+
+/// The automation lanes (spec: model/track-model.md §6b): a bind makes one lane (the target must be one of the
+/// track's own controls and bind once, Linear mode only), the unbind takes it off again, and the undo and redo of
+/// both put the lanes back exactly; a deleted track's lane goes with it.
+#[test]
+fn automation_lane_bind_unbind_undo_and_redo() {
+    let mut a = app();
+    let tgt = |ch: u16| os_model::target::channel(ch, os_model::target::CHANNEL_VOLUME);
+    // Classic mode first: no lane for anything.
+    let r = round_trip(&mut a, json!({"op": "add_channel", "name": "Keys"}));
+    let _keys = r[0]["channel"].as_u64().unwrap() as u32;
+    assert!(apply(&mut a.state, &test_client(), None, vec![cmd(json!({"op": "automation_lane_bind", "track": 0, "target": tgt(0)}))]).is_err());
+    let r = round_trip(&mut a, json!({"op": "track_create", "kind": "midi", "name": "Lead"}));
+    let track = r[0]["track"].as_u64().unwrap() as u32;
+    let (strip, ch) = { let t = a.state.project.tracks.last().unwrap().clone(); (t.mixer_strip, t.channel.unwrap()) };
+    // A target no track owns (the master's fader) and none of another strip: both rejected.
+    assert!(apply(&mut a.state, &test_client(), None, vec![cmd(json!({"op": "automation_lane_bind", "track": track, "target": os_model::target::mixer(0, os_model::target::MIXER_VOLUME)}))]).is_err());
+    let other_strip = os_model::target::mixer(if strip == 1 { 2 } else { 1 }, os_model::target::MIXER_VOLUME);
+    assert!(apply(&mut a.state, &test_client(), None, vec![cmd(json!({"op": "automation_lane_bind", "track": track, "target": other_strip}))]).is_err());
+    assert!(a.state.project.auto_lanes.is_empty());
+    // The track's channel knob binds; a second bind of the same target is rejected.
+    round_trip(&mut a, json!({"op": "automation_lane_bind", "track": track, "target": tgt(ch)}));
+    assert_eq!(a.state.project.auto_lanes, vec![os_model::AutoLane { track: 0, target: tgt(ch), collapsed: false }]);
+    assert!(apply(&mut a.state, &test_client(), None, vec![cmd(json!({"op": "automation_lane_bind", "track": track, "target": tgt(ch)}))]).is_err());
+    // The unbind (a target not bound: rejected).
+    assert!(apply(&mut a.state, &test_client(), None, vec![cmd(json!({"op": "automation_lane_unbind", "track": track, "target": other_strip}))]).is_err());
+    round_trip(&mut a, json!({"op": "automation_lane_unbind", "track": track, "target": tgt(ch)}));
+    assert!(a.state.project.auto_lanes.is_empty());
+    // A deleted track takes its lane with it.
+    round_trip(&mut a, json!({"op": "automation_lane_bind", "track": track, "target": tgt(ch)}));
+    round_trip(&mut a, json!({"op": "track_delete", "track": track}));
+    assert!(a.state.project.auto_lanes.is_empty());
 }

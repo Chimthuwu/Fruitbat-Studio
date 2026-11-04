@@ -306,6 +306,10 @@ pub enum Cmd {
     TrackRename(u16),
     TrackMute(u16),
     TrackSolo(u16),
+    /// Automation lanes (Linear mode, spec: model/track-model.md §6b): collapse / expand the track's lane bound to
+    /// `target`, and take that binding off again.
+    LaneToggle(u16, u32),
+    LaneRemove(u16, u32),
     /// Group the track with the one above it, or take it out of its group (§6a).
     TrackGroup(u16),
     /// Track mode ▸ (§6c): unassigned, an audio track, an instrument track.
@@ -894,13 +898,37 @@ impl PlaylistState {
 
 /// Height of a member row of a collapsed group: a thin strip showing its clips as bars (§6a).
 pub const STRIP_H: f32 = 6.0;
+/// Height of an expanded automation lane beneath its track (Linear mode, spec: model/track-model.md §6b).
+pub const LANE_H: f32 = 44.0;
+/// Height of a collapsed automation lane: just its name strip (spec: model/track-model.md §6b "collapse/expand
+/// like a ▸ toggle").
+pub const LANE_STRIP_H: f32 = 16.0;
+
+/// One automation lane band in the layout (Linear mode, spec: model/track-model.md §6b): the lane's strip under its
+/// track's row, its target and whether it shows its clips.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LaneBand {
+    /// The playlist row (0-based) of the track the lane hangs under.
+    pub track: u16,
+    pub target: u32,
+    pub collapsed: bool,
+    /// The band's top and height in content pixels.
+    pub y0: f32,
+    pub h: f32,
+}
 
 /// Vertical layout of the tracks (§6a): every track's top in content pixels. Rows are `row_h` tall (`ROW_H` unless
-/// zoomed); members of a collapsed group are `STRIP_H` strips.
+/// zoomed); members of a collapsed group are `STRIP_H` strips. Linear mode stacks every track's automation lanes
+/// (`LANE_H` expanded, `LANE_STRIP_H` collapsed) under its row (spec: model/track-model.md §6b) and closes with one
+/// "Unassigned" band for the automation clips whose target has no track; Classic mode is exactly as before.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Rows {
     top: Vec<f32>,
     pub row_h: f32,
+    /// The lane bands, in layout order (under their tracks, then the Unassigned band).
+    pub bands: Vec<LaneBand>,
+    /// The "Unassigned" group's top and height (`None` outside Linear mode).
+    pub unassigned: Option<(f32, f32)>,
 }
 
 impl Rows {
@@ -908,8 +936,9 @@ impl Rows {
         let tracks = s.project.arrangement().map(|a| a.tracks.as_slice()).unwrap_or(&[]);
         // On the drawing grid, so tops and heights add up exactly (`PGeom::xs64`).
         let row_h = snap(f64::from(s.playlist.row_h.clamp(ROW_MIN, ROW_MAX)));
-        let mut top = Vec::with_capacity(usize::from(TRACKS) + 1);
+        let mut top = Vec::with_capacity(usize::from(TRACKS) + 2);
         let (mut y, mut collapsed) = (0.0, false);
+        let mut bands = Vec::new();
         for t in 0..usize::from(TRACKS) {
             top.push(y);
             let tr = tracks.get(t);
@@ -918,9 +947,42 @@ impl Rows {
                 collapsed = tr.is_some_and(|x| x.collapsed);
             }
             y += if grouped && collapsed { STRIP_H } else { row_h };
+            // The track's lanes (Linear mode only; a strip row carries none, spec: model/track-model.md §6b).
+            if s.project.linear_mode && !(grouped && collapsed) {
+                if let Some((ti, _tr)) = s.project.tracks.iter().enumerate().find(|(_, x)| x.playlist_lane > 0 && x.playlist_lane as usize == t + 1) {
+                    for l in s.project.auto_lanes_of(ti as u16) {
+                        let h = if l.collapsed { LANE_STRIP_H } else { LANE_H };
+                        bands.push(LaneBand { track: t as u16, target: l.target, collapsed: l.collapsed, y0: y, h });
+                        y += snap(f64::from(h));
+                    }
+                }
+            }
         }
+        // The Unassigned group: one band for the automation clips whose target no track takes (nothing becomes
+        // invisible, spec: model/track-model.md §6b).
+        let unassigned = if s.project.linear_mode {
+            let u = (y, snap(f64::from(LANE_H)));
+            bands.push(LaneBand { track: TRACKS, target: 0, collapsed: false, y0: y, h: LANE_H });
+            y += u.1;
+            Some(u)
+        } else {
+            None
+        };
         top.push(y);
-        Rows { top, row_h }
+        Rows { top, row_h, bands, unassigned }
+    }
+
+    /// The lane bands under track `t` (Linear mode; empty otherwise). `t` = [`TRACKS`] is the Unassigned group.
+    pub fn lanes(&self, t: u16) -> impl Iterator<Item = &LaneBand> {
+        self.bands.iter().filter(move |b| b.track == t)
+    }
+
+    /// The band a clip of the automation channel `ch` renders in: its lane's band, or the Unassigned group's
+    /// (`None`: not an automation clip, or Classic mode, or the automation is gone).
+    pub fn band_of(&self, ch: u16, automations: &[Automation]) -> Option<&LaneBand> {
+        let a = automations.iter().find(|a| a.channel == ch)?;
+        let bound = self.bands.iter().find(|b| b.target != 0 && Some(&b.target) == a.targets.first());
+        bound.or_else(|| self.bands.last().filter(|b| self.unassigned.is_some()))
     }
 
     /// A clip's height: its row less the 3 px gap.
@@ -933,7 +995,7 @@ impl Rows {
     }
 
     pub fn height(&self, t: u16) -> f32 {
-        let i = usize::from(t.min(TRACKS - 1));
+        let i = usize::from(t.min(TRACKS));
         self.top[i + 1] - self.top[i]
     }
 
@@ -948,7 +1010,7 @@ impl Rows {
     }
 
     pub fn total(&self) -> f32 {
-        self.top[usize::from(TRACKS)]
+        *self.top.last().unwrap_or(&0.0)
     }
 }
 
@@ -963,6 +1025,8 @@ pub struct PGeom {
     pub ppq: u32,
     pub bar_w: f32,
     pub rows: std::rc::Rc<Rows>,
+    /// The arrangement's automation (a lane band is found from a clip's channel, `Rows::band_of`).
+    pub automations: Vec<Automation>,
 }
 
 /// `v` on the grid of 1/256 px that scrolled positions are drawn at (`PGeom::xs`).
@@ -980,7 +1044,7 @@ impl PGeom {
         let ppq = u32::from(s.project.ppq.max(4));
         let bar_w = s.playlist_bar_w;
         let rows = std::rc::Rc::new(Rows::new(s));
-        PGeom { grid, ppt: bar_w / (ppq * 4) as f32, scroll_x: s.playlist_scroll.0, scroll_y: s.playlist_scroll.1, ppq, bar_w, rows }
+        PGeom { grid, ppt: bar_w / (ppq * 4) as f32, scroll_x: s.playlist_scroll.0, scroll_y: s.playlist_scroll.1, ppq, bar_w, rows, automations: s.project.automations.clone() }
     }
 
     /// Screen x of content x `px` (pixels from the song start), exact on the 1/256 px grid. Every position the
@@ -1015,11 +1079,19 @@ impl PGeom {
         self.rows.at(y - self.grid.y + self.scroll_y)
     }
 
-    /// A clip's rectangle: the row less its 3 px gap, or a thin bar on a collapsed group's strip (§6a).
+    /// A clip's rectangle: the row less its 3 px gap, or a thin bar on a collapsed group's strip (§6a). In Linear
+    /// mode an automation clip draws in its lane's band under the track, or in the Unassigned group's band at the
+    /// bottom (spec: model/track-model.md §6b); a collapsed lane's shows as a thin bar in its name strip.
     pub fn clip_rect(&self, c: &Clip) -> Rect {
         let x = self.x64(f64::from(c.position));
         let w = ((self.x64(f64::from(c.position) + f64::from(c.length)) - x) as f32).max(3.0);
         let x = x as f32;
+        if let ClipSource::Channel(ch) = c.source
+            && let Some(b) = self.rows.band_of(ch, &self.automations)
+        {
+            let h = if b.collapsed { (b.h - 2.0).max(1.0) } else { (b.h - 3.0).max(TITLE_H + 1.0) };
+            return Rect::new(x, b.y0 + 1.0, w, h);
+        }
         if self.rows.strip(c.track) {
             return Rect::new(x, self.y_of(c.track) + 1.0, w, STRIP_H - 2.0);
         }
@@ -1041,7 +1113,7 @@ impl PGeom {
     /// The body of a clip below its title strip (automation curves, notes, waveforms).
     pub fn body(&self, c: &Clip) -> Rect {
         let r = self.clip_rect(c);
-        Rect::new(r.x, r.y + TITLE_H, r.w, (self.rows.clip_h() - TITLE_H - 1.0).max(1.0))
+        Rect::new(r.x, r.y + TITLE_H, r.w, (r.h - TITLE_H - 1.0).max(1.0))
     }
 }
 
@@ -1292,6 +1364,26 @@ pub fn source_kind(s: &State, src: ClipSource) -> PickKind {
             _ => PickKind::Audio,
         },
     }
+}
+
+/// In Linear mode an automation clip is locked to its track vertically (spec: model/track-model.md §6b): a
+/// lane-bound clip cannot leave its track's lane, a free one cannot leave the Unassigned group. Classic mode: `None`
+/// (an automation clip moves like any clip).
+pub fn locked_track(s: &State, c: &Clip) -> Option<u16> {
+    if !s.project.linear_mode {
+        return None;
+    }
+    let ClipSource::Channel(ch) = c.source else { return None };
+    if channel_of(s, ch)?.kind != ChannelKind::Automation {
+        return None;
+    }
+    let target = s.project.automations.iter().find(|a| a.channel == ch).and_then(|a| a.targets.first().copied());
+    Some(s.project.auto_lane_row_of(target.unwrap_or(u32::MAX)).unwrap_or(c.track))
+}
+
+/// Is a clip of the automation channel `ch` bound to a track's lane (Linear mode, spec: model/track-model.md §6b)?
+pub fn lane_bound(s: &State, ch: u16) -> bool {
+    s.project.automations.iter().find(|a| a.channel == ch).and_then(|a| a.targets.first().copied()).is_some_and(|t| s.project.auto_lane_of(t).is_some())
 }
 
 /// How fast an audio clip's channel goes through its sample: its stretch in any method (§9b, audio/time-stretch.md),
@@ -1586,9 +1678,16 @@ pub fn snap_delta(s: &State, g: &PGeom, dt: f32, alt: bool) -> i64 {
     ((dt / u).round() * u) as i64
 }
 
-/// Place a clip of the current source on `track` at `tick`; returns its index.
+/// Place a clip of the current source on `track` at `tick`; returns its index. Linear mode: a bound automation clip
+/// goes to its lane's track (spec: model/track-model.md §6b).
 pub fn place(s: &mut State, track: u16, tick: u32) -> usize {
     let src = source_for(s, track);
+    let track = match src {
+        ClipSource::Channel(ch) if s.project.linear_mode && lane_bound(s, ch) => {
+            s.project.automations.iter().find(|a| a.channel == ch).and_then(|a| a.targets.first().copied()).and_then(|t| s.project.auto_lane_row_of(t)).unwrap_or(track)
+        }
+        _ => track,
+    };
     let len = match s.playlist.lock_len {
         Some((l, n)) if l == src => n,
         _ => source_len(s, src),
@@ -2221,7 +2320,17 @@ pub fn create_automation(s: &mut State, tgt: u32, name: &str, value: f64) -> u16
     s.selected_channel = row;
     s.rack.select_only(row);
     crate::rack::join_group(s, row, "Automation");
-    let track = free_track(s, track_after_used(s), a, b);
+    // Linear mode (spec: model/track-model.md §6b): the automation for a target of one of the tracks' controls is
+    // created on that track: a lane for the target is bound (expanded, the user just made it) and the clip goes onto
+    // the track's lane, locked to its x-axis. A target no track owns (a Classic-mode mixer target, the main
+    // controls) stays free: the clip lands as today and shows in the Unassigned group.
+    let mut track = free_track(s, track_after_used(s), a, b);
+    if s.project.linear_mode && let Some(at) = crate::track_links::track_of_target(s, tgt) {
+        track = s.project.tracks[at].playlist_lane.max(1) as u16 - 1;
+        if s.project.auto_lanes.iter().all(|l| l.target != tgt) {
+            s.project.auto_lanes.push(os_model::AutoLane { track: at as u16, target: tgt, collapsed: false });
+        }
+    }
     let arr = arr_mut(s);
     arr.clips.push(Clip::new(a, b - a, track, ClipSource::Channel(index)));
     let n = arr.clips.len();
@@ -2939,8 +3048,28 @@ pub fn track_menu(s: &State, t: u16, x: f32, y: f32) -> Popup {
         PItem::sep(),
         PItem::sub("Performance settings", perf_items(s, t)),
     ];
-    Popup { x, y, items, sub: None, scroll: [0; 2] }
+    let mut popup = Popup { x, y, items, sub: None, scroll: [0; 2] };
+    // The track's automation lanes (Linear mode, spec: model/track-model.md §6b): collapse / expand and unbind each.
+    if s.project.linear_mode
+        && let Some(at) = s.project.tracks.iter().position(|x| x.playlist_lane > 0 && x.playlist_lane as u16 == t + 1)
+        && s.project.auto_lanes.iter().any(|l| l.track as usize == at)
+    {
+        let lanes: Vec<PItem> = s
+            .project
+            .auto_lanes
+            .iter()
+            .filter(|l| l.track as usize == at)
+            .map(|l| PItem::sub(crate::track_links::lane_name(s, l.target), vec![
+                PItem::new("Collapse lane", Cmd::LaneToggle(t, l.target)).mark(Mark::Check(l.collapsed)),
+                PItem::new("Unbind", Cmd::LaneRemove(t, l.target)),
+            ]))
+            .collect();
+        popup.items.push(PItem::sep());
+        popup.items.push(PItem::sub("Automation lanes", lanes));
+    }
+    popup
 }
+
 
 /// A track's Performance settings ▸ (spec: ui/performance-mode.md §4): Press, Motion, Trigger sync with Queue and
 /// Tolerant, Position sync, a column each.
@@ -3613,10 +3742,14 @@ pub fn drag_move(app: &mut App, d: PlDrag, grid: Rect) {
             let lo = orig.iter().map(|(_, c)| i32::from(c.track)).min().unwrap_or(0);
             let hi = orig.iter().map(|(_, c)| i32::from(c.track)).max().unwrap_or(0);
             let dk = dk.clamp(-lo, i32::from(TRACKS) - 1 - hi);
-            // A clip an instrument track can't take (an audio clip) stays on its own track (§6c).
+            // A clip an instrument track can't take (an audio clip) stays on its own track (§6c); in Linear mode an
+            // automation clip cannot leave its track's lane or the Unassigned group (spec: model/track-model.md §6b).
             let to: Vec<u16> = orig
                 .iter()
                 .map(|(_, o)| {
+                    if let Some(t) = locked_track(s, o) {
+                        return t;
+                    }
                     let t = (i32::from(o.track) + dk) as u16;
                     if crate::track_links::fits(s, o.source, t) { t } else { o.track }
                 })
@@ -4912,6 +5045,27 @@ pub fn run(app: &mut App, cmd: Cmd) -> Option<String> {
             toggle_solo(s, t);
             None
         }
+        Cmd::LaneToggle(t, tgt) => {
+            // A view toggle, like GroupCollapse: no undo step.
+            let at = s.project.tracks.iter().position(|x| x.playlist_lane > 0 && x.playlist_lane as u16 == t + 1);
+            if let Some(l) = at.and_then(|at| s.project.auto_lanes.iter_mut().find(|l| l.track as usize == at && l.target == tgt)) {
+                l.collapsed = !l.collapsed;
+            }
+            None
+        }
+        Cmd::LaneRemove(t, tgt) => {
+            // The binding is view state; the automation (its clips) stays and shows in the Unassigned group. One
+            // undo step through `edit`'s Project region (the same one the control plane's lane commands record).
+            let id = s.project.tracks.iter().find(|x| x.playlist_lane > 0 && x.playlist_lane as u16 == t + 1).map(|x| x.id.0);
+            match id {
+                Some(id) => crate::control::edit(s, "Unbind automation lane", crate::control::command::Region::Project, |s| {
+                    let at = s.project.tracks.iter().position(|x| x.id.0 == id);
+                    s.project.auto_lanes.retain(|l| !(at.is_some_and(|at| l.track as usize == at) && l.target == tgt));
+                    None
+                }),
+                None => None,
+            }
+        }
         Cmd::TrackGroup(t) if t > 0 => {
             snapshot(s);
             let tr = &mut arr_mut(s).tracks[usize::from(t)];
@@ -5662,6 +5816,72 @@ mod tests {
         assert_eq!(app.state.history.len(), steps, "nothing to unlock: no step");
         crate::history::undo(&mut app.state);
         assert_eq!(track_info(&app.state, 0).unwrap().clip_lock, Some(p1), "undo brings the lock back");
+    }
+
+    /// The automation lanes (Linear mode, spec: model/track-model.md §6b): the layout stacks each track's lanes
+    /// under its row and closes with the Unassigned band; a bound automation clip draws in its lane's band and an
+    /// unbound one in the Unassigned band (nothing becomes invisible); a bound clip cannot leave its track
+    /// vertically; Classic mode's layout has no bands at all.
+    #[test]
+    fn linear_lanes_layout_and_clip_constraint() {
+        let mut app = app();
+        let grid = app.pl_grid().unwrap_or(Rect::new(481.0, 150.0, 1400.0, 800.0));
+        let s = &mut app.state;
+        // Classic mode: no bands, the layout is the plain tracks'.
+        let rows0 = Rows::new(s);
+        assert!(rows0.bands.is_empty() && rows0.unassigned.is_none());
+        s.project.linear_mode = true;
+        s.project.tracks.push(os_model::Track::new(os_model::TrackKind::Audio, 2, 5, None));
+        let strip = s.project.tracks[0].mixer_strip;
+        let tgt = os_model::target::mixer(strip, os_model::target::MIXER_VOLUME);
+        // Creating the automation of one of the track's controls binds the lane and puts the clip on the lane's row.
+        s.playlist.range = Some((0, 96));
+        // The new clip is the one whose source is the automation channel created (create_automation names the
+        // channel's index).
+        let i = usize::from(create_automation(s, tgt, "Volume", 0.5));
+        s.control.settle(&mut s.project);
+        let ci = clips(s).iter().position(|c| c.source == ClipSource::Channel(i as u16)).unwrap();
+        let c = clips(s)[ci].clone();
+        assert_ne!(c.id.0, 0, "the clip got its id from the settle");
+        assert_eq!(c.track, 1, "the clip goes onto the track's lane row");
+        assert_eq!(s.project.auto_lanes, vec![os_model::AutoLane { track: 0, target: tgt, collapsed: false }]);
+
+        let g = PGeom::new(s, grid);
+        let band = g.rows.lanes(1).next().unwrap().clone();
+        assert_eq!((band.target, band.collapsed), (tgt, false));
+        let r = g.clip_rect(&c);
+        assert!(r.y >= band.y0 && r.bottom() <= band.y0 + band.h, "the bound clip draws in its lane band");
+        // A set_clip off the lane's track is refused; its own track is fine.
+        let set_track = |s: &mut State, t: u16| {
+            crate::control::apply(s, &crate::control::By::Client("T".into()), None, vec![crate::control::command::Command::SetClip { clip: c.id.0, position: None, track: Some(t), length: None, muted: None }])
+        };
+        assert!(set_track(s, 4).is_err(), "the bound clip stays on its track");
+        assert!(set_track(s, 2).is_ok(), "its own track (1-based) is fine");
+        // The vertical drag clamp: the automation clip never changes track (locked_track).
+        assert_eq!(locked_track(s, &clips(s)[ci]), Some(1));
+
+        // A target no track owns (the master's fader): the clip stays free and shows in the Unassigned group.
+        let tgt2 = os_model::target::mixer(0, os_model::target::MIXER_VOLUME);
+        s.playlist.range = Some((192, 288));
+        let j = usize::from(create_automation(s, tgt2, "Master", 0.5));
+        s.control.settle(&mut s.project);
+        let cj = clips(s).iter().position(|c| c.source == ClipSource::Channel(j as u16)).unwrap();
+        let c2 = clips(s)[cj].clone();
+        assert!(s.project.auto_lanes.iter().all(|l| l.target != tgt2), "no lane for a target no track owns");
+        let g = PGeom::new(s, grid);
+        let (uy, uh) = g.rows.unassigned.expect("the Unassigned band in Linear mode");
+        let r2 = g.clip_rect(&c2);
+        assert!(r2.y >= uy && r2.bottom() <= uy + uh, "the unbound clip draws in the Unassigned band");
+        assert_eq!(locked_track(s, &c2), Some(c2.track), "an Unassigned clip cannot scatter either");
+        // A collapsed lane shows its clip as a thin bar in its name strip.
+        s.project.auto_lanes[0].collapsed = true;
+        let g = PGeom::new(s, grid);
+        assert!(g.clip_rect(&clips(s)[ci]).h <= LANE_STRIP_H, "a collapsed lane's clip is a thin bar");
+        // Classic mode again: no bands, no lock.
+        s.project.linear_mode = false;
+        assert_eq!(locked_track(s, &clips(s)[ci]), None);
+        let rows1 = Rows::new(s);
+        assert!(rows1.bands.is_empty() && rows1.unassigned.is_none());
     }
 
     fn entry<'a>(m: &'a Popup, label: &str) -> &'a PItem {

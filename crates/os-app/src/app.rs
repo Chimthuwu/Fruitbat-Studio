@@ -314,6 +314,8 @@ pub enum Action {
     PlLed(u16),
     /// A group track's collapse arrow (spec: ui/playlist.md §6a).
     PlGroupArrow(u16),
+    /// A linear track's automation lane's collapse arrow (spec: model/track-model.md §6b): row, target.
+    PlLaneArrow(u16, u32),
     /// The arrangement name in the playlist title: the arrangement menu (spec: ui/playlist.md §12).
     PlArrangement,
     /// Stretch mode switch in the playlist title (Shift+M, spec: ui/playlist.md §9b).
@@ -6287,6 +6289,7 @@ impl App {
                     | Action::PlTool(_)
                     | Action::PlLed(_)
                     | Action::PlGroupArrow(_)
+                    | Action::PlLaneArrow(_, _)
                     | Action::PlStretch
                     | Action::PlPickTab(_)
                     | Action::PlPickAdd
@@ -7647,7 +7650,7 @@ impl App {
         let pl_grid = self.pl_grid;
         let pl_area = matches!(
             area,
-            Some(Action::PlaylistArea | Action::PlRuler | Action::PlMarkers | Action::PlHeader(_) | Action::PlLed(_) | Action::PlGroupArrow(_))
+            Some(Action::PlaylistArea | Action::PlRuler | Action::PlMarkers | Action::PlHeader(_) | Action::PlLed(_) | Action::PlGroupArrow(_) | Action::PlLaneArrow(..))
         );
         let s = &mut self.state;
         let (dx, dy) = if shift { (dy, dx) } else { (dx, dy) };
@@ -7674,13 +7677,13 @@ impl App {
                 Some(Win::Playlist)
             }
             // Shift+wheel over the track headers moves the selected track (spec: ui/playlist.md §6).
-            Some(Action::PlHeader(_) | Action::PlLed(_) | Action::PlGroupArrow(_)) if shift => {
+            Some(Action::PlHeader(_) | Action::PlLed(_) | Action::PlGroupArrow(_) | Action::PlLaneArrow(..)) if shift => {
                 let d = if dx + dy > 0.0 { -1 } else { 1 };
                 crate::playlist::snapshot(s);
                 crate::playlist::shift_tracks(s, d);
                 None
             }
-            Some(Action::PlHeader(_) | Action::PlLed(_) | Action::PlGroupArrow(_)) => {
+            Some(Action::PlHeader(_) | Action::PlLed(_) | Action::PlGroupArrow(_) | Action::PlLaneArrow(..)) => {
                 s.playlist_scroll.1 = (s.playlist_scroll.1 - sy * row_h).max(0.0);
                 Some(Win::Playlist)
             }
@@ -8411,6 +8414,10 @@ impl App {
                 pl::toggle_collapse(&mut self.state, t);
                 self.invalidate();
             }
+            Action::PlLaneArrow(t, tgt) => {
+                pl::run(self, pl::Cmd::LaneToggle(t, tgt));
+                self.invalidate();
+            }
             Action::PlTool(t) if !right => {
                 self.state.playlist.tool = t;
                 self.state.playlist.overlay = None;
@@ -8933,6 +8940,7 @@ impl App {
             | Action::PlHeader(_)
             | Action::PlLed(_)
             | Action::PlGroupArrow(_)
+            | Action::PlLaneArrow(..)
             | Action::PlArrangement
             | Action::PlStretch
             | Action::PlPickTab(_)
