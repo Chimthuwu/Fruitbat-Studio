@@ -2920,7 +2920,8 @@ pub fn track_menu(s: &State, t: u16, x: f32, y: f32) -> Popup {
         PItem::head("Track"),
         PItem::new("Rename...", Cmd::TrackRename(t)),
         PItem::sub("Color", colors),
-        PItem::sub("Track mode", crate::track_links::mode_items(s, t, |m| Cmd::TrackMode(t, m))),
+        // Linear mode (spec: model/track-model.md §5): the inserts are the prominent action; Classic keeps Track mode.
+        PItem::sub(if s.project.linear_mode { "Insert" } else { "Track mode" }, crate::track_links::mode_items(s, t, |m| Cmd::TrackMode(t, m))),
         PItem::sep(),
         PItem::new("Mute", Cmd::TrackMute(t)).mark(Mark::Check(!on)),
         PItem::new("Solo", Cmd::TrackSolo(t)).mark(Mark::Check(s.playlist.solo.as_ref().is_some_and(|x| x.0 == t))),
@@ -4918,6 +4919,11 @@ pub fn run(app: &mut App, cmd: Cmd) -> Option<String> {
             None
         }
         Cmd::TrackGroup(_) => None,
+        // Linear mode's Insert ▸ (spec: model/track-model.md §5): one action makes the track and its pieces, through
+        // the control plane's track_create — not `edit`'s region, which `apply` records itself.
+        Cmd::TrackMode(_, m) if matches!(m, crate::track_links::Mode::LinearAudio | crate::track_links::Mode::LinearMidi) => {
+            crate::track_links::insert_linear(s, m)
+        }
         Cmd::TrackMode(t, m) => crate::control::edit(s, crate::track_links::TRACK_MODE, crate::control::command::Region::Project, |s| {
             crate::track_links::set_mode(s, t, m)
         }),

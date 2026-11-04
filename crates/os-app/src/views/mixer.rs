@@ -32,9 +32,28 @@ pub struct Docks {
     pub widths: [f32; 3],
 }
 
+/// The inserts' display order (spec: model/track-model.md §5 "Mixer reorders to track order"): Classic mode in index
+/// order, as it always was. Linear mode, the project's [`os_model::Track`]s in their order — each naming its strip —
+/// then the inserts no track names, in index order. View ordering only: the mixer's logic, each strip's dock part and
+/// its separator are untouched (`crate::mixer` stays as it is).
+pub fn strip_order(s: &State) -> Vec<u16> {
+    let n = mx::inserts(s);
+    if !s.project.linear_mode {
+        return (1..=n).collect();
+    }
+    let mut v: Vec<u16> = Vec::new();
+    for m in s.project.tracks.iter().map(|t| t.mixer_strip) {
+        if m >= 1 && m <= n && !v.contains(&m) {
+            v.push(m);
+        }
+    }
+    v.extend((1..=n).filter(|m| !v.contains(m)).collect::<Vec<_>>());
+    v
+}
+
 pub fn docks(s: &State) -> Docks {
     let mut d = Docks { parts: Default::default(), widths: [0.0; 3] };
-    for n in 1..=mx::inserts(s) {
+    for n in strip_order(s) {
         let (dock, sep) = mx::track(s, n).map_or((os_model::DOCK_MIDDLE, false), |m| (m.dock.min(os_model::DOCK_RIGHT), m.separator));
         let p = usize::from(dock);
         let gap = sep && !d.parts[p].is_empty();
@@ -975,4 +994,60 @@ pub fn chevron(ui: &mut Ui, x: f32, y: f32, right: bool, c: Color) {
     let mut g = Glyph::new();
     g.polygon(&[(x - 2.5 * d, y - 4.5), (x + 2.5 * d, y), (x - 2.5 * d, y + 4.5)]);
     ui.c.glyph(c, &g);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::App;
+    use crate::control::command::Command;
+
+    fn app() -> App {
+        let mut app = App::new(None);
+        app.state.project = crate::app::test_project();
+        app
+    }
+
+    fn track_create(s: &mut crate::app::State, kind: &str) {
+        crate::control::apply(s, &crate::control::By::User, None, vec![Command::TrackCreate { kind: kind.into(), name: None, color: None }]).unwrap();
+    }
+
+    /// Classic mode's strips: in index order, as always — the view ordering and the docks are unchanged.
+    #[test]
+    fn classic_orders_by_index() {
+        let app = app();
+        let n = mx::inserts(&app.state);
+        assert!(!app.state.project.linear_mode);
+        assert_eq!(strip_order(&app.state), (1..=n).collect::<Vec<u16>>());
+        let d = docks(&app.state);
+        let parts: Vec<Vec<u16>> = d.parts.iter().map(|p| p.iter().map(|e| e.0).collect()).collect();
+        assert_eq!(parts[1], (1..=n).collect::<Vec<u16>>(), "the inserts are the middle part");
+        assert_eq!(strip_order(&app.state), d.parts.iter().flat_map(|p| p.iter().map(|e| e.0)).collect::<Vec<_>>());
+    }
+
+    /// Linear mode's strips (spec: model/track-model.md §5): the tracks' strips in their Track order, then the
+    /// inserts no track names; Classic mode's mixer logic is untouched (`crate::mixer` has no order of its own).
+    #[test]
+    fn linear_orders_by_track() {
+        let mut app = app();
+        track_create(&mut app.state, "audio");
+        track_create(&mut app.state, "midi");
+        track_create(&mut app.state, "bus");
+        app.state.project.linear_mode = true;
+        let n = mx::inserts(&app.state);
+        let tracks: Vec<u16> = app.state.project.tracks.iter().map(|t| t.mixer_strip).collect();
+        let mut want = tracks.clone();
+        want.extend((1..=n).filter(|m| !want.contains(m)).collect::<Vec<_>>());
+        assert_eq!(strip_order(&app.state), want);
+        // The docks lay the tracks' strips first, in their Track order, the unlinked inserts after.
+        let d = docks(&app.state);
+        let ordered: Vec<u16> = d.parts.iter().flat_map(|p| p.iter().map(|e| e.0)).collect();
+        assert_eq!(ordered.iter().filter(|m| tracks.contains(m)).cloned().collect::<Vec<_>>(), tracks);
+        // Every insert is there exactly once, then Classic is unchanged again when the project is not Linear.
+        let mut all = ordered.clone();
+        all.sort();
+        assert_eq!(all, (1..=n).collect::<Vec<u16>>());
+        app.state.project.linear_mode = false;
+        assert_eq!(strip_order(&app.state), (1..=n).collect::<Vec<u16>>());
+    }
 }

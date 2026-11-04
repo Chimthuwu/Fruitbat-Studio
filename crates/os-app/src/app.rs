@@ -2101,6 +2101,10 @@ impl App {
             Next::ImportMidi(p) => self.import_pending(p),
             Next::Revert(b) => self.revert_from(b),
             Next::Template(f) => self.new_from_pick(f),
+            Next::LinearTemplate => {
+                self.linear_project();
+                self.offer_new_form();
+            }
         }
         self.invalidate();
     }
@@ -2367,6 +2371,27 @@ impl App {
         crate::rack::from_model(s);
         s.piano.dirty = true;
         s.message = Some("New project".into());
+        self.mark_saved();
+    }
+
+    /// The built-in Linear-mode template ("Linear"; spec: model/track-model.md §2 "Make it the default project mode"):
+    /// the built-in project with `linear_mode` on and the Track layer's starter tracks — one MIDI track with its
+    /// instrument channel and one audio track — each made by the control plane's `track_create`, so lane, mixer strip
+    /// and channel come linked and named, as one atomic undo step. Every other template and every project file stays
+    /// Classic.
+    pub(crate) fn linear_project(&mut self) {
+        self.empty_project();
+        // The playlist's arrangement materializes on first touch (`arr_mut`), so the tracks' links land in it.
+        crate::playlist::arr_mut(&mut self.state);
+        let cmds: Vec<crate::control::command::Command> = [("MIDI 1", "midi"), ("Audio 1", "audio")]
+            .into_iter()
+            .map(|(name, kind)| crate::control::command::Command::TrackCreate { kind: kind.into(), name: Some(name.into()), color: None })
+            .collect();
+        if crate::control::apply(&mut self.state, &crate::control::By::User, Some("New project"), cmds).is_ok() {
+            let s = &mut self.state;
+            s.message = Some("New project (Linear mode)".into());
+            s.piano.dirty = true;
+        }
         self.mark_saved();
     }
 

@@ -22,6 +22,10 @@ use crate::prefs;
 
 /// The built-in template: Lemon Studio's own new project (one Lemon Sampler channel, 130 BPM).
 pub const EMPTY: &str = "Empty";
+/// The built-in Linear-mode template (spec: model/track-model.md §2): a new project in Linear mode, with the Track
+/// layer's starter tracks (`App::linear_project`). Not a file in the Templates folder: it is always offered, before
+/// the user's templates.
+pub const LINEAR: &str = "Linear";
 /// The settings file's keys: the picked template and the project file last opened or saved.
 const TEMPLATE_KEY: &str = "default_template";
 const LAST_KEY: &str = "last_project";
@@ -91,6 +95,9 @@ pub fn file() -> Option<PathBuf> {
 /// The Default template as the FILE menu ("New (<name>)") and the settings page show it: the template's name, or
 /// "Empty".
 pub fn name() -> String {
+    if picked() == LINEAR {
+        return LINEAR.into();
+    }
     match file() {
         Some(_) => picked().split_once('/').map_or_else(|| EMPTY.into(), |(_, n)| n.to_string()),
         None => EMPTY.into(),
@@ -122,7 +129,7 @@ impl App {
     /// submenu per category, the current pick marked.
     pub(crate) fn template_menu(&mut self, x: f32, y: f32) {
         use crate::playlist::{Cmd, Mark, PItem, Popup};
-        let now = if file().is_some() { picked() } else { EMPTY.into() };
+        let now = if picked() == LINEAR { LINEAR.into() } else if file().is_some() { picked() } else { EMPTY.into() };
         let mut items = vec![PItem::new(EMPTY, Cmd::Template(EMPTY.into())).mark(Mark::Radio(now == EMPTY))];
         for c in root().map(|r| scan(&r)).unwrap_or_default() {
             let children = c
@@ -150,6 +157,12 @@ impl App {
     /// FILE ▸ New with a template picked: the template opened as an untitled project (Save asks where), started now.
     /// False for Empty and when the template does not load: the caller makes the built-in project then.
     pub(crate) fn new_from_template(&mut self) -> bool {
+        // The built-in Linear template has no file: it is the project `linear_project` makes (spec:
+        // model/track-model.md §2).
+        if picked() == LINEAR {
+            self.linear_project();
+            return true;
+        }
         let Some(path) = file() else { return false };
         self.new_from_file(&path, &name())
     }
@@ -225,6 +238,51 @@ mod tests {
         // Saving those made them the last used project: start this test without one.
         restore_last(None);
         dir
+    }
+
+    /// The built-in Linear-mode template (spec: model/track-model.md §2): offered in New from template ▸ after the
+    /// user's categories, its project is Linear with the starter tracks (one MIDI track with its instrument channel,
+    /// one audio track), linked to their lanes and strips; every other template stays Classic.
+    #[test]
+    fn the_linear_template_starts_a_linear_project() {
+        let mut app = App::new(None);
+        let items = crate::project_files::template_items(&app.state);
+        assert_eq!(items.last().map(|i| i.label.as_ref()), Some(EMPTY));
+        let linear = items.iter().find(|i| i.label == LINEAR).expect("the Linear row");
+        assert_eq!(linear.cmd, Cmd::NewTemplate(LINEAR.into()));
+        // Classic by default, as every other template and project file gives.
+        let fresh = App::new(None);
+        assert!(!fresh.state.project.linear_mode && fresh.state.project.tracks.is_empty());
+        // FILE ▸ New with the pick "Linear": the Linear project.
+        app.set_template(LINEAR);
+        assert_eq!(name(), "Linear");
+        assert!(app.new_from_template());
+        assert_eq!(app.state.path, None, "untitled: Save asks where");
+        assert!(app.state.project.linear_mode);
+        let tracks = app.state.project.tracks.clone();
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks[0].kind, os_model::TrackKind::Midi);
+        assert_eq!(tracks[1].kind, os_model::TrackKind::Audio);
+        assert!(tracks[1].channel.is_none(), "an audio track holds no channel");
+        // The pieces are linked: the lane carries the name, the MIDI channel is routed to its strip.
+        for t in &tracks {
+            let tr = crate::playlist::track_info(&app.state, t.playlist_lane as u16 - 1).unwrap();
+            assert_eq!(tr.name.as_deref().map(str::to_owned), Some(format!("{} 1", if t.kind == os_model::TrackKind::Midi { "MIDI" } else { "Audio" })));
+            assert!(!crate::track_links::link(&app.state, t.playlist_lane as u16 - 1).is_none(), "the lane is linked");
+        }
+        let midi = &tracks[0];
+        assert_eq!(app.state.project.channels.last().unwrap().mixer_track, midi.mixer_strip);
+        assert_eq!(crate::track_links::link(&app.state, midi.playlist_lane as u16 - 1), os_model::TrackLink::instrument(midi.channel.unwrap()));
+        assert_eq!(crate::track_links::link(&app.state, tracks[1].playlist_lane as u16 - 1), os_model::TrackLink::audio(tracks[1].mixer_strip));
+        // The Default template pick goes through too (FILE ▸ New, the Startup project).
+        let mut a = App::new(None);
+        a.set_template(LINEAR);
+        a.startup_project();
+        assert!(a.state.project.linear_mode);
+        // Empty stays the built-in Classic project.
+        app.set_template(EMPTY);
+        app.menu_item(0, crate::views::menus::FILE_NEW);
+        assert!(!app.state.project.linear_mode && app.state.project.tracks.is_empty());
     }
 
     /// The FILE menu's first item as painted.

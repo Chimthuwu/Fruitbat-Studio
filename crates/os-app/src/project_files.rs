@@ -75,6 +75,8 @@ pub fn template_items(_: &State) -> Vec<PItem> {
             PItem { children, ..PItem::new(c.name, Cmd::Nothing) }
         })
         .collect();
+    // The built-ins: the Linear-mode template (spec: model/track-model.md §2), then Empty.
+    items.push(PItem::new(crate::templates::LINEAR, Cmd::NewTemplate(crate::templates::LINEAR.into())));
     items.push(PItem::new(crate::templates::EMPTY, Cmd::NewTemplate(crate::templates::EMPTY.into())));
     items
 }
@@ -213,6 +215,10 @@ impl App {
     /// A row of New from template ▸ (`Cmd::NewTemplate`: "Empty" or "<category>/<template>"): after the unsaved changes
     /// question as New asks it, a new untitled project from it.
     pub(crate) fn pick_new_template(&mut self, pick: &str) {
+        // The built-in Linear template has no file (`crate::templates::LINEAR`).
+        if pick == crate::templates::LINEAR {
+            return self.ask_discard("starting a new project", Next::LinearTemplate);
+        }
         let file = pick.split_once('/').and_then(|(cat, name)| Some(crate::templates::file_in(&crate::templates::root()?, cat, name)));
         self.ask_discard("starting a new project", Next::Template(file));
     }
@@ -402,7 +408,9 @@ mod tests {
         assert_eq!(template_target(&root, &std::env::temp_dir().join("Elsewhere.lemon")), root.join("User").join("Elsewhere").join("Elsewhere.lemon"));
         crate::templates::TEST_DIR.with(|d| *d.borrow_mut() = Some(root.clone()));
         let rows = template_items(&App::new(None).state);
-        assert_eq!(rows.iter().map(|r| r.label.to_string()).collect::<Vec<_>>(), ["Empty"], "no templates: Empty alone");
+        // The built-ins: Linear (spec: model/track-model.md §2), then Empty; no user templates yet.
+        assert_eq!(rows.iter().map(|r| r.label.to_string()).collect::<Vec<_>>(), ["Linear", "Empty"], "no templates: the built-ins alone");
+        assert_eq!(&rows[0].cmd, &Cmd::NewTemplate(crate::templates::LINEAR.into()));
         let mut app = App::new(None);
         app.state.tempo = 97.0;
         let work = scratch("tpl_work");
@@ -412,7 +420,7 @@ mod tests {
         assert_eq!(app.state.path.as_deref(), Some(song.as_path()), "the project keeps its file");
         assert!(root.join("User").join("Slow").join("Slow.lemon").is_file(), "{:?}", app.state.message);
         let rows = template_items(&app.state);
-        assert_eq!(rows.iter().map(|r| r.label.to_string()).collect::<Vec<_>>(), ["User", "Empty"]);
+        assert_eq!(rows.iter().map(|r| r.label.to_string()).collect::<Vec<_>>(), ["User", "Linear", "Empty"]);
         assert_eq!(rows[0].children.len(), 1);
         assert_eq!((rows[0].children[0].label.as_ref(), &rows[0].children[0].cmd), ("Slow", &Cmd::NewTemplate("User/Slow".into())));
         app.state.tempo = 140.0;

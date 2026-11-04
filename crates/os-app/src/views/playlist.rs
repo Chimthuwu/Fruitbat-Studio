@@ -1315,6 +1315,12 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
     // rows drop the "…" and keep the name clear of the LED.
     let short = g.rows.row_h < pl::ROW_H - 8.0;
     let led = Rect::new(hr.right() - 19.0, (h - gap - 15.0).max(1.0) + hr.y, 14.0, 14.0);
+    // Linear mode (spec: model/track-model.md §5): the lane's Track adds its mixer strip's meter and mini-fader in a
+    // column at the header's right edge, so the LED (and what sits beside it) moves left of that column. Classic
+    // mode's header is exactly as before.
+    let lane = crate::track_links::lane_track(s, row);
+    let mix = lane.map(|_| Rect::new(hr.right() - 21.0, hr.y + 2.0, 19.0, (hr.h - 4.0).max(8.0)));
+    let led = if mix.is_some() { Rect::new(led.x - 36.0, led.y, led.w, led.h) } else { led };
     ui.hit(led, Action::PlLed(row), "Mute track (right-click / Ctrl+click: solo)");
     // An audio or instrument track (§6c): a light disc with "A" / "I" before its name, which is drawn bright.
     let link = crate::track_links::link(s, row);
@@ -1327,7 +1333,13 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
     let text = if on { text } else { text.shade(-0.35) };
     let editing = matches!(s.playlist.edit.as_ref().map(|e| e.target), Some(pl::EditTarget::TrackName(r)) if r == row);
     let mut name_x = hr.x + 2.0;
-    if let Some((letter, hint)) = badge {
+    // The badge's hint names the menu the kinds are chosen in (Linear mode's Insert ▸, spec: model/track-model.md §5).
+    let mode_menu = if s.project.linear_mode { "Insert in the menu" } else { "Track mode in the menu" };
+    if let Some((letter, kind)) = badge {
+        let hint = match kind {
+            "A" => format!("Audio track: its audio clips play through its mixer track ({mode_menu})"),
+            _ => format!("Instrument track: linked to a channel ({mode_menu})"),
+        };
         let b = Rect::new(hr.x + 3.0, hr.y + 4.0, 11.0, 11.0);
         ui.c.fill_circle(b.cx(), b.cy(), 5.5, text);
         ui.c.text_center(Font::new(10), b, base.shade(-0.25), letter);
@@ -1335,7 +1347,7 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
         name_x += 14.0;
     }
     if !editing {
-        let name_w = if short { hr.w - 26.0 } else { hr.w - 4.0 } - (name_x - hr.x - 2.0);
+        let name_w = if short { hr.w - 26.0 } else { hr.w - 4.0 } - (name_x - hr.x - 2.0) - mix.map_or(0.0, |_| 21.0);
         ui.c.text_clip(Font::new(16), name_x, hr.y + 1.0, name_w, text, &pl::track_name(s, row));
     }
     if !short {
@@ -1375,6 +1387,49 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
     } else {
         super::led(ui, led.cx(), led.cy(), on);
     }
+    if let (Some(tr), Some(mix)) = (lane, mix) {
+        linear_mix(ui, s, mix, tr);
+    }
+}
+
+/// Linear mode's track-header strip column (spec: model/track-model.md §5 "persistent track headers ... mixer-strip
+/// mini-fader/meter (data exists in the mixer)"): the lane's Track's mixer strip as a per-track peak meter on the
+/// mixer's scale, and a mini-fader whose drag is the mixer fader's (`Action::Fader`, one undo step as its drag's).
+/// An audio track's arm light (its strip's recording arm, §6c) and every track's strip enable light sit beside them,
+/// read-only; the mixer window keeps the controls of its own.
+fn linear_mix(ui: &mut Ui, s: &State, mix: Rect, tr: &os_model::Track) {
+    let strip = crate::mixer::track(s, tr.mixer_strip);
+    if tr.kind == os_model::TrackKind::Audio {
+        // The arm light, as the mixer strip's is (ui/track-io.md §1.5's ring drawn small), left of the column's top.
+        let armed = strip.is_some_and(|m| m.armed);
+        let (cx, cy) = (mix.x - 9.0, mix.y + 5.0);
+        if armed {
+            ui.c.fill_circle(cx, cy, 3.0, ui.t.h(0xff633f));
+        } else {
+            ui.c.stroke_circle(cx, cy, 3.0, 1.3, ui.t.tx(0xd8e0e6).with_alpha(160));
+        }
+    }
+    // The strip's enable light (the mixer's mute/solo LED), read-only, under the arm's.
+    super::led(ui, mix.x - 9.0, mix.y + 19.0, strip.is_none_or(|m| m.enabled));
+    // The meter, two bars on the same law and floor the mixer's strips use (spec: ui/mixer.md §9).
+    let meter = Rect::new(mix.x, mix.y + 8.0, 8.0, mix.h - 8.0);
+    ui.c.fill_rrect(meter, 2.0, ui.t.s(0x141618).with_alpha(160));
+    if let Some(m) = s.mixer.meters.get(usize::from(tr.mixer_strip)) {
+        let cfg = &s.mixer.meter_cfg;
+        let floor = cfg.v[crate::meters::k::FLOOR_DB];
+        let alt = crate::prefs::check(&crate::prefs::ALTERNATE_METER_SCALE);
+        let frac = crate::meters::frac(m.db[0].max(m.db[1]), floor, alt);
+        let hgt = (meter.h - 2.0) * frac.min(1.0);
+        ui.c.fill_rect(Rect::new(meter.x + 1.0, meter.bottom() - 1.0 - hgt, meter.w - 2.0, hgt), ui.t.a(0xa0db40));
+    }
+    // The mini-fader: the strip's volume on a simple 0..1 scale (the mixer's law is its own, ui/mixer.md §4).
+    let fader = Rect::new(mix.right() - 7.0, mix.y + 8.0, 4.0, mix.h - 8.0);
+    ui.c.fill_rrect(fader, 2.0, ui.t.s(0x141618).with_alpha(160));
+    let v = strip.and_then(|m| m.volume).unwrap_or(0.8) as f32;
+    let hy = fader.bottom() - v * fader.h;
+    ui.c.fill_rrect(Rect::new(fader.x - 2.0, hy - 1.5, fader.w + 4.0, 3.0), 1.5, ui.t.accent);
+    let hint = crate::views::mixer::fader_db_text(f64::from(v));
+    ui.hit(Rect::new(fader.x - 5.0, mix.y, fader.w + 10.0, mix.h), Action::Fader(tr.mixer_strip), hint);
 }
 
 /// The face behind a title-bar tool icon; returns the icon colour. Lemon: the active tool is a lit rounded square.

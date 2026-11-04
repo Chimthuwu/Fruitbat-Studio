@@ -186,6 +186,11 @@ pub enum Mode {
     Instrument(usize),
     /// An instrument track of a new channel playing generator `.0` (an index of the available plugins).
     NewInstrument(usize),
+    /// Linear mode (spec: model/track-model.md §2): Insert audio track — one action makes the track and its pieces
+    /// (lane, strip) together.
+    LinearAudio,
+    /// Linear mode: Insert MIDI track — lane, strip and instrument channel together.
+    LinearMidi,
 }
 
 /// Track mode ▸ on track `t`: an audio track takes its mixer track's name, an instrument track its channel's name and
@@ -205,6 +210,8 @@ pub fn set_mode(s: &mut State, t: u16, mode: Mode) -> Option<String> {
         Mode::Instrument(r) => link_instrument(s, t, r),
         // Needs the app to host the plugin (`new_instrument`).
         Mode::NewInstrument(_) => return None,
+        // The Linear-mode inserts go through `insert_linear` (the control plane's track_create), not this edit.
+        Mode::LinearAudio | Mode::LinearMidi => return None,
     }
     s.piano.dirty = true;
     None
@@ -228,12 +235,52 @@ pub fn new_instrument(app: &mut crate::app::App, t: u16, index: usize) -> Option
     })
 }
 
+/// Linear mode's Insert ▸ Audio track / MIDI track (`Mode::LinearAudio`, `Mode::LinearMidi`; spec:
+/// model/track-model.md §1–2, §5): one action makes the track and its pieces together — the playlist lane (the first
+/// free one, `new_track`), the mixer insert and, on a MIDI track, the instrument channel — through the control
+/// plane's `track_create`, so it is one atomic undo step and the links round-trip as the Track model keeps them.
+/// Classic mode keeps `set_mode`'s flow as it is.
+pub fn insert_linear(s: &mut State, m: Mode) -> Option<String> {
+    let (kind, made) = match m {
+        Mode::LinearAudio => ("audio", "Inserted audio track"),
+        Mode::LinearMidi => ("midi", "Inserted MIDI track"),
+        _ => return None,
+    };
+    // The playlist's arrangement materializes on first touch (`arr_mut`, as every playlist flow does); the track's
+    // links land in it (`track_create` names a lane in every arrangement).
+    crate::playlist::arr_mut(s);
+    let cmds = vec![crate::control::command::Command::TrackCreate { kind: kind.into(), name: None, color: None }];
+    match crate::control::apply(s, &crate::control::By::User, Some("Insert track"), cmds) {
+        Ok(_) => {
+            let t = s.project.tracks.last()?;
+            if t.playlist_lane > 0 {
+                s.playlist.track = t.playlist_lane as u16 - 1;
+                s.piano.dirty = true;
+            }
+            Some(made.to_string())
+        }
+        Err(e) => Some(e),
+    }
+}
+
+/// The playlist lane (0-based row) the [`os_model::Track`] `tr` owns, `None` on a bus: Linear mode's track headers
+/// read their strip's data through it (spec: model/track-model.md §5).
+pub fn lane_track(s: &State, row: u16) -> Option<&os_model::Track> {
+    s.project.linear_mode.then_some(())?;
+    s.project.tracks.iter().find(|tr| tr.playlist_lane > 0 && tr.playlist_lane as u16 == row + 1)
+}
+
 /// The Track mode ▸ submenu for track `t`: Unassigned, Audio track ▸ (a new mixer track, then every insert), Instrument
 /// track ▸ (every channel an instrument track can play); on an audio track also its options, which act on its mixer
 /// track: Select audio input ▸ (as the mixer track's input menu, the current input marked), Arm recording (ticked while
 /// armed) and Disarm recording (spec: ui/playlist.md §6c, measured).
 pub fn mode_items(s: &State, t: u16, cmd: impl Fn(Mode) -> crate::playlist::Cmd) -> Vec<crate::playlist::PItem> {
     use crate::playlist::{Mark, PItem};
+    // Linear mode (spec: model/track-model.md §5 "Insert ▸ Audio Track / MIDI Track"): the one-action inserts replace
+    // Track mode's multi-step linking — each makes the track and its pieces together (`insert_linear`).
+    if s.project.linear_mode {
+        return vec![PItem::new("Audio track", cmd(Mode::LinearAudio)), PItem::new("MIDI track", cmd(Mode::LinearMidi))];
+    }
     let l = link(s, t);
     let mut audio = vec![PItem::new("New mixer track", cmd(Mode::NewAudio)), PItem::sep()];
     audio.extend(
@@ -529,6 +576,67 @@ mod tests {
         assert_eq!(record_track(s, 7, 200, 300), 2);
         assert_eq!(tracks_routed_to(s, &[7]), [2]);
         assert_eq!(tracks_routed_to(s, &[1]), [5], "the instrument track of a channel on Insert 1");
+    }
+
+    /// Linear mode's Insert ▸ (spec: model/track-model.md §5): the menu offers the one-action inserts; one makes the
+    /// track and its pieces (lane, strip, channel) together in one atomic undo step, and undo takes all of them back.
+    /// Classic mode's Track mode ▸ is untouched.
+    #[test]
+    fn linear_insert_makes_the_pieces_together() {
+        let mut app = app();
+        app.state.project.linear_mode = true;
+        let items = mode_items(&app.state, 0, |m| Cmd::TrackMode(0, m));
+        assert_eq!(items.iter().map(|i| i.label.as_ref()).collect::<Vec<_>>(), ["Audio track", "MIDI track"]);
+        let menu = crate::playlist::track_menu(&app.state, 0, 0.0, 0.0);
+        assert_eq!(menu.items[3].label.as_ref(), "Insert");
+        // Classic mode's menu keeps Track mode and its items.
+        app.state.project.linear_mode = false;
+        let classic = mode_items(&app.state, 0, |m| Cmd::TrackMode(0, m));
+        assert_eq!(classic[0].label.as_ref(), "Unassigned");
+        assert_eq!(crate::playlist::track_menu(&app.state, 0, 0.0, 0.0).items[3].label.as_ref(), "Track mode");
+        // Insert MIDI track: lane, strip and channel together.
+        app.state.project.linear_mode = true;
+        let steps = app.state.history.at();
+        let inserts = crate::mixer::inserts(&app.state);
+        let chans = app.state.project.channels.len();
+        let msg = crate::playlist::run(&mut app, Cmd::TrackMode(0, Mode::LinearMidi));
+        assert_eq!(msg.as_deref(), Some("Inserted MIDI track"));
+        let t = app.state.project.tracks.last().expect("the track");
+        assert_eq!(t.kind, os_model::TrackKind::Midi);
+        let lane = t.playlist_lane - 1;
+        assert_eq!(link(&app.state, lane as u16), TrackLink::instrument(t.channel.unwrap()));
+        let strip = t.mixer_strip;
+        assert_eq!(crate::mixer::inserts(&app.state), inserts + 1, "a new insert");
+        assert_eq!(crate::mixer::track(&app.state, strip).unwrap().index, strip);
+        assert_eq!(app.state.project.channels.len(), chans + 1);
+        assert_eq!(app.state.project.channels.last().unwrap().mixer_track, strip, "the channel is routed to the strip");
+        assert_eq!(app.state.playlist.track, lane as u16, "the lane is selected");
+        // One atomic undo step: it takes the pieces back together.
+        assert_eq!(app.state.history.at(), steps + 1);
+        crate::history::undo(&mut app.state);
+        assert!(app.state.project.tracks.is_empty());
+        assert_eq!(crate::mixer::inserts(&app.state), inserts);
+        assert_eq!(app.state.project.channels.len(), chans);
+        // Insert audio track: a lane and a strip, no channel.
+        let msg = crate::playlist::run(&mut app, Cmd::TrackMode(0, Mode::LinearAudio));
+        assert_eq!(msg.as_deref(), Some("Inserted audio track"));
+        let t = app.state.project.tracks.last().unwrap();
+        assert_eq!(t.kind, os_model::TrackKind::Audio);
+        assert_eq!(link(&app.state, t.playlist_lane as u16 - 1), TrackLink::audio(t.mixer_strip));
+        assert!(t.channel.is_none());
+        assert_eq!(app.state.project.channels.len(), chans);
+    }
+
+    /// The lane a Track owns (`lane_track`): Linear mode only, the lane's row (1-based), never a bus's.
+    #[test]
+    fn lane_track_finds_the_rows_track() {
+        let mut app = app();
+        assert!(lane_track(&app.state, 0).is_none(), "Classic mode has none");
+        app.state.project.linear_mode = true;
+        crate::playlist::run(&mut app, Cmd::TrackMode(0, Mode::LinearAudio));
+        let t = app.state.project.tracks.last().unwrap().clone();
+        assert_eq!(lane_track(&app.state, t.playlist_lane as u16 - 1).unwrap().id, t.id);
+        assert!(lane_track(&app.state, t.playlist_lane as u16).is_none(), "only its own row");
     }
 
     /// Deleting a linked mixer track or channel unlinks its tracks; the others follow the renumbering.
