@@ -130,7 +130,7 @@ fn section(s: &State, effect: bool, target: Target, nested: bool) -> Vec<PItem> 
 pub const VIEWS: &[(&str, MenuView)] = &[("Categories", MenuView::Categories), ("Simple", MenuView::Simple), ("By vendor", MenuView::Vendor)];
 
 /// After the lists (spec §2): Find new plugins, Manage plugins..., the display modes.
-fn footer(s: &State) -> Vec<PItem> {
+pub(crate) fn footer(s: &State) -> Vec<PItem> {
     let view = s.plugdb.prefs.menu_view;
     let scanning = s.plugdb.progress.is_some();
     let find = PItem::new(if scanning { "Scan for new plugins (scanning...)" } else { "Scan for new plugins" }, Cmd::Plugin(PlugCmd::Find));

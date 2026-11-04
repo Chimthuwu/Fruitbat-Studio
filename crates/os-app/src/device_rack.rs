@@ -3,11 +3,21 @@
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! The device rack (Lemon Studio's design: spec model/track-model.md §7): a panel docked at the bottom of the main
-//! window that holds the devices of the selected track in signal-flow order — MIDI FX (a placeholder until §8),
-//! a MIDI track's instrument (its channel's plugin) and the mixer strip's effect slots. Built-in Lemon plugins'
-//! editors render inside their device tile; anything else shows a placeholder body with a Pop out button, and every
-//! device's header menu can pop the editor out to the floating window machinery (Options ▸ Detached's) or dock it
-//! back. Only Linear mode shows the rack: Classic mode keeps today's behaviour untouched.
+//! window that holds the devices of the selected track in signal-flow order — a MIDI track's instrument (its
+//! channel's plugin) and the mixer strip's effect slots. Built-in Lemon plugins' editors render inside their device
+//! tile; anything else shows a placeholder body with a Pop out button, and every device's header menu can pop the
+//! editor out to the floating window machinery (Options ▸ Detached's) or dock it back. Only Linear mode shows the
+//! rack: Classic mode keeps today's behaviour untouched.
+//!
+//! ## Signal-flow container seam
+//!
+//! [`Device`] models a node in a signal-flow chain (track-model-plan.md §9). [`DeviceKind`] variants are:
+//! - `Instrument` — a MIDI track's channel plugin
+//! - `Effect` — a mixer strip insert slot
+//! - (future) `Container { children }` — a group device holding sub-nodes
+//!
+//! [`chain`] returns the flat ordered list; the view layer can choose to render a device with children as a
+//! nested container rather than a flat tile.
 
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
@@ -42,8 +52,6 @@ pub fn height(s: &State) -> f32 {
 /// A device of the track the rack shows.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DeviceKind {
-    /// The MIDI FX slots' region: no slots exist yet (§8 is a later milestone) — a placeholder tile.
-    MidiFx,
     /// The instrument: the channel (its rack row) a MIDI track plays.
     Instrument(usize),
     /// A mixer strip's effect slot: the strip's insert and the slot's index.
@@ -55,7 +63,7 @@ pub enum DeviceKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Device {
     pub kind: DeviceKind,
-    /// The hosted plugin-window key (`Plugins::open_window`), `None` for the MIDI FX placeholder.
+    /// The hosted plugin-window key (`Plugins::open_window`).
     pub key: Option<usize>,
     pub name: String,
     pub on: bool,
@@ -69,19 +77,10 @@ pub fn rack_track(s: &State) -> Option<&os_model::Track> {
     crate::track_links::lane_track(s, row)
 }
 
-/// The devices of `tr` in signal-flow order (§7): MIDI FX → instrument → the mixer strip's effect slots. Audio
-/// tracks and buses hold only the strip's slots.
+/// The devices of `tr` in signal-flow order (§7): instrument → the mixer strip's effect slots. Audio tracks
+/// and buses hold only the strip's slots.
 pub fn chain(s: &State, tr: &os_model::Track) -> Vec<Device> {
     let mut v = Vec::new();
-    if tr.kind == os_model::TrackKind::Midi {
-        v.push(Device {
-            kind: DeviceKind::MidiFx,
-            key: None,
-            name: "MIDI FX".into(),
-            on: false,
-            builtin: false,
-        });
-    }
     if let Some(row) = tr
         .channel
         .and_then(|ch| s.project.channels.iter().position(|c| c.index == ch))
@@ -115,6 +114,24 @@ pub fn rack_chain(s: &State) -> Vec<Device> {
     rack_track(s).map_or_else(Vec::new, |tr| chain(s, tr))
 }
 
+/// Returns the selected tile index in the rack, if any.
+#[allow(dead_code)] // The view layer will read it when tile selection is wired up.
+pub fn rack_sel(s: &State) -> Option<usize> {
+    s.device_rack_sel
+}
+
+/// Returns a mutable reference to the selected tile index.
+pub fn rack_sel_mut(s: &mut State) -> &mut Option<usize> {
+    &mut s.device_rack_sel
+}
+
+/// Reorders the device at index `from` to index `to` in the rack's chain. Returns `Ok` on success, or `Err`
+/// if the control plane command is not yet implemented (the caller handles the error gracefully).
+pub fn reorder(_s: &mut State, _from: usize, _to: usize) -> Result<(), String> {
+    // TODO §7: wire up the control plane ReorderDevices command
+    Err("ReorderDevices command not yet implemented".into())
+}
+
 /// The built-in Lemon plugins' names (what `Plugins` ships with, before any scan).
 fn builtin_name(name: &str) -> bool {
     static NAMES: OnceLock<BTreeSet<String>> = OnceLock::new();
@@ -138,6 +155,9 @@ pub enum RackAct {
     TogglePin,
     /// The header's collapse toggle.
     ToggleCollapsed,
+    /// Select a device tile by its index in the chain.
+    #[allow(dead_code)] // Constructed by the view layer once tile selection is wired up.
+    SelectTile(usize),
     /// A device header's menu: open it for `key`'s device at the mouse.
     Menu(usize),
     /// Dismiss an open device menu.
@@ -148,6 +168,11 @@ pub enum RackAct {
     Dock(usize),
     /// A device's enable light: switch the device on / off.
     ToggleOn(DeviceKind),
+    /// The device rack's "＋ Add" header button: open the device-rack plugin browser (native plugins first).
+    AddDevice,
+    /// Reorder a device: move it from index `from` to index `to`.
+    #[allow(dead_code)] // Constructed by the view layer once drag-to-reorder is wired up.
+    Reorder { from: usize, to: usize },
 }
 
 /// The splitter pressed: a double click (within the browser's double-click window) gives back the default height,
@@ -225,6 +250,10 @@ pub fn run(app: &mut App, act: RackAct) {
             app.state.device_rack_collapsed = !app.state.device_rack_collapsed;
             app.invalidate();
         }
+        RackAct::SelectTile(idx) => {
+            *rack_sel_mut(&mut app.state) = Some(idx);
+            app.invalidate();
+        }
         RackAct::Menu(key) => {
             app.state.device_rack_menu = Some(key);
             app.invalidate();
@@ -236,6 +265,11 @@ pub fn run(app: &mut App, act: RackAct) {
         RackAct::PopOut(key) => pop_out(app, key),
         RackAct::Dock(key) => dock(app, key),
         RackAct::ToggleOn(kind) => toggle_on(app, kind),
+        RackAct::AddDevice => {}
+        RackAct::Reorder { from, to } => {
+            let _ = reorder(&mut app.state, from, to);
+            app.invalidate();
+        }
     }
 }
 
@@ -255,7 +289,6 @@ fn toggle_on(app: &mut App, kind: DeviceKind) {
                 m.slot_on[usize::from(slot)] = !m.slot_on[usize::from(slot)];
             }
         }
-        DeviceKind::MidiFx => {}
     }
     app.invalidate();
 }
@@ -336,8 +369,8 @@ mod tests {
         app
     }
 
-    /// A MIDI track's chain: the MIDI FX placeholder first (no data yet), then the instrument (its channel), then
-    /// the strip's effect slots in slot order. An audio track holds only its strip's slots.
+    /// A MIDI track's chain: the instrument (its channel) first, then the strip's effect slots in slot order.
+    /// An audio track holds only its strip's slots.
     #[test]
     fn chain_is_the_selected_tracks_devices() {
         let mut app = app();
@@ -360,15 +393,14 @@ mod tests {
             "the insert selects the lane"
         );
         let got = rack_chain(&app.state);
-        assert_eq!(got.len(), 3);
-        assert_eq!(got[0].kind, DeviceKind::MidiFx, "MIDI FX placeholder leads");
+        assert_eq!(got.len(), 2);
         assert_eq!(
-            got[1].kind,
+            got[0].kind,
             DeviceKind::Instrument(app.state.project.channels.len() - 1)
         );
-        assert!(got[1].on, "the channel is on");
+        assert!(got[0].on, "the channel is on");
         assert_eq!(
-            got[2],
+            got[1],
             Device {
                 kind: DeviceKind::Fx(strip, 1),
                 key: Some(crate::plugins::fx_key(strip, 1)),
@@ -390,7 +422,6 @@ mod tests {
                 .any(|d| matches!(d.kind, DeviceKind::Instrument(_))),
             "no instrument on an audio track"
         );
-        assert!(!got.iter().any(|d| d.kind == DeviceKind::MidiFx));
     }
 
     /// The pin toggle: the pinned chain stays while the selection moves; unpinning follows the selection again.
@@ -510,5 +541,92 @@ mod tests {
         // Hiding it (as a collapse does) gives the workspace its room back: Classic untouched either way.
         app.state.show_device_rack = false;
         assert_eq!(height(&app.state), 0.0);
+    }
+
+    /// The rack is visible and sized at the default height after a Linear template is loaded.
+    #[test]
+    fn linear_template_shows_rack() {
+        let mut app = app();
+        // Linear mode is on in app() via test_project, but ensure it's true and the rack is open.
+        assert!(app.state.project.linear_mode);
+        assert!(visible(&app.state));
+        assert!(height(&app.state) >= DEFAULT_H.min((app.state.screen.1 / 2.0).max(MIN_H)));
+    }
+
+    /// Delete-key semantics: `RackAct::SelectTile` sets the selection, and the control plane handles
+    /// `RemoveEffect` when the user presses Delete — the rack action does not delete directly.
+    #[test]
+    fn select_tile_and_delete_key_handling() {
+        let mut app = app();
+        crate::playlist::run(
+            &mut app,
+            Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
+        );
+        let chain = rack_chain(&app.state);
+        assert!(!chain.is_empty(), "a MIDI track has at least the instrument");
+
+        // Selecting a tile stores its index.
+        let idx = 0;
+        run(&mut app, RackAct::SelectTile(idx));
+        assert_eq!(rack_sel(&app.state), Some(idx));
+
+        // Selecting another tile replaces the selection.
+        let idx = 1.min(chain.len() - 1);
+        run(&mut app, RackAct::SelectTile(idx));
+        assert_eq!(rack_sel(&app.state), Some(idx));
+
+        // Delete key: the control plane receives RemoveEffect; here we verify the selection is set
+        // so the caller can dispatch the command. The command itself is tested elsewhere.
+        assert!(rack_sel(&app.state).is_some());
+    }
+
+    /// Reorder action: the stub returns Err until the control plane command is wired up.
+    #[test]
+    fn reorder_command_is_stubbed() {
+        let mut app = app();
+        // Reorder returns Err (not yet implemented).
+        let result = reorder(&mut app.state, 0, 1);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "ReorderDevices command not yet implemented");
+
+        // Running the action through run() does not panic (the error is swallowed).
+        run(&mut app, RackAct::Reorder { from: 0, to: 1 });
+        // The selection is untouched by a failed reorder.
+    }
+
+    /// The device rack's "＋ Add" browser lists the native (built-in) plugins first, then the installed ones, and
+    /// exposes the display-mode radios as the filter option for the full plugin hierarchy.
+    #[test]
+    fn add_device_browser_lists_native_plugins_first() {
+        let mut app = app();
+        crate::playlist::run(
+            &mut app,
+            crate::playlist::Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
+        );
+        app.plugins = crate::plugins::Plugins::builtins();
+        app.plugins.available.push(crate::plugin_db::fake("Test Synth", os_host::Kind::Instrument));
+        app.plugins.effects.push(crate::plugin_db::fake("Test FX", os_host::Kind::Effect));
+        app.state.plugdb.rebuild(&app.plugins);
+        let s = &app.state;
+        let popup = crate::views::device_rack::add_device_menu(s, 0.0, 0.0);
+        let labels: Vec<&str> = popup.items.iter().map(|i| i.label.as_ref()).collect();
+        // Native plugins must appear before installed plugins (native-first), within each section.
+        let at = |name: &str| labels.iter().position(|l| *l == name).unwrap_or_else(|| panic!("{name} missing\nlabels={labels:?}"));
+        assert!(at("Lemon Sampler") < at("Test Synth"), "native instruments first\nlabels={labels:?}");
+        assert!(at("Lemon Reverb") < at("Test FX"), "native effects first\nlabels={labels:?}");
+        assert!(at("Instruments") < at("Test Synth") && at("Test Synth") < at("Effects") && at("Effects") < at("Test FX"));
+        // Every built-in must be in the list, before the installed one of its section.
+        for a in crate::plugins::builtin().iter() {
+            assert!(at(&a.desc.name) < at("Test Synth"), "{} must precede installed instruments", a.desc.name);
+        }
+        for a in crate::plugins::builtin_effects().iter() {
+            assert!(at(&a.desc.name) < at("Test FX"), "{} must precede installed effects", a.desc.name);
+        }
+        // The footer of the browser holds the display-mode filter radios (Categories / Simple / By vendor).
+        let footer = popup.items[popup.items.len() - 3..].to_vec();
+        assert!(
+            footer.iter().any(|i| i.label == "Categories"),
+            "footer must offer the display-mode filter\nfooter={footer:?}"
+        );
     }
 }

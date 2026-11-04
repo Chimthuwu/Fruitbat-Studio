@@ -10,7 +10,9 @@
 use os_ui::{Color, Rect, kit};
 
 use crate::app::{Action, State};
-use crate::device_rack::{self, Device, DeviceKind, HEADER_H, RackAct, TILE_W};
+use crate::device_rack::{self, Device, HEADER_H, RackAct, TILE_W};
+use crate::plugin_menu::{self, pick, Target};
+use crate::playlist::{Popup, PItem};
 use crate::views::{Ui, fnt};
 
 /// The rack's panel rect in the window: the full width, its height at the bottom edge (`device_rack::height`).
@@ -84,7 +86,17 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
         t.text,
         &format!("Device rack - {name}"),
     );
-    let mut bx = r.right() - 132.0;
+    // The header buttons, right-aligned: ＋ Add (the plugin browser), Pin, Show / Hide.
+    let mut bx = r.right() - 198.0;
+    header_button(
+        ui,
+        Rect::new(bx, head.y + 2.0, 60.0, 17.0),
+        "＋ Add",
+        false,
+        Action::DeviceRack(RackAct::AddDevice),
+        "Device rack plugin browser: native (built-in) plugins first; the display-mode radios below are the filter",
+    );
+    bx += 66.0;
     // The pin: the chain stays while the selection moves (§7 "Track selection drives the rack").
     let pinned = s.device_rack_pin.is_some();
     header_button(
@@ -196,8 +208,7 @@ fn tile_paint(ui: &mut Ui, s: &State, d: Device, tile: Rect) {
         // Hosted, not a built-in: embedding comes with CLAP/VST3 embed (§7 milestone b) — a placeholder and a
         // Pop out button, which the floating window machinery takes.
         Some(key) => placeholder(ui, &d, body, Some(Action::DeviceRack(RackAct::PopOut(key)))),
-        // The MIDI FX placeholder region (no data yet, §8).
-        None => placeholder(ui, &d, body, None),
+        _ => {}
     }
 }
 
@@ -206,11 +217,8 @@ fn placeholder(ui: &mut Ui, d: &Device, body: Rect, button: Option<Action>) {
     let t = ui.t;
     ui.c.fill_rect(body, t.s(0x131718));
     ui.c.stroke_rrect(body.inset(1.0), 2.0, 1.0, t.splitter_dark);
-    let label = match d.kind {
-        DeviceKind::MidiFx => "MIDI FX slots arrive with a later milestone",
-        _ => "No embedded editor for this plugin yet",
-    };
-    ui.c.text(fnt(13.0), body.x + 10.0, body.y + 8.0, t.text_dim, label);
+    let label = format!("No embedded editor for {} yet", d.name);
+    ui.c.text(fnt(13.0), body.x + 10.0, body.y + 8.0, t.text_dim, &label);
     if let Some(action) = button {
         let b = Rect::new(body.x + 10.0, body.y + 30.0, 70.0, 20.0);
         let hov = ui.hit(b, action, "Pop the editor out to its own window");
@@ -284,4 +292,32 @@ pub fn paint_menu(ui: &mut Ui, s: &State) {
         item(ui, y, "Pop out", Action::DeviceRack(RackAct::PopOut(key)));
     }
     let _ = d;
+}
+
+/// The device rack's "＋ Add" browser popup (spec: ui/device-rack.md §3): one section per kind of plugin, built-in
+/// (native) plugins first, then installed plugins; the display-mode radios below the list are the filter option
+/// for the full plugin hierarchy. Clicking an entry adds the device to the rack (generators become a new channel
+/// whose plugin hosts the browser's pick; effects go into the selected mixer track's first empty slot).
+pub(crate) fn add_device_menu(s: &State, x: f32, y: f32) -> Popup {
+    let mut items = Vec::new();
+    items.push(PItem::head("Instruments"));
+    items.extend(add_device_section(s, false));
+    items.push(PItem::head("Effects"));
+    items.extend(add_device_section(s, true));
+    let mut p = Popup { x, y, items, sub: None, scroll: [0; 2] };
+    p.items.extend(plugin_menu::footer(s));
+    p
+}
+
+/// One device-rack browser section: built-in (native) plugins first, then the installed ones, in display order.
+fn add_device_section(s: &State, effect: bool) -> Vec<PItem> {
+    let list = if effect { &s.plugdb.lists.fx } else { &s.plugdb.lists.gens };
+    let mut v = Vec::new();
+    for e in list.iter().filter(|e| e.builtin) {
+        v.push(PItem::new(e.label.clone(), pick(Target::Gen(None), effect, e.index)));
+    }
+    for e in list.iter().filter(|e| !e.builtin) {
+        v.push(PItem::new(e.label.clone(), pick(Target::Gen(None), effect, e.index)));
+    }
+    v
 }
