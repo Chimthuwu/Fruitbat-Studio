@@ -266,6 +266,8 @@ pub enum Action {
     BrowserClear,
     /// The splitter right of the browser: drag to resize it, double-click for the default width (§9).
     BrowserSplitter,
+    /// The device rack's controls (spec model/track-model.md §7).
+    DeviceRack(crate::device_rack::RackAct),
     PlaylistArea,
     MixerArea,
     RackArea,
@@ -630,6 +632,8 @@ pub enum Seg {
     Toolbar,
     /// The playlist's clip source list (inside `Win(Playlist)`: a scroll of the grid leaves it alone).
     PlPicker,
+    /// The device rack panel docked at the bottom (Linear mode; spec model/track-model.md §7).
+    DeviceRack,
 }
 
 /// What each part registered and where it drew in the last paint, so a partial repaint can keep the hits of the parts
@@ -909,6 +913,8 @@ pub enum Drag {
     PianoSplit { dy: f32, top: f32, h: f32 },
     /// The browser's splitter: `dx` = grab offset from the browser's right edge (spec: ui/browser.md §9).
     BrowserSplit { dx: f32 },
+    /// The device rack's splitter: `dy` is the pointer's height above the rack's bottom edge at the press.
+    DeviceRackSplit { dy: f32 },
     /// Monitor debug panel slider.
     MonParam(usize),
     /// Cable physics debug panel slider.
@@ -1096,6 +1102,19 @@ pub struct State {
     /// runs, and the last press on the splitter, for its double click (spec: ui/browser.md §9).
     pub browser_w: f32,
     pub browser_split_click: Option<std::time::Instant>,
+    /// The device rack panel (Linear mode, spec model/track-model.md §7): shown at all, its height as dragged
+    /// (`device_rack::height` keeps it in range), collapsed to its header, the lane whose chain it pins, the
+    /// devices' editor windows popped out of their tiles, the ones pinned into tiles, the ones whose editor failed
+    /// to open (their tiles degrade to placeholders), its open device menu and the last press on its splitter.
+    pub show_device_rack: bool,
+    pub device_rack_h: f32,
+    pub device_rack_collapsed: bool,
+    pub device_rack_pin: Option<u16>,
+    pub device_rack_float: std::collections::BTreeSet<usize>,
+    pub device_rack_embed: std::collections::BTreeSet<usize>,
+    pub device_rack_failed: std::collections::BTreeSet<usize>,
+    pub device_rack_menu: Option<usize>,
+    pub device_rack_split_click: Option<std::time::Instant>,
     /// The hovered row whose label is scrolling, as last painted (spec: ui/browser.md §9).
     pub browser_marquee: std::cell::RefCell<Option<views::browser::Marquee>>,
     /// Favorite files (spec: ui/browser.md §10) and the index of the browser's disk folders (§11).
@@ -1226,7 +1245,8 @@ impl State {
     pub fn work_rect(&self) -> Rect {
         let left = if self.show_browser { views::browser_w(self) } else { 0.0 };
         let top = views::work_y(self);
-        Rect::new(left, top, (self.screen.0 - left).max(0.0), (self.screen.1 - top).max(0.0))
+        let bottom = crate::device_rack::height(self);
+        Rect::new(left, top, (self.screen.0 - left).max(0.0), (self.screen.1 - top - bottom).max(0.0))
     }
 
     /// The window's floating rect, kept at least its minimum size and at most the screen's, with its part in the
@@ -1240,7 +1260,7 @@ impl State {
         let (mw, mh) = w.min_size();
         let (sw, sh) = self.screen;
         let rw = r.w.min(sw).max(mw);
-        let rh = r.h.min(sh - views::work_y(self)).max(mh);
+        let rh = r.h.min(sh - views::work_y(self) - crate::device_rack::height(self)).max(mh);
         let (x, y) = crate::win_clamp::keep(r.x, r.y, rw, self.work_rect());
         Rect::new(x, y, rw, rh)
     }
@@ -1532,6 +1552,15 @@ impl App {
                 browser_hist_pos: 0,
                 browser_w: crate::browser::load_width(),
                 browser_split_click: None,
+                show_device_rack: true,
+                device_rack_h: crate::device_rack::DEFAULT_H,
+                device_rack_collapsed: false,
+                device_rack_pin: None,
+                device_rack_float: Default::default(),
+                device_rack_embed: Default::default(),
+                device_rack_failed: Default::default(),
+                device_rack_menu: None,
+                device_rack_split_click: None,
                 browser_marquee: Default::default(),
                 browser_favs: crate::browser::load_favs(),
                 browser_index: Default::default(),
@@ -3053,6 +3082,10 @@ impl App {
     /// windows above them and the overlays (spec: ui/plugin-window.md "Docking"). Detached windows leave `State::z`.
     #[cfg(plugin_windows)]
     fn clip_docked(&mut self) {
+        // The device rack's embedded editors open, close and pin to their tiles first, so this tick's stacking and
+        // clipping see them (spec model/track-model.md §7).
+        #[cfg(plugin_windows)]
+        crate::device_rack::sync_embed(self);
         let docked = self.plugins.docked();
         self.state.z.retain(|w| !matches!(w, Win::Hosted(r) if !docked.contains(r)));
         for &r in &docked {
@@ -6071,6 +6104,7 @@ impl App {
                     }
                 }
                 Drag::BrowserSplit { dx } => self.browser_split_drag(x - dx),
+                Drag::DeviceRackSplit { dy } => crate::device_rack::split_drag(self, y, dy),
                 Drag::SongPosHold { .. } => {}
                 Drag::PrefSlider { label, x: x0, w } => self.pref_slider_drag(label, x0, w),
                 Drag::Ppi { x0, n0 } => self.ppi_set(crate::ppi::dragged(n0, x - x0, self.px_scale)),
@@ -6480,6 +6514,9 @@ impl App {
         }
         if matches!((&self.drag, &self.hover), (Some(Drag::BrowserSplit { .. }), _) | (None, Some(Action::BrowserSplitter))) {
             return Cursor::EwResize;
+        }
+        if matches!((&self.drag, &self.hover), (Some(Drag::DeviceRackSplit { .. }), _) | (None, Some(Action::DeviceRack(crate::device_rack::RackAct::Splitter)))) {
+            return Cursor::NsResize;
         }
         let edges = match (&self.drag, &self.hover) {
             (Some(Drag::RackResize { edges, .. }), _) => *edges,
@@ -6961,6 +6998,8 @@ impl App {
             Some(Drag::Bar(d)) => self.bar_drop(d),
             Some(Drag::PianoSplit { .. }) => crate::piano_split::save(self.state.piano.split),
             Some(Drag::BrowserSplit { .. }) => crate::browser::save_width(self.state.browser_w),
+            // The rack's height is session state so far (the project state lands with M8); nothing to save.
+            Some(Drag::DeviceRackSplit { .. }) => {}
             Some(Drag::Marker) if self.transport.playing() && !self.transport.song() => {
                 self.start_playback();
             }
@@ -8508,6 +8547,9 @@ impl App {
         if self.browser_act(&a) {
             return;
         }
+        if let Action::DeviceRack(ra) = a {
+            return crate::device_rack::run(self, ra);
+        }
         if self.rack_act(&a) {
             return;
         }
@@ -8938,7 +8980,8 @@ impl App {
             | Action::PlPickTab(_)
             | Action::PlPick(_)
             | Action::PlPopup(_)
-            | Action::PlPopupSub(_) => {}
+            | Action::PlPopupSub(_)
+            | Action::DeviceRack(_) => {}
         }
     }
 

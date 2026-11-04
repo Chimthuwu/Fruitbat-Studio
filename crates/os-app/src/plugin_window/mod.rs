@@ -329,6 +329,9 @@ struct State {
     clip: Option<([i32; 4], Vec<[i32; 4]>)>,
     /// The clip last applied (window rect, workspace, covering rects), so unchanged clips are not reset.
     clip_key: Option<Vec<i32>>,
+    /// The window lives in a device-rack tile: the app places it, and a drag on its title bar does nothing
+    /// (Lemon Studio's design: spec model/track-model.md §7).
+    pinned: bool,
 }
 
 impl State {
@@ -357,6 +360,7 @@ impl State {
             detached,
             clip: None,
             clip_key: None,
+            pinned: false,
         }
     }
 

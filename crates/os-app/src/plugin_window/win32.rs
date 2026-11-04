@@ -299,8 +299,9 @@ impl FrameWindow {
                 unsafe { refit(self.hwnd, w) };
             }
         }
-        // The workspace may have shrunk: the window keeps its part in it (`crate::win_clamp::keep_px`).
-        if work[2] > work[0] && work[3] > work[1] {
+        // The workspace may have shrunk: the window keeps its part in it (`crate::win_clamp::keep_px`); a device
+        // rack tile keeps its place instead — the app pins it there (spec model/track-model.md §7).
+        if work[2] > work[0] && work[3] > work[1] && !self.state.borrow().pinned {
             let k = self.scale();
             self.place(|me| crate::win_clamp::keep_px((me[0], me[1]), me[2] - me[0], work, k));
         }
@@ -449,6 +450,14 @@ impl FrameWindow {
     }
 
     /// Follows a new editor size (plugins may resize).
+    /// Marks the window as living in a device-rack tile: the app places it each tick, and it neither follows a
+    /// shrunken workspace (`clip_to`) nor a title-bar drag (spec model/track-model.md §7).
+    pub fn set_pinned(&self, on: bool) {
+        if self.state.borrow().pinned != on {
+            self.state.borrow_mut().pinned = on;
+        }
+    }
+
     pub fn set_editor_size(&self, editor: (f32, f32)) {
         if self.state.borrow().editor != editor {
             self.state.borrow_mut().editor = editor;
@@ -751,6 +760,10 @@ unsafe extern "system" fn frame_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARA
                 let (x, y) = client_point(hwnd, lp, w.scale, false);
                 let moving = w.state.borrow().moving;
                 if let Some((cx, cy, wx, wy)) = moving {
+                    // A device-rack tile does not move by its title bar (the app places it).
+                    if w.state.borrow().pinned {
+                        return 0;
+                    }
                     let mut c: POINT = std::mem::zeroed();
                     GetCursorPos(&mut c);
                     // Screen position; a docked window is placed in its parent's client area.
