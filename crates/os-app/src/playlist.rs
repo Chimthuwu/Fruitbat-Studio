@@ -982,7 +982,7 @@ impl Rows {
     pub fn band_of(&self, ch: u16, automations: &[Automation]) -> Option<&LaneBand> {
         let a = automations.iter().find(|a| a.channel == ch)?;
         let bound = self.bands.iter().find(|b| b.target != 0 && Some(&b.target) == a.targets.first());
-        bound.or_else(|| self.bands.last().filter(|b| self.unassigned.is_some()))
+        bound.or_else(|| self.bands.last().filter(|_| self.unassigned.is_some()))
     }
 
     /// A clip's height: its row less the 3 px gap.
