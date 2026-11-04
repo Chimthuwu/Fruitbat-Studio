@@ -127,6 +127,66 @@ pub struct Project {
     /// the tracks' latency settings are (spec: audio/delay-compensation.md "Automatic"). Not in the FLP (where the
     /// original keeps it was not found): a `.lemon` file keeps it in its own events (os-app `lemon_state`).
     pub pdc_off: bool,
+    /// Linear mode (Lemon Studio's track model, spec: model/track-model.md): one [`Track`] per instrument, audio or
+    /// bus, whose lane, mixer strip and channel are created together. Not in the FLP (the original has no such
+    /// mode): a `.lemon` file keeps it in its own events (os-app `lemon_state`). Classic mode, `false`, is the
+    /// default and what every project that is not made Linear stays in.
+    pub linear_mode: bool,
+    /// The linear mode's tracks, in creation order (Lemon Studio's design; spec: model/track-model.md). Not in the
+    /// FLP: a `.lemon` file keeps them in its own events (os-app `lemon_state`); an `.flp` round trip loses them,
+    /// like the rest of the Lemon-only state.
+    pub tracks: Vec<Track>,
+}
+
+/// What a [`Track`] is (spec: model/track-model.md): an **Audio** track plays clips through its mixer strip, a
+/// **Midi** one is an instrument's track (its channel plays the notes), a **Bus** one is a strip to route into, with
+/// no lane of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TrackKind {
+    #[default]
+    Audio,
+    Midi,
+    Bus,
+}
+
+impl TrackKind {
+    /// The kind's name as the control plane's JSON spells it (`track_create`'s `kind`).
+    pub fn name(self) -> &'static str {
+        match self {
+            TrackKind::Audio => "audio",
+            TrackKind::Midi => "midi",
+            TrackKind::Bus => "bus",
+        }
+    }
+
+    /// The kind named `s` (`track_create`'s `kind`), `None` for anything else.
+    pub fn of(s: &str) -> Option<TrackKind> {
+        [("audio", TrackKind::Audio), ("midi", TrackKind::Midi), ("bus", TrackKind::Bus)].into_iter().find(|(n, _)| *n == s).map(|(_, k)| k)
+    }
+}
+
+/// One linear mode track (Lemon Studio's design; spec: model/track-model.md): the three pieces FL keeps apart, named
+/// as one. The playlist lane's [`PlaylistTrack`] keeps the name and colour (`playlist_lane` 0 on a bus, which has no
+/// lane); the strip is the mixer insert and, on a Midi track, `channel` the rack channel that plays the notes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Track {
+    /// The track's stable identity ([`Id`], the control plane names it by).
+    pub id: Id,
+    pub kind: TrackKind,
+    /// The lane's [`PlaylistTrack::number`] (1-based), in every arrangement; 0 = no lane (a bus).
+    pub playlist_lane: u32,
+    /// The mixer insert's number (0 = the master; a bus may sit there).
+    pub mixer_strip: u16,
+    /// A Midi track's channel, by its index as clips name channels; `None` on the other kinds, or once the channel
+    /// went (the track stays, as an instrument track whose channel is deleted; spec: ui/playlist.md §6c).
+    pub channel: Option<u16>,
+}
+
+impl Track {
+    /// A new track; its id comes with the session's `settle` (os-app `control::ids`).
+    pub fn new(kind: TrackKind, playlist_lane: u32, mixer_strip: u16, channel: Option<u16>) -> Self {
+        Track { id: Id::NONE, kind, playlist_lane, mixer_strip, channel }
+    }
 }
 
 /// One internal controller link (spec: flp/events/automation.md "Controller links"): output `output` of the controller
@@ -2112,7 +2172,9 @@ impl TrackLink {
 
 impl Project {
     /// Every track link's mixer track follows `m` (`None`: the track is gone, and a link to it goes with it), in every
-    /// arrangement (mixer tracks deleted, moved or inserted).
+    /// arrangement (mixer tracks deleted, moved or inserted). The linear mode's [`Track`]s follow too: one whose strip
+    /// is gone is dropped — the conservative choice, since a `Track` that names no strip would dangle (its playlist
+    /// lane, which keeps name and colour, stays; spec: model/track-model.md "Remap discipline").
     pub fn remap_link_mixers(&mut self, m: impl Fn(u16) -> Option<u16>) {
         for t in self.arrangements.iter_mut().flat_map(|a| a.tracks.iter_mut()) {
             if let Some(x) = t.link.mixer {
@@ -2122,6 +2184,7 @@ impl Project {
                 }
             }
         }
+        self.tracks.retain_mut(|t| m(t.mixer_strip).map(|n| t.mixer_strip = n).is_some());
     }
 
     /// The automation targets follow mixer places that moved ([`target::moved`]: `track` and `slot` give a place's new
@@ -2151,6 +2214,9 @@ impl Project {
     }
 
     /// Every track link's channel follows `m` (`None`: the channel is gone, and an instrument track's link with it).
+    /// The linear mode's [`Track`]s follow too: one whose channel is gone keeps its lane and strip, with `channel`
+    /// `None` — the conservative choice (the track, its lane and its strip outlive the instrument; only the link goes,
+    /// as an instrument track's does; spec: model/track-model.md "Remap discipline").
     pub fn remap_link_channels(&mut self, m: impl Fn(u16) -> Option<u16>) {
         for t in self.arrangements.iter_mut().flat_map(|a| a.tracks.iter_mut()) {
             if let Some(c) = t.link.channel {
@@ -2160,6 +2226,34 @@ impl Project {
                 }
             }
         }
+        for t in &mut self.tracks {
+            t.channel = t.channel.and_then(|c| m(c));
+        }
+    }
+
+    /// The linear mode's tracks follow a playlist lane inserted before 0-based lane `at0` ([`PlaylistTrack`]
+    /// insertion; `os-app` `playlist::insert_track`): lanes from it on move one down the list.
+    pub fn track_lane_inserted(&mut self, at0: u16) {
+        for t in &mut self.tracks {
+            if t.playlist_lane > u32::from(at0) {
+                t.playlist_lane += 1;
+            }
+        }
+    }
+
+    /// The linear mode's tracks follow 0-based playlist lane `at0` deleted with its clips (`os-app`
+    /// `playlist::delete_track`): that lane's track is dropped (the conservative choice: a lane that is gone cannot
+    /// host its track; spec: model/track-model.md "Remap discipline"), the lanes below it move up.
+    pub fn track_lane_deleted(&mut self, at0: u16) {
+        self.tracks.retain_mut(|t| {
+            if t.playlist_lane == u32::from(at0) + 1 {
+                return false;
+            }
+            if t.playlist_lane > u32::from(at0) {
+                t.playlist_lane -= 1;
+            }
+            true
+        });
     }
 }
 
@@ -2902,7 +2996,7 @@ mod fade_tests {
         // The two values measured (spec): +3.36 gives 0.676, -4.83 gives 0.293.
         assert!((fade_curve(0.5, 3.36) - 0.676).abs() < 5e-4);
         assert!((fade_curve(0.5, -4.83) - 0.293).abs() < 5e-4);
-    }
+        }
 
     #[test]
     fn negative_tension_is_the_positive_turned_half_a_turn() {
@@ -2925,4 +3019,42 @@ mod fade_tests {
             }
         }
     }
+}
+
+#[cfg(test)]
+mod track_tests {
+    use super::*;
+
+    /// The linear mode's tracks follow the links' remaps (spec: model/track-model.md "Remap discipline"): a channel
+    /// that goes leaves its track unlinked, a strip that goes drops the track, lanes shift with playlist insertions
+    /// and deletions, and a lane's playlist track link goes with its strip.
+    #[test]
+    fn linear_tracks_follow_remaps() {
+    let mut p = Project { ppq: 96, bar: None, ..Project::default() };
+    let mut arr = Arrangement::default();
+    arr.tracks = (1..=8).map(PlaylistTrack::new).collect();
+    arr.tracks[2].link = TrackLink::instrument(1);
+    arr.tracks[0].link = TrackLink::audio(4);
+    p.arrangements.push(arr);
+    p.tracks.push(Track::new(TrackKind::Midi, 3, 5, Some(1)));
+    p.tracks.push(Track::new(TrackKind::Audio, 1, 4, None));
+
+    // Channel 1 goes: the track keeps its lane and strip, the link loses the channel.
+    p.remap_link_channels(|c| (c != 1).then_some(c));
+    assert_eq!(p.tracks[0].channel, None);
+    assert_eq!(p.tracks[0].mixer_strip, 5);
+
+    // Insert 4 goes: its track is dropped and the audio link with it; the midi track (insert 5) stays.
+    p.remap_link_mixers(|t| (t != 4).then_some(t));
+    assert_eq!(p.tracks.len(), 1);
+    assert_eq!(p.arrangements[0].tracks[0].link, TrackLink::NONE);
+    assert_eq!(p.arrangements[0].tracks[2].link, TrackLink::NONE, "an instrument track's link goes with its channel");
+
+    // Lane 1's track is gone, so deleting lane 1 (0-based 0) shifts lane 3 to 2, and inserting before it back.
+    p.track_lane_deleted(0);
+    assert_eq!(p.tracks[0].playlist_lane, 2);
+    p.track_lane_inserted(0);
+    assert_eq!(p.tracks[0].playlist_lane, 3);
+    }
+
 }

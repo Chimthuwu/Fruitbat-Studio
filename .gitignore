@@ -13,3 +13,6 @@ CLAUDE.md
 
 # macOS Finder metadata
 .DS_Store
+
+# Local build env (portable MSVC / rustup on Z:)
+env.sh

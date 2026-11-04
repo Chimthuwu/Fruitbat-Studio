@@ -20,6 +20,8 @@ pub struct Ids {
     channels: HashMap<u32, usize>,
     patterns: HashMap<u32, usize>,
     tracks: HashMap<u32, usize>,
+    /// Linear mode's tracks (`os_model::Track`), by id (spec: model/track-model.md).
+    linear: HashMap<u32, usize>,
     arrangements: HashMap<u32, usize>,
     /// Clips by arrangement, track and position: a copy pasted before its original moves the original in the list but
     /// not on the playlist.
@@ -34,6 +36,7 @@ impl Default for Ids {
             channels: HashMap::new(),
             patterns: HashMap::new(),
             tracks: HashMap::new(),
+            linear: HashMap::new(),
             arrangements: HashMap::new(),
             clips: HashMap::new(),
             slots: HashMap::new(),
@@ -90,6 +93,7 @@ pub fn settle(ids: &mut Ids, p: &mut Project) -> bool {
     changed |= settle_kind(ids, p.channels.iter_mut().enumerate().map(|(i, c)| (i, &mut c.id)).collect(), |x| &mut x.channels);
     changed |= settle_kind(ids, p.patterns.iter_mut().enumerate().map(|(i, c)| (i, &mut c.id)).collect(), |x| &mut x.patterns);
     changed |= settle_kind(ids, p.mixer.iter_mut().enumerate().map(|(i, c)| (i, &mut c.id)).collect(), |x| &mut x.tracks);
+    changed |= settle_kind(ids, p.tracks.iter_mut().enumerate().map(|(i, c)| (i, &mut c.id)).collect(), |x| &mut x.linear);
     changed |= settle_kind(ids, p.arrangements.iter_mut().enumerate().map(|(i, c)| (i, &mut c.id)).collect(), |x| &mut x.arrangements);
     let clips = p.arrangements.iter_mut().enumerate().flat_map(|(a, arr)| arr.clips.iter_mut().map(move |c| ((a, c.track, c.position), &mut c.id))).collect();
     changed |= settle_kind(ids, clips, |x| &mut x.clips);

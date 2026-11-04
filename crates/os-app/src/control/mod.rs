@@ -250,6 +250,9 @@ fn op(c: &Command) -> &'static str {
         Command::DeleteClip { .. } => "delete_clip",
         Command::SetClip { .. } => "set_clip",
         Command::SetPlaylistTrack { .. } => "set_playlist_track",
+        Command::TrackCreate { .. } => "track_create",
+        Command::TrackDelete { .. } => "track_delete",
+        Command::TrackSet { .. } => "track_set",
         Command::SetParam { .. } => "set_param",
         Command::Put(_) => "put",
     }

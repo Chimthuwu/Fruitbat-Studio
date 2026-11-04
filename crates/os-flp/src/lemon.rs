@@ -39,6 +39,11 @@ pub const KEY_FOCUS: u8 = 200;
 pub const TRACK_LOCKS: u8 = 201;
 /// `LMex` event: the channels the live note sources are locked to (Receive notes from ▸).
 pub const NOTE_LOCKS: u8 = 202;
+/// `LMex` event: Linear mode's tracks (`os_model::Track`; spec: model/track-model.md). Lemon Studio's design: the
+/// original has no such mode, so an FLP has no place for it.
+pub const TRACKS: u8 = 203;
+/// `LMex` event: whether the project is in Linear mode (spec: model/track-model.md).
+pub const LINEAR_MODE: u8 = 204;
 
 /// Whether `file` is a `.lemon` file (its first chunk is `LMhd`).
 pub fn is_lemon(file: &FlpFile) -> bool {

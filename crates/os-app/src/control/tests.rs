@@ -87,6 +87,7 @@ fn every_command_undoes_and_redoes() {
         json!({"op": "add_track", "at": 2}),
         json!({"op": "delete_track", "track": ins1}),
         json!({"op": "add_pattern", "name": "Fill", "color": "#112233"}),
+        json!({"op": "track_create", "kind": "audio"}),
         json!({"op": "add_effect", "track": ins2, "plugin": "Fruity Limiter"}),
     ] {
         round_trip(&mut a, c);
@@ -1036,4 +1037,56 @@ fn a_hosted_slots_scaling_and_help() {
     // No instance (an effect the engine plays itself has no editor): greyed.
     a.plugins.hosted.clear();
     assert!(!scaling(&a).enabled);
+}
+
+/// The linear mode's track commands (spec: model/track-model.md): a track_create makes the pieces (a lane at the first
+/// free track, an insert, a channel on a midi track, linked as the rack's Assign entries do) and names the track; the
+/// undo and redo of every one puts the project back exactly; a track_delete takes the lane's clips, the insert and the
+/// channel (its notes with it), but not the master, a piece another track still names, or a project's last channel.
+#[test]
+fn track_create_set_and_delete_undo_and_redo() {
+    let mut a = app();
+    let r = round_trip(&mut a, json!({"op": "add_channel", "name": "Keys"}));
+    let _keys = r[0]["channel"].as_u64().unwrap() as u32;
+    let r = round_trip(&mut a, json!({"op": "add_track", "at": null}));
+    let _strip = r[0]["track"].as_u64().unwrap() as u32;
+    let r = round_trip(&mut a, json!({"op": "track_create", "kind": "midi", "name": "Lead", "color": "#123456"}));
+    let track = r[0]["track"].as_u64().unwrap() as u32;
+    let (lane, insert, channel) = {
+        let t = a.state.project.tracks.last().unwrap().clone();
+        assert_eq!(t.kind, os_model::TrackKind::Midi);
+        assert!(a.state.project.linear_mode);
+        (t.playlist_lane, t.mixer_strip, t.channel.unwrap())
+    };
+    assert_eq!(a.state.project.arrangements[0].tracks[lane as usize - 1].link, os_model::TrackLink::instrument(channel));
+    assert_eq!(a.state.project.channels.iter().find(|c| c.index == channel).map(|c| c.mixer_track), Some(insert));
+    assert_ne!(insert, 0, "a new insert, not the master");
+
+    // Rename and recolour through the track, not the lane.
+    round_trip(&mut a, json!({"op": "track_set", "track": track, "name": "Keys 2", "color": "#abcdef"}));
+    let trk = &a.state.project.arrangements[0].tracks[lane as usize - 1];
+    assert_eq!((trk.name.as_deref(), trk.color.map(|c| (c.r, c.g, c.b))), (Some("Keys 2"), Some((0xab, 0xcd, 0xef))));
+
+    // The delete: the track and its pieces go (the channel was this one's alone, and there are others left); the
+    // insert goes the mixer's way (its place resets to a default track, the ones after it move up).
+    let n_channels = a.state.project.channels.len();
+    round_trip(&mut a, json!({"op": "track_delete", "track": track}));
+    let s = &a.state;
+    assert!(s.project.tracks.is_empty());
+    assert_eq!(s.project.channels.len(), n_channels - 1, "the channel and its notes go");
+    let trk = &s.project.arrangements[0].tracks[lane as usize - 1];
+    assert_eq!(trk.link, os_model::TrackLink::NONE);
+    let gone = crate::mixer::track(s, insert).unwrap();
+    assert!(gone.name.is_none() && gone.color.is_none(), "the insert's place is a default track again");
+
+    // A bus: the strip alone, no lane and no channel; deleting it takes its insert only.
+    let r = round_trip(&mut a, json!({"op": "track_create", "kind": "bus", "name": "Bus"}));
+    let bus = r[0]["track"].as_u64().unwrap() as u32;
+    let t = a.state.project.tracks.last().unwrap().clone();
+    assert_eq!((t.kind, t.playlist_lane), (os_model::TrackKind::Bus, 0), "a bus has no lane");
+    assert_eq!(t.channel, None);
+    let n_channels = a.state.project.channels.len();
+    round_trip(&mut a, json!({"op": "track_delete", "track": bus}));
+    assert_eq!(a.state.project.channels.len(), n_channels, "a bus has no channel");
+    assert!(a.state.project.tracks.is_empty());
 }

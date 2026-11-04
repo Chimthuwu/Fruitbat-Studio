@@ -2072,6 +2072,8 @@ pub fn insert_track(s: &mut State, t: u16) {
         arr.tracks[k] = PlaylistTrack { number: arr.tracks[k].number, ..prev };
     }
     arr.tracks[usize::from(t)] = PlaylistTrack::new(u32::from(t) + 1);
+    // Linear mode's tracks follow the lanes they name (spec: model/track-model.md "Remap discipline").
+    s.project.track_lane_inserted(t);
     s.piano.dirty = true;
 }
 
@@ -2091,6 +2093,9 @@ pub fn delete_track(s: &mut State, t: u16) {
         arr.tracks[k] = PlaylistTrack { number: arr.tracks[k].number, ..next };
     }
     arr.tracks[n - 1] = PlaylistTrack::new(n as u32);
+    // Linear mode's tracks follow the lanes they name; the deleted lane's track is dropped (spec:
+    // model/track-model.md "Remap discipline").
+    s.project.track_lane_deleted(t);
     s.piano.dirty = true;
 }
 

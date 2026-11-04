@@ -51,6 +51,8 @@ pub fn events(s: &State, plugins: &Plugins) -> Vec<Event> {
     v.push(Event::new(lemon::KEY_FOCUS, Value::var([LAYOUT, u8::from(editor_keys())])));
     v.push(track_locks(s));
     v.push(note_locks(s));
+    v.push(linear_tracks(s));
+    v.push(linear_mode(s));
     v
 }
 
@@ -74,6 +76,12 @@ pub fn apply(s: &mut State, plugins: &mut Plugins, file: &FlpFile) {
         return;
     }
     let read = |id| lemon::data(file, id).filter(|d| d.first() == Some(&LAYOUT));
+    if let Some(&on) = read(lemon::LINEAR_MODE).as_deref().and_then(|d| d.get(1)) {
+        s.project.linear_mode = on != 0;
+    }
+    if let Some(d) = read(lemon::TRACKS) {
+        s.project.tracks = read_tracks(&d[1..]);
+    }
     if let Some(&flags) = read(lemon::MIXER).as_deref().and_then(|d| d.get(1)) {
         s.project.pdc_off = flags & PDC_AUTO == 0;
         s.mixer.waveforms = flags & WAVEFORMS != 0;
@@ -165,6 +173,9 @@ pub fn apply(s: &mut State, plugins: &mut Plugins, file: &FlpFile) {
 /// the Change icon... list ([`crate::playlist::FLP_ICONS`]). A `.lemon` file's icons are its own (event 193), so a
 /// choice made in Lemon Studio, None too, wins over the numbers its FLP events keep.
 fn from_flp(s: &mut State) {
+    // An FLP has no Linear mode of its own: the defaults (Classic, no tracks), as for every other kind of state.
+    s.project.linear_mode = false;
+    s.project.tracks.clear();
     let p = &s.project;
     let channels = p.channels.iter().filter_map(|c| Some((IconOwner::Channel(c.id.0), crate::playlist::flp_icon(c.rack.icon)?)));
     let tracks = p.mixer.iter().filter_map(|m| Some((IconOwner::Track(m.index), crate::playlist::flp_icon(u32::from(m.icon?))?)));
@@ -368,6 +379,47 @@ fn note_locks(s: &State) -> Event {
     Event::new(lemon::NOTE_LOCKS, Value::var(b))
 }
 
+/// Reads [`lemon::TRACKS`]'s payload after its layout byte. A cut entry and the ones after it are left out; an entry
+/// whose kind byte this version does not know is left out too.
+fn read_tracks(d: &[u8]) -> Vec<os_model::Track> {
+    const NO_CHANNEL: u16 = 0xFFFF;
+    let mut r = Reader(d);
+    let mut v = Vec::new();
+    for _ in 0..r.u32().unwrap_or(0) {
+        let (Some(kind), Some(lane), Some(strip), Some(ch)) = (r.u8(), r.u32(), r.u16(), r.u16()) else { break };
+        let Some(kind) = (match kind {
+            0 => Some(os_model::TrackKind::Audio),
+            1 => Some(os_model::TrackKind::Midi),
+            2 => Some(os_model::TrackKind::Bus),
+            _ => None,
+        }) else {
+            continue;
+        };
+        v.push(os_model::Track::new(kind, lane, strip, (ch != NO_CHANNEL).then_some(ch)));
+    }
+    v
+}
+
+/// [`lemon::TRACKS`]: a u32 count, then per linear mode track (in [`os_model::Project::tracks`] order) its kind (u8:
+/// 0 audio, 1 midi, 2 bus), playlist lane (u32, 1-based [`os_model::PlaylistTrack::number`], 0 on a bus), mixer strip
+/// (u16) and channel (u16, 0xFFFF = none). Ids are not saved (project files store none); `settle` gives new ones.
+fn linear_tracks(s: &State) -> Event {
+    const NO_CHANNEL: u16 = 0xFFFF;
+    let mut b = start(s.project.tracks.len());
+    for t in &s.project.tracks {
+        b.push(t.kind as u8);
+        b.extend_from_slice(&t.playlist_lane.to_le_bytes());
+        b.extend_from_slice(&t.mixer_strip.to_le_bytes());
+        b.extend_from_slice(&t.channel.unwrap_or(NO_CHANNEL).to_le_bytes());
+    }
+    Event::new(lemon::TRACKS, Value::var(b))
+}
+
+/// [`lemon::LINEAR_MODE`]: one u8, 1 = Linear mode.
+fn linear_mode(s: &State) -> Event {
+    Event::new(lemon::LINEAR_MODE, Value::var([LAYOUT, u8::from(s.project.linear_mode)]))
+}
+
 /// A payload's layout version and entry count.
 fn start(count: usize) -> Vec<u8> {
     let mut b = vec![LAYOUT];
@@ -452,7 +504,7 @@ mod tests {
         want.extend([lemon::SCALING, lemon::CHANNEL_CHECKS]);
         #[cfg(any(windows, target_os = "macos"))]
         want.push(lemon::KEY_FOCUS);
-        want.extend([lemon::TRACK_LOCKS, lemon::NOTE_LOCKS]);
+        want.extend([lemon::TRACK_LOCKS, lemon::NOTE_LOCKS, lemon::TRACKS, lemon::LINEAR_MODE]);
         assert_eq!(ids, want);
         let mut back = App::new(None);
         back.open(path.clone());
@@ -547,6 +599,44 @@ mod tests {
         assert!(s.project.arrangements.iter().flat_map(|a| &a.tracks).all(|t| t.clip_lock.is_none()));
         #[cfg(any(windows, target_os = "macos"))]
         assert!(editor_keys());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The linear mode's tracks (event 203) and mode flag (204) come back through a .lemon file (ids are not saved, so
+    /// they are new); an FLP saved from the same state has none of them.
+    #[test]
+    fn linear_mode_and_its_tracks_round_trip_through_a_lemon_file() {
+        let d = dir("linear");
+        let (lemon_path, flp_path) = (d.join("Linear.lemon"), d.join("Linear.flp"));
+        let mut app = with_state();
+        app.state.project.linear_mode = true;
+        app.state.project.tracks.push(os_model::Track::new(os_model::TrackKind::Midi, 3, 5, Some(1)));
+        app.state.project.tracks.push(os_model::Track::new(os_model::TrackKind::Bus, 0, 6, None));
+        app.save_to(lemon_path.clone());
+        app.save_to(flp_path.clone());
+        let file = os_flp::FlpFile::parse(&std::fs::read(&lemon_path).unwrap()).unwrap();
+        let midi = [1u8, 3, 0, 0, 0, 5, 0, 1, 0];
+        let bus = [2u8, 0, 0, 0, 0, 6, 0, 255, 255];
+        let mut want = vec![LAYOUT, 2, 0, 0, 0];
+        want.extend_from_slice(&midi);
+        want.extend_from_slice(&bus);
+        assert_eq!(lemon::data(&file, lemon::TRACKS), Some(want));
+        assert_eq!(lemon::data(&file, lemon::LINEAR_MODE), Some(vec![LAYOUT, 1]));
+        let mut back = App::new(None);
+        back.open(lemon_path.clone());
+        assert!(!back.unsaved(), "the tracks read back are the saved ones");
+        let s = &back.state;
+        assert!(s.project.linear_mode);
+        assert_eq!(s.project.tracks.len(), 2);
+        assert_eq!(
+            (s.project.tracks[0].kind, s.project.tracks[0].playlist_lane, s.project.tracks[0].mixer_strip, s.project.tracks[0].channel),
+            (os_model::TrackKind::Midi, 3, 5, Some(1))
+        );
+        assert_eq!((s.project.tracks[1].kind, s.project.tracks[1].playlist_lane), (os_model::TrackKind::Bus, 0));
+        // The FLP saved from the same state: no tracks and no Linear mode (an FLP has no place for them).
+        back.open(flp_path);
+        let s = &back.state;
+        assert!(!s.project.linear_mode && s.project.tracks.is_empty());
         let _ = std::fs::remove_dir_all(&d);
     }
 

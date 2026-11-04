@@ -219,6 +219,36 @@ pub enum Command {
         enabled: Option<bool>,
     },
 
+    // ----- Linear mode's tracks (spec: model/track-model.md)
+    /// A new track (Lemon Studio's track model; spec: model/track-model.md): `kind` is "audio", "midi" or "bus". The
+    /// project becomes Linear (`linear_mode`); the pieces are made as the rack's Assign entries make theirs: a
+    /// playlist lane at the first free track (no clips, link or name; the same slot `Assign to new instrument track`
+    /// takes) linked to the strip, a mixer insert after the last one in use and, on a Midi track, a Lemon Sampler
+    /// channel routed to it. A bus is the strip alone (`playlist_lane` 0, no lane, no channel). `name` and `color`
+    /// (`#rrggbb`) name and colour the lane; a bus's goes on its strip. The result names the track's id.
+    TrackCreate {
+        kind: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        color: Option<String>,
+    },
+    /// The track goes, with its pieces (spec: model/track-model.md "TrackDelete"): the playlist lane and its clips go
+    /// (as the playlist track's Delete does), the mixer insert goes (as its menu's Delete does) and a Midi track's
+    /// channel goes with its notes (as the rack's DeleteChannel does). A piece another track still names (its strip,
+    /// its channel) stays; the master and a project's last channel stay too. The other tracks' lanes, strips and
+    /// channels follow the pieces' removal (`remap_link_mixers`, `remap_link_channels`, `track_lane_deleted`).
+    TrackDelete { track: u32 },
+    /// Each setting given is set: name, colour (`#rrggbb`, empty = the default). On a lane they go on the lane's
+    /// playlist track; on a bus, on its mixer strip.
+    TrackSet {
+        track: u32,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        color: Option<String>,
+    },
+
     // ----- Plugins
     /// Parameter `param` (the plugin's own parameter id) of the instance playing channel or slot `owner` to `value`
     /// 0..=1. `from` is the value before; the app fills it in (`App::command`), and the undo puts it back.
@@ -593,6 +623,9 @@ impl Command {
             Command::DeleteClip { .. } => "Delete clip",
             Command::SetClip { .. } => "Edit clip",
             Command::SetPlaylistTrack { .. } => "Playlist track",
+            Command::TrackCreate { .. } => "Add track",
+            Command::TrackDelete { .. } => "Delete track",
+            Command::TrackSet { .. } => "Track settings",
             Command::SetParam { .. } => PLUGIN_PARAMETER,
             Command::Put(_) => "Undo",
         }
@@ -630,7 +663,10 @@ impl Command {
             | Command::AddTrack { .. }
             | Command::DeleteTrack { .. }
             | Command::AddPattern { .. }
-            | Command::DeletePattern { .. } => Taken::Project(Box::new(Side::of(s))),
+            | Command::DeletePattern { .. }
+            | Command::TrackCreate { .. }
+            | Command::TrackDelete { .. }
+            | Command::TrackSet { .. } => Taken::Project(Box::new(Side::of(s))),
             Command::Put(t) => match &**t {
                 Taken::Settings(_) => Taken::Settings(Box::new(Settings::of(s))),
                 Taken::Channel(c) => Taken::Channel(Box::new(p.channels[channel_row(p, c.id.0)?].clone())),
@@ -1116,6 +1152,140 @@ impl Command {
                 }
                 if let Some(v) = enabled {
                     t.enabled = v;
+                }
+                none
+            }
+
+            Command::TrackCreate { kind, name, color } => {
+                let kind = os_model::TrackKind::of(&kind).ok_or_else(|| format!("kind is audio, midi or bus, not {kind:?}"))?;
+                let color = color.map(|c| parse_color(&c)).transpose()?;
+                // The lane at the first free track (no clips, link or name), the insert after the last one in use, as
+                // AddTrack appends. A bus is the strip alone.
+                let lane = if kind == os_model::TrackKind::Bus { None } else { Some(crate::track_links::new_track(s).ok_or("the playlist has no free track")?) };
+                let insert = crate::mixer::add_track(s, None);
+                let mut channel = None;
+                if kind == os_model::TrackKind::Midi {
+                    // A Lemon Sampler channel, as AddChannel without a plugin makes; routed to the new insert.
+                    let row = crate::app::add_channel(&mut s.project);
+                    s.project.channels[row].mixer_track = insert;
+                    channel = Some(s.project.channels[row].index);
+                }
+                if let Some(lane) = lane {
+                    let link = match kind {
+                        os_model::TrackKind::Audio => os_model::TrackLink::audio(insert),
+                        _ => os_model::TrackLink::instrument(channel.unwrap_or(0)),
+                    };
+                    for a in &mut s.project.arrangements {
+                        if let Some(tr) = a.tracks.get_mut(usize::from(lane)) {
+                            tr.link = link;
+                        }
+                    }
+                }
+                if let Some(n) = name.as_deref().map(text).flatten() {
+                    match kind {
+                        os_model::TrackKind::Bus => {
+                            if let Some(m) = s.project.mixer.iter_mut().find(|m| m.index == insert) {
+                                m.name = Some(n);
+                            }
+                        }
+                        _ => {
+                            if let Some(tr) = lane.and_then(|lane| crate::playlist::arr_mut(s).tracks.get_mut(usize::from(lane))) {
+                                tr.name = Some(n);
+                            }
+                        }
+                    }
+                }
+                if let Some(c) = color.flatten() {
+                    match kind {
+                        os_model::TrackKind::Bus => {
+                            if let Some(m) = s.project.mixer.iter_mut().find(|m| m.index == insert) {
+                                m.color = Some(c);
+                            }
+                        }
+                        _ => {
+                            if let Some(tr) = lane.and_then(|lane| crate::playlist::arr_mut(s).tracks.get_mut(usize::from(lane))) {
+                                tr.color = Some(c);
+                            }
+                        }
+                    }
+                }
+                // Creating a track is what makes the project Linear; Classic mode never has tracks.
+                s.project.linear_mode = true;
+                s.project.tracks.push(os_model::Track::new(kind, lane.map_or(0, |l| u32::from(l) + 1), insert, channel));
+                s.control.settle(&mut s.project);
+                let id = s.project.tracks.last().map_or(Id::NONE, |t| t.id);
+                Ok(id_result("track", id))
+            }
+            Command::TrackDelete { track } => {
+                let at = s.project.tracks.iter().position(|t| t.id.0 == track).ok_or_else(|| format!("no track {track}"))?;
+                let t = s.project.tracks.remove(at);
+                // The lane first: it and its clips go (the playlist track's Delete, `playlist::delete_track`'s
+                // loops), in every arrangement (the lane's number is the same one in all of them).
+                if t.playlist_lane > 0 {
+                    let lane0 = (t.playlist_lane - 1) as u16;
+                    for a in &mut s.project.arrangements {
+                        let gone: Vec<usize> = a.clips.iter().enumerate().filter(|(_, c)| c.track == lane0).map(|(i, _)| i).collect();
+                        for &i in gone.iter().rev() {
+                            a.clips.remove(i);
+                        }
+                        for c in &mut a.clips {
+                            if c.track > lane0 {
+                                c.track -= 1;
+                            }
+                        }
+                        let n = a.tracks.len();
+                        for k in usize::from(lane0)..n.saturating_sub(1) {
+                            let next = a.tracks[k + 1].clone();
+                            a.tracks[k] = os_model::PlaylistTrack { number: a.tracks[k].number, ..next };
+                        }
+                        if n > 0 {
+                            a.tracks[n - 1] = os_model::PlaylistTrack::new(n as u32);
+                        }
+                    }
+                    s.playlist.sel.clear();
+                    s.playlist.hover_clip = None;
+                    s.piano.dirty = true;
+                    s.project.track_lane_deleted(lane0);
+                }
+                // The strip, unless the master or another track's.
+                let strip_taken = t.mixer_strip != 0 && s.project.tracks.iter().all(|x| x.mixer_strip != t.mixer_strip);
+                if strip_taken {
+                    crate::mixer::delete_track(s, t.mixer_strip);
+                }
+                // The channel, with its notes (DeleteChannel's semantics), unless a project's last one or another
+                // track's: then it stays, unlinked (the conservative choice).
+                if let Some(ch) = t.channel.filter(|_| t.kind == os_model::TrackKind::Midi) {
+                    if let Some(row) = s.project.channels.iter().position(|c| c.index == ch) {
+                        let n = s.project.channels.len();
+                        let shared = s.project.tracks.iter().any(|x| x.channel == Some(ch));
+                        if n > 1 && !shared {
+                            let map: Vec<Option<usize>> = (0..n).map(|r| (r != row).then(|| if r < row { r } else { r - 1 })).collect();
+                            crate::rack::remap_state(s, &map);
+                        }
+                    }
+                }
+                none
+            }
+            Command::TrackSet { track, name, color } => {
+                let color = color.map(|c| parse_color(&c)).transpose()?;
+                let t = s.project.tracks.iter().find(|t| t.id.0 == track).cloned().ok_or_else(|| format!("no track {track}"))?;
+                if t.playlist_lane > 0 {
+                    let tr = crate::playlist::arr_mut(s).tracks.get_mut(t.playlist_lane as usize - 1)
+                        .ok_or_else(|| format!("track {track}'s lane is gone"))?;
+                    if let Some(n) = name {
+                        tr.name = text(&n);
+                    }
+                    if let Some(c) = color {
+                        tr.color = c;
+                    }
+                } else {
+                    let m = s.project.mixer.iter_mut().find(|m| m.index == t.mixer_strip).ok_or_else(|| format!("track {track}'s strip is gone"))?;
+                    if let Some(n) = name {
+                        m.name = text(&n);
+                    }
+                    if let Some(c) = color {
+                        m.color = c;
+                    }
                 }
                 none
             }
