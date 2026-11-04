@@ -168,6 +168,11 @@ impl App {
                         Err(e) => self.state.message = Some(format!("Effect: {e}")),
                     }
                 }
+                crate::control::HostReq::RemovePlugin { owner } => {
+                    if let Some(key) = crate::control::command::owner_key(&self.state, owner) {
+                        self.plugins.hosted.remove(&key);
+                    }
+                }
             }
         }
         // Owners for what was just hosted.

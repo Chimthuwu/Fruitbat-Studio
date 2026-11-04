@@ -141,6 +141,11 @@ pub enum Command {
     },
     /// The effect in the track's slot `slot` goes.
     RemoveEffect { track: u32, slot: u8 },
+    /// Effect in track `track` moves from slot `from` to slot `to` (both 0..=9). Used by the device rack's drag-
+    /// and-drop reorder. The slot at `to` shifts right; undo restores the original order.
+    MoveEffect { track: u32, from: u8, to: u8 },
+    /// The instrument channel of track `track` goes (the channel's plugin instance stops). The track keeps its lane and strip.
+    RemoveInstrument { track: u32 },
     /// The slot's light and mix level 0..=1.
     SetSlot {
         track: u32,
@@ -622,6 +627,8 @@ impl Command {
             Command::SetEq { .. } => "Mixer track equalizer",
             Command::AddEffect { .. } => "Add effect",
             Command::RemoveEffect { .. } => "Remove effect",
+            Command::MoveEffect { .. } => "Move effect",
+            Command::RemoveInstrument { .. } => "Remove instrument",
             Command::SetSlot { .. } => "Effect slot",
             Command::AddPattern { .. } => "Add pattern",
             Command::DeletePattern { .. } => "Delete pattern",
@@ -652,7 +659,14 @@ impl Command {
             | Command::SetTimeSignature { .. }
             | Command::SetInfo { .. } => Taken::Settings(Box::new(Settings::of(s))),
             Command::SetChannel { channel, .. } | Command::LoadSample { channel, .. } => Taken::Channel(Box::new(p.channels[channel_row(p, *channel)?].clone())),
-            Command::SetTrack { track, .. } | Command::SetEq { track, .. } | Command::SetSlot { track, .. } | Command::AddEffect { track, .. } | Command::RemoveEffect { track, .. } => {
+            Command::RemoveInstrument { track } => {
+                // Find the channel on this track (instrument channel, not a sampler).
+                let track16 = u16::try_from(*track).unwrap_or(0);
+                let ch = p.channels.iter().find(|c| c.mixer_track == track16 && !c.kind.is_sampler() && c.sample_path.is_none())
+                    .ok_or_else(|| format!("no instrument channel on track {track}"))?;
+                Taken::Channel(Box::new(ch.clone()))
+            }
+            Command::SetTrack { track, .. } | Command::SetEq { track, .. } | Command::SetSlot { track, .. } | Command::AddEffect { track, .. } | Command::RemoveEffect { track, .. } | Command::MoveEffect { track, .. } => {
                 Taken::Track(Box::new(p.mixer[track_place(p, *track)?].clone()))
             }
             Command::SetSend { from, .. } => Taken::Track(Box::new(p.mixer[track_place(p, *from)?].clone())),
@@ -1023,6 +1037,63 @@ impl Command {
                 m.slot_on[k] = true;
                 m.slot_mix[k] = 1.0;
                 m.slot_cpu[k] = os_model::PluginCpu::default();
+                none
+            }
+            Command::MoveEffect { track, from, to } => {
+                let place = track_place(&s.project, track)?;
+                let m = &mut s.project.mixer[place];
+                let (from, to) = (usize::from(from), usize::from(to));
+                if from > 9 || to > 9 {
+                    return Err("slots are 0..=9".into());
+                }
+                if from == to {
+                    return none;
+                }
+                let t = m.index;
+                // Rotate slots, slot_on, slot_mix, slot_cpu.
+                if from < to {
+                    // Rotate [from..=to] right by 1: take from, shift rest left, put at to.
+                    let taken = m.slots[from].clone();
+                    for i in from..to {
+                        m.slots[i] = m.slots[i + 1].clone();
+                        m.slot_on[i] = m.slot_on[i + 1];
+                        m.slot_mix[i] = m.slot_mix[i + 1];
+                        m.slot_cpu[i] = m.slot_cpu[i + 1];
+                    }
+                    m.slots[to] = taken;
+                } else {
+                    // Rotate [to..=from] left by 1: take from, shift rest right, put at to.
+                    let taken = m.slots[from].clone();
+                    for i in (to + 1..=from).rev() {
+                        m.slots[i] = m.slots[i - 1].clone();
+                        m.slot_on[i] = m.slot_on[i - 1];
+                        m.slot_mix[i] = m.slot_mix[i - 1];
+                        m.slot_cpu[i] = m.slot_cpu[i - 1];
+                    }
+                    m.slots[to] = taken;
+                }
+                // Move slot names.
+                let name_from = s.mixer.slot_names.remove(&(t, from as u8));
+                let name_to = s.mixer.slot_names.remove(&(t, to as u8));
+                if let Some(n) = name_from {
+                    s.mixer.slot_names.insert((t, to as u8), n);
+                }
+                if let Some(n) = name_to {
+                    s.mixer.slot_names.insert((t, from as u8), n);
+                }
+                none
+            }
+            Command::RemoveInstrument { track } => {
+                // Find the channel on this track (instrument channel, not a sampler).
+                let track16 = u16::try_from(track).unwrap_or(0);
+                let row = s.project.channels.iter().position(|c| c.mixer_track == track16 && !c.kind.is_sampler() && c.sample_path.is_none())
+                    .ok_or_else(|| format!("no instrument channel on track {track}"))?;
+                let ch = &mut s.project.channels[row];
+                // Stop the plugin instance: remove from hosted plugins, set plugin = None, set enabled = false.
+                let id = ch.id.0;
+                ch.plugin = None;
+                ch.enabled = false;
+                s.control.host.push(super::HostReq::RemovePlugin { owner: id });
                 none
             }
             Command::SetSlot { track, slot, enabled, mix } => {
@@ -1514,4 +1585,12 @@ fn notes_of(p: &Project, notes: &[NoteIn]) -> Result<Vec<Note>, Error> {
             })
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Command helpers
+
+/// Creates a MoveEffect command: effect in track `track` moves from slot `from` to slot `to` (both 0..=9).
+pub fn move_effect(track: u32, from: u8, to: u8) -> Command {
+    Command::MoveEffect { track, from, to }
 }
