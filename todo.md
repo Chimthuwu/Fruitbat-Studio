@@ -1,7 +1,14 @@
 # Lemon Studio — todo.md
 
-Pattern-based clean-room DAW in Rust (FL-style, opens/saves .flp). Scope details live in
-`docs/status.md`; the broad roadmap lives on the project Discord. This file is the working checklist.
+## 🎯 Current Session (2026-11-04) — Rack Rework Complete
+- ✅ `＋ Add` header button → plugin browser (native built-ins first per section, filter radios in footer)
+- ✅ DELETE/Backspace removes selected effect tile (instrument never removable)
+- ✅ Left/Right arrows move selection across the chain
+- ✅ Hosted plugin tiles replace MIDI FX placeholder
+- ✅ `MoveEffect` / `RemoveInstrument` / `HostReq::RemovePlugin` in control plane (undoable)
+- ✅ Workspace `cargo test` green, release build OK
+- ✅ Commit pushed (`b25bf8fc`)
+- 📋 **Next session starts at M9 MIDI-FX crates** (see below)
 
 ## In flight / partial (from README capabilities)
 - [ ] Playback engine: render-ahead hardening, voice limits, cut groups, glides, layer channels
@@ -28,6 +35,50 @@ Pattern-based clean-room DAW in Rust (FL-style, opens/saves .flp). Scope details
       FL's own audio/instrument-track records. Sequencing plan adopted 2026-11-04: track
       model first (no engine), MPE + MIDI FX land as one note-path refactor after the
       engine.rs split, automation lanes are view-layer only.
+
+## 🎯 M9 — MIDI FX Plugin Crates (NEXT SESSION START)
+Read `plugins/lemon-small-fx` first for layout/param/editor conventions.
+
+| Crate | Purpose | DSP module | Editor | Tests |
+|-------|---------|------------|--------|-------|
+| `lemon-arp` | Arpeggiator (patterns, octave, rate, gate) | `arp.rs` | minimal os-ui | pattern gen, scale map |
+| `lemon-chord` | Chord/Scale mapper (incoming note → chord voicing) | `chord.rs` | minimal os-ui | scale mapping |
+| `lemon-echo` | Note Echo (delay lines, feedback, sync) | `echo.rs` | minimal os-ui | echo scheduling |
+
+For each:
+- [ ] Create `plugins/lemon-arp/`, `lemon-chord/`, `lemon-echo/` with `Cargo.toml`, `src/lib.rs`, `src/dsp/*.rs`, `src/editor.rs`
+- [ ] Unit tests in `src/dsp/*.rs` (no audio, pure logic)
+- [ ] Minimal editor per OS UI conventions (os-ui)
+- [ ] Register in workspace `Cargo.toml` + `tools/notices` if that's the convention
+- [ ] `cargo test` green, no new warnings
+
+## M8 — Track Model & Linear Mode (per `docs/track-model-plan.md` §7 + brief)
+- [ ] `os-model/src/lib.rs`: `Track { kind: Audio|Midi|Bus, playlist_lane, mixer_strip, channel: Option<ChannelId> }`
+- [ ] Insert Track → creates playlist lane + mixer strip + channel atomically
+- [ ] Round-trip through `.flp` (LMex events 203 TRACKS, 204 LINEAR_MODE)
+- [ ] Linear mode = default project template; Classic (FL) mode untouched
+- [ ] Mode stored in `.lemon` project property
+- [ ] Automation lanes per track (Bitwig 5.2-style) — view + placement constraint, storage stays FL-compatible (automation-clip channels + clips)
+- [ ] Unassigned lane group for orphaned targets
+- [ ] `.lemon`-only data; Classic never shows MIDI FX slots
+
+## Device Rack — Remaining Polish
+- [ ] Wire drag-to-reorder in `views/device_rack.rs` → `MoveEffect` command
+- [ ] Dedicated drag handle on each tile header
+- [ ] Focus delegation to plugin editors (global keyboard rules already in `app::act`)
+- [ ] Container-nesting seam: `DeviceKind::Container` in chain for future Instrument Rack / Drum Machine step sequencer
+- [ ] Rack geometry in prefs/session (no new `.lemon` data this milestone)
+
+## Channel Rack Integration (Linear mode)
+- [ ] Step sequencer becomes inline drum-lane view on MIDI tracks whose channel is a drum kit
+- [ ] Presentation toggle per track
+- [ ] Pattern-first users keep PAT mode working
+
+## Master Assistant DSP (offline first)
+- [ ] Rust port of oXygen BSD-3 DSP chain (gated-LUFS/band/width analysis → heuristic proposal)
+- [ ] No JUCE, no bundled engine binary
+- [ ] Fits into master-slot effect crate + `os-dsp` analysis crate
+- [ ] Offline `--render` entry point first
 
 ## Import queue — features from Michael's Lemon
 Source: https://github.com/Dorfhaus/Lemon-Studio-Michael-Lane-Edition/tree/michael-lane
