@@ -917,6 +917,8 @@ pub enum Drag {
     BrowserSplit { dx: f32 },
     /// The device rack's splitter: `dy` is the pointer's height above the rack's bottom edge at the press.
     DeviceRackSplit { dy: f32 },
+    /// A device rack tile header held: drag left/right to reorder (`x0` = press x; FX tiles swap mixer slots).
+    DeviceRackTile { kind: crate::device_rack::DeviceKind, _x0: f32 },
     /// Monitor debug panel slider.
     MonParam(usize),
     /// Cable physics debug panel slider.
@@ -1117,6 +1119,9 @@ pub struct State {
     pub device_rack_failed: std::collections::BTreeSet<usize>,
     pub device_rack_menu: Option<usize>,
     pub device_rack_split_click: Option<std::time::Instant>,
+    /// Live parameters of the rack's devices, by plugin-window key (refreshed by
+    /// `device_rack::sync_embed`): the controls a tile shows when its editor cannot embed.
+    pub device_rack_params: std::collections::BTreeMap<usize, Vec<(String, f64)>>, 
     /// The hovered row whose label is scrolling, as last painted (spec: ui/browser.md §9).
     pub browser_marquee: std::cell::RefCell<Option<views::browser::Marquee>>,
     /// Favorite files (spec: ui/browser.md §10) and the index of the browser's disk folders (§11).
@@ -1563,6 +1568,7 @@ impl App {
                 device_rack_failed: Default::default(),
                 device_rack_menu: None,
                 device_rack_split_click: None,
+                device_rack_params: Default::default(),
                 browser_marquee: Default::default(),
                 browser_favs: crate::browser::load_favs(),
                 browser_index: Default::default(),
@@ -6107,6 +6113,7 @@ impl App {
                 }
                 Drag::BrowserSplit { dx } => self.browser_split_drag(x - dx),
                 Drag::DeviceRackSplit { dy } => crate::device_rack::split_drag(self, y, dy),
+                Drag::DeviceRackTile { .. } => self.invalidate(),
                 Drag::SongPosHold { .. } => {}
                 Drag::PrefSlider { label, x: x0, w } => self.pref_slider_drag(label, x0, w),
                 Drag::Ppi { x0, n0 } => self.ppi_set(crate::ppi::dragged(n0, x - x0, self.px_scale)),
@@ -6520,6 +6527,9 @@ impl App {
         }
         if matches!((&self.drag, &self.hover), (Some(Drag::DeviceRackSplit { .. }), _) | (None, Some(Action::DeviceRack(crate::device_rack::RackAct::Splitter)))) {
             return Cursor::NsResize;
+        }
+        if matches!((&self.drag, &self.hover), (Some(Drag::DeviceRackTile { .. }), _) | (None, Some(Action::DeviceRack(crate::device_rack::RackAct::TilePress(_))))) {
+            return Cursor::EwResize;
         }
         let edges = match (&self.drag, &self.hover) {
             (Some(Drag::RackResize { edges, .. }), _) => *edges,
@@ -7003,6 +7013,10 @@ impl App {
             Some(Drag::BrowserSplit { .. }) => crate::browser::save_width(self.state.browser_w),
             // The rack's height is session state so far (the project state lands with M8); nothing to save.
             Some(Drag::DeviceRackSplit { .. }) => {}
+            Some(Drag::DeviceRackTile { kind, .. }) => {
+                let x = self.mouse.0;
+                crate::device_rack::tile_drop(self, kind, x);
+            }
             Some(Drag::Marker) if self.transport.playing() && !self.transport.song() => {
                 self.start_playback();
             }

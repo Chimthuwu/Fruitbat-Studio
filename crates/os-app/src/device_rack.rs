@@ -87,12 +87,17 @@ pub fn chain(s: &State, tr: &os_model::Track) -> Vec<Device> {
         .and_then(|ch| s.project.channels.iter().position(|c| c.index == ch))
     {
         let ch = &s.project.channels[row];
+        // A sampler channel stores no plugin name (`plugin: None`, kind Sampler) — it is Lemon Sampler by kind.
+        let builtin = ch.kind == os_model::ChannelKind::Sampler
+            || ch.plugin.as_deref().is_some_and(stored_builtin)
+            || crate::project_plugins::wrapped_channel(ch)
+                .map_or(false, |r| stored_builtin(&r.name));
         v.push(Device {
             kind: DeviceKind::Instrument(row),
             key: Some(row),
             name: crate::rack::channel_name(s, row),
             on: ch.enabled,
-            builtin: ch.plugin.as_deref().is_some_and(builtin_name),
+            builtin,
         });
     }
     if let Some(m) = s.project.mixer.iter().find(|m| m.index == tr.mixer_strip) {
@@ -103,7 +108,10 @@ pub fn chain(s: &State, tr: &os_model::Track) -> Vec<Device> {
                 key: Some(crate::plugins::fx_key(m.index, k as u8)),
                 name: crate::project_plugins::slot_title(sp),
                 on: m.slot_on[k],
-                builtin: builtin_name(&sp.name),
+                // Slots store file ids ("Fruity Parametric EQ 2", wrapped plugins) — compare the Lemon name.
+                builtin: stored_builtin(&sp.name)
+                    || crate::project_plugins::wrapped_slot(sp)
+                        .map_or(false, |r| stored_builtin(&r.name)),
             });
         }
     }
@@ -120,13 +128,34 @@ fn builtin_name(name: &str) -> bool {
     static NAMES: OnceLock<BTreeSet<String>> = OnceLock::new();
     NAMES
         .get_or_init(|| {
-            crate::plugins::builtin()
+            let mut v: BTreeSet<String> = crate::plugins::builtin()
                 .iter()
                 .chain(crate::plugins::builtin_effects().iter())
                 .map(|a| a.desc.name.clone())
-                .collect()
+                .collect();
+            // The compiled-in names themselves (a CLAP descriptor may spell one differently).
+            v.extend(crate::plugins::LINKED_EFFECTS.iter().map(|s| s.to_string()));
+            v.extend(crate::plugins::FILE_MAPPED.iter().map(|s| s.to_string()));
+            v.extend(crate::plugins::OLD_NAMES.iter().map(|(_, n)| n.to_string()));
+            v
         })
         .contains(name)
+}
+
+/// Whether a stored plugin name is a built-in Lemon plugin, after the stored-name
+/// mappings a project file carries: a slot's FL id / recreation label and a channel's
+/// file id (`slot_label`, `osc3::label`), plus the built-ins' old names (`OLD_NAMES`).
+fn stored_builtin(name: &str) -> bool {
+    if builtin_name(name) {
+        return true;
+    }
+    let n = crate::osc3::label(crate::plugins::slot_label(name));
+    let n = crate::plugins::OLD_NAMES
+        .iter()
+        .find(|(o, _)| *o == n)
+        .map(|(_, v)| *v)
+        .unwrap_or(n);
+    builtin_name(n)
 }
 
 /// The rack's actions (the device tiles, its header and splitter).
@@ -148,6 +177,13 @@ pub enum RackAct {
     Dock(usize),
     /// A device's enable light: switch the device on / off.
     ToggleOn(DeviceKind),
+    /// The header's "+ Add": the plugin palette (instruments and effects).
+    Add,
+    /// A "+" gap button at a chain position: the FX palette for mixer slot `slot`
+    /// (the next device's slot, or the first empty slot when `None`).
+    AddAt(Option<u8>),
+    /// A tile header pressed: drag it left/right to reorder (FX tiles swap slots).
+    TilePress(DeviceKind),
 }
 
 /// The splitter pressed: a double click (within the browser's double-click window) gives back the default height,
@@ -236,6 +272,18 @@ pub fn run(app: &mut App, act: RackAct) {
         RackAct::PopOut(key) => pop_out(app, key),
         RackAct::Dock(key) => dock(app, key),
         RackAct::ToggleOn(kind) => toggle_on(app, kind),
+        RackAct::Add => {
+            let at = app.mouse;
+            app.open_plugin_palette(crate::plugin_menu::Target::All, at, None);
+        }
+        RackAct::AddAt(slot) => {
+            let at = app.mouse;
+            app.open_plugin_palette(crate::plugin_menu::Target::Fx(slot), at, None);
+        }
+        RackAct::TilePress(kind) => {
+            app.drag = Some(Drag::DeviceRackTile { kind, _x0: app.mouse.0 });
+            app.invalidate();
+        }
     }
 }
 
@@ -270,6 +318,36 @@ fn open_editor(app: &mut App, key: usize) -> Option<Result<(), String>> {
     Some(app.plugins.open_window(key, info))
 }
 
+/// A tile drag released at mouse x: FX tiles swap mixer slot positions (adjacent
+/// `SlotMove`s on their strip, so remapping/automation follow), the instrument stays.
+pub fn tile_drop(app: &mut App, kind: DeviceKind, x: f32) {
+    let DeviceKind::Fx(track, slot) = kind else { return };
+    let tiles = crate::views::device_rack::tiles(&app.state);
+    let src = tiles.iter().position(|(d, _)| d.kind == kind);
+    let Some(src) = src else { return };
+    let dst = tiles.iter().filter(|(_, t)| t.cx() < x).count().saturating_sub(1);
+    if dst == src {
+        return;
+    }
+    // The FX device at the target tile (if any) on the same strip: swap slot positions.
+    let Some((d, _)) = tiles.get(dst) else { return };
+    let DeviceKind::Fx(t2, slot2) = d.kind else { return };
+    if t2 != track || slot2 == slot {
+        return;
+    }
+    let prev = app.state.selected_mixer;
+    app.state.selected_mixer = track;
+    let mut cur = i32::from(slot);
+    let target = i32::from(slot2);
+    while cur != target {
+        let step = (target - cur).clamp(-1, 1) as i8;
+        crate::mixer::run(app, crate::mixer::MCmd::SlotMove(cur as u8, step));
+        cur += i32::from(step);
+    }
+    app.state.selected_mixer = prev;
+    app.invalidate();
+}
+
 /// Keeps the rack's embedded editors on their tiles: opens the built-in devices' editors that are missing, closes
 /// the ones whose device left the chain, and moves each to its tile's rect. Called from `clip_docked` (every tick,
 /// like the docked windows' stacking and clipping); guarded so a tile whose editor fails becomes a placeholder
@@ -293,6 +371,21 @@ pub fn sync_embed(app: &mut App) {
         }
     }
     app.state.device_rack_embed = keys;
+    // The tiles' live parameters, for tiles whose editor cannot embed (their placeholder body).
+    app.state.device_rack_params = tiles
+        .iter()
+        .map(|&(k, _)| {
+            let ps = app
+                .plugins
+                .param_infos(k)
+                .iter()
+                .filter(|i| !i.read_only && !i.bypass)
+                .take(8)
+                .map(|i| (i.name.clone(), app.plugins.param_value(k, i.id).unwrap_or(i.default)))
+                .collect();
+            (k, ps)
+        })
+        .collect();
     // Open what is missing and pin each editor to its tile's rect. Without plugin windows there is nothing to
     // embed: every tile keeps its placeholder body.
     #[cfg(plugin_windows)]
@@ -484,6 +577,30 @@ mod tests {
             assert!(!app.plugins.hosted[&row].detached, "docked back");
             assert!(!app.state.device_rack_float.contains(&row));
         }
+    }
+
+    /// Built-in detection for stored names: a sampler channel (plugin None, kind Sampler) is a built-in, and
+    /// a mixer slot holding a file id ("Fruity Parametric EQ 2") is its Lemon built-in.
+    #[test]
+    fn builtins_are_detected_for_stored_names() {
+        let mut app = app();
+        crate::playlist::run(
+            &mut app,
+            Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
+        );
+        let tr = app.state.project.tracks.last().unwrap().clone();
+        let strip = tr.mixer_strip;
+        let m = crate::mixer::track_mut(&mut app.state, strip).unwrap();
+        m.slots[0] = Some(os_model::SlotPlugin {
+            id: os_model::Id::NONE,
+            name: crate::plugins::EQ_FILE_NAME.into(),
+            state: Vec::new(),
+        });
+        let got = rack_chain(&app.state);
+        let fx = got.iter().find(|d| matches!(d.kind, DeviceKind::Fx(_, 0))).unwrap();
+        assert!(fx.builtin, "Fruity Parametric EQ 2 slot is Lemon Parametric EQ");
+        let inst = got.iter().find(|d| matches!(d.kind, DeviceKind::Instrument(_))).unwrap();
+        assert!(inst.builtin, "the sampler channel is a built-in");
     }
 
     /// Only Linear mode shows the rack: Classic mode's height is 0 (no layout change anywhere) and its chain is

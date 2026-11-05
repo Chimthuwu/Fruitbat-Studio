@@ -21,9 +21,13 @@ pub fn panel_rect(s: &State, w: f32, h: f32) -> Rect {
 /// The splitter strip along the panel's top edge (6 px, like the browser's).
 const SPLITTER: f32 = 6.0;
 
+/// Gap between tiles, holding the "+" insert buttons (before the first, between every
+/// pair, and after the last tile).
+const GAP: f32 = 22.0;
+
 /// The device tiles over `r` (the panel rect) as (device, tile) pairs, left to right in signal-flow order; the
 /// empty leftmost tile on a MIDI track is the MIDI FX placeholder (§8 is a later milestone).
-fn layout(s: &State, r: Rect) -> Vec<(Device, Rect)> {
+pub(crate) fn layout(s: &State, r: Rect) -> Vec<(Device, Rect)> {
     if r.h <= HEADER_H {
         return Vec::new();
     }
@@ -32,10 +36,15 @@ fn layout(s: &State, r: Rect) -> Vec<(Device, Rect)> {
         .into_iter()
         .scan(body.x, |x, d| {
             let tile = Rect::new(*x, body.y, TILE_W, body.h);
-            *x += TILE_W + 4.0;
+            *x += TILE_W + GAP;
             Some((d, tile))
         })
         .collect()
+}
+
+/// The tiles at the current screen size (for hit-testing a tile drag's drop position).
+pub(crate) fn tiles(s: &State) -> Vec<(Device, Rect)> {
+    layout(s, panel_rect(s, s.screen.0, s.screen.1))
 }
 
 /// The tile bodies the rack embeds a built-in editor into: the built-in devices the user has not popped out. The
@@ -84,7 +93,16 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
         t.text,
         &format!("Device rack - {name}"),
     );
-    let mut bx = r.right() - 132.0;
+    let mut bx = r.right() - 204.0;
+    header_button(
+        ui,
+        Rect::new(bx, head.y + 2.0, 60.0, 17.0),
+        "+ Add",
+        false,
+        Action::DeviceRack(RackAct::Add),
+        "Add a plugin (instrument or effect) to this track",
+    );
+    bx += 66.0;
     // The pin: the chain stays while the selection moves (§7 "Track selection drives the rack").
     let pinned = s.device_rack_pin.is_some();
     header_button(
@@ -118,10 +136,32 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
     if s.device_rack_collapsed {
         return;
     }
-    // The tiles.
-    for (d, tile) in layout(s, r) {
-        tile_paint(ui, s, d, tile);
+    // The tiles, with a "+" gap button before the first, between every pair and after the last.
+    let tiles = layout(s, r);
+    let slot_after = |i: usize| -> Option<u8> {
+        tiles[i..]
+            .iter()
+            .find_map(|(d, _)| match d.kind {
+                DeviceKind::Fx(_, k) => Some(k),
+                _ => None,
+            })
+    };
+    let mut gx = r.x;
+    for (i, (d, tile)) in tiles.iter().enumerate() {
+        gap_button(ui, gx, tile.y, slot_after(i), tile.h);
+        tile_paint(ui, s, d.clone(), *tile);
+        gx = tile.right();
     }
+    gap_button(ui, gx, r.y + HEADER_H, None, tiles.first().map_or(r.h - HEADER_H, |(_, t)| t.h));
+}
+
+/// A "+" gap button at x: opens the FX palette for the slot that follows it (`None` = first empty slot).
+fn gap_button(ui: &mut Ui, x: f32, y: f32, slot: Option<u8>, h: f32) {
+    let t = ui.t;
+    let b = Rect::new(x + 2.0, y + h / 2.0 - 9.0, GAP - 4.0, 18.0);
+    let hov = ui.hit(b, Action::DeviceRack(RackAct::AddAt(slot)), "Add an effect here");
+    ui.c.fill_rrect(b, 2.0, if hov { t.s(0x2b3134) } else { t.s(0x222629) });
+    ui.c.text(fnt(14.0), b.x + 4.0, b.y + 1.0, t.text, "+");
 }
 
 /// A device tile: a header (name, enable light, menu) over an editor body — embedded, or a placeholder.
@@ -135,6 +175,10 @@ fn tile_paint(ui: &mut Ui, s: &State, d: Device, tile: Rect) {
         Rect::new(tile.x, tile.bottom() - 1.0, tile.w, 1.0),
         t.splitter_dark,
     );
+    // Drag the header left/right to reorder (FX tiles swap mixer slots); the LED and menu below win their clicks.
+    if d.key.is_some() {
+        ui.hit(head, Action::DeviceRack(RackAct::TilePress(d.kind)), "Drag to reorder this device");
+    }
     // The enable light: a click switches the device (the channel or the mixer slot).
     let (cx, cy) = (tile.x + 12.0, head.cy());
     crate::views::led(ui, cx, cy, d.on);
@@ -195,14 +239,14 @@ fn tile_paint(ui: &mut Ui, s: &State, d: Device, tile: Rect) {
         }
         // Hosted, not a built-in: embedding comes with CLAP/VST3 embed (§7 milestone b) — a placeholder and a
         // Pop out button, which the floating window machinery takes.
-        Some(key) => placeholder(ui, &d, body, Some(Action::DeviceRack(RackAct::PopOut(key)))),
+        Some(key) => placeholder(ui, s, &d, body, Some(Action::DeviceRack(RackAct::PopOut(key)))),
         // The MIDI FX placeholder region (no data yet, §8).
-        None => placeholder(ui, &d, body, None),
+        None => placeholder(ui, s, &d, body, None),
     }
 }
 
 /// A placeholder body: what the device is, and a `button` when there is one to press.
-fn placeholder(ui: &mut Ui, d: &Device, body: Rect, button: Option<Action>) {
+fn placeholder(ui: &mut Ui, s: &State, d: &Device, body: Rect, button: Option<Action>) {
     let t = ui.t;
     ui.c.fill_rect(body, t.s(0x131718));
     ui.c.stroke_rrect(body.inset(1.0), 2.0, 1.0, t.splitter_dark);
@@ -211,6 +255,20 @@ fn placeholder(ui: &mut Ui, d: &Device, body: Rect, button: Option<Action>) {
         _ => "No embedded editor for this plugin yet",
     };
     ui.c.text(fnt(13.0), body.x + 10.0, body.y + 8.0, t.text_dim, label);
+    // Live parameters (cached by `sync_embed`): the tile's controls when its editor cannot embed.
+    if let Some(key) = d.key {
+        let mut py = body.y + 56.0;
+        for (name, val) in s.device_rack_params.get(&key).map_or(&Vec::new(), |v| v) {
+            ui.c.text_clip(fnt(12.0), body.x + 10.0, py, body.w - 20.0, t.text_dim, name);
+            let bar = Rect::new(body.x + 10.0, py + 15.0, (body.w - 20.0).min(180.0), 4.0);
+            ui.c.fill_rect(bar, t.s(0x2b3134));
+            ui.c.fill_rect(Rect::new(bar.x, bar.y, bar.w * (*val as f32).clamp(0.0, 1.0), bar.h), t.glyph);
+            py += 26.0;
+            if py > body.bottom() - 20.0 {
+                break;
+            }
+        }
+    }
     if let Some(action) = button {
         let b = Rect::new(body.x + 10.0, body.y + 30.0, 70.0, 20.0);
         let hov = ui.hit(b, action, "Pop the editor out to its own window");
