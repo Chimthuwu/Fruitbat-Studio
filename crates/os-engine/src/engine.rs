@@ -14,19 +14,19 @@
 //       flp/events/mixer.md (routing), audio/pattern-controls.md (repeat, control points),
 //       audio/channel-envelopes.md (volume and pitch envelopes), audio/time-stretch.md
 
-use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use os_model::target::Target;
-use os_model::{ChannelKind, ClipSource, ControlPoint, Project, Stretching};
+use os_model::{ChannelKind, ClipSource, Project, Stretching};
 
 use crate::clock::Clock;
 use os_dsp::glide::Glide;
-use crate::effects::Effect;
+
 use crate::envelope;
-use crate::instrument::{Instrument, SharedInstrument, Slot, TransportInfo};
+use crate::instrument::{SharedInstrument, Slot, TransportInfo};
 use crate::laws;
-use crate::sample::{Sample, SampleLibrary};
+use crate::sample::SampleLibrary;
 
 pub mod auto_bypass;
 mod controllers;
@@ -52,16 +52,16 @@ mod render;
 mod jobs;
 mod live_edit;
 use channel::{Adjust, ChannelState, CtlEvent, CtlTo, stretched_frames};
-use jobs::{InstCx, InstLane, input, input_at, instrument_job, lock_busy, output};
+use jobs::{InstCx, InstLane, input, input_at, instrument_job, lock_busy};
 pub use live_edit::{LiveEdit, live_edits};
 pub use mix::{DeviceInput, input_channels};
 use mix::{DeviceIo, Fx, FxSlot, MixTrack, Route, mix_level, processing_order};
-use render::{Lane, SINC_W, keyed_copy, mix_track, render_voice, render_voice_into, sinc};
+use render::{Lane, SINC_W, keyed_copy, mix_track, render_voice, render_voice_into};
 pub use sched::{swing_delay};
 use sched::{AutoClip, Sched, clip_audible, ctl_to, fallback_tone, param_points, point_level, schedule, schedule_controls};
 pub use transport::{PlayMode, rendered_spans};
 use transport::{NUDGE, click_bars};
-use triggers::{ClipShape, InstClip, InstTuning, LATE_START_SECONDS, Swung, Trigger, Via};
+use triggers::{ClipShape, InstClip, InstTuning, LATE_START_SECONDS, Origin, Trigger, Via};
 use voice::{RELEASE_SECONDS, Voice, VoiceSlide};
 
 
@@ -2948,6 +2948,9 @@ impl Engine {
 mod tests {
     // spec: audio/pattern-controls.md (note repeat and channel control points, measured in FL)
     use super::*;
+    use std::sync::Mutex;
+    use crate::Instrument;
+    use os_model::ControlPoint;
     use os_model::{Channel, Note, Pattern};
 
     fn channel() -> Channel {

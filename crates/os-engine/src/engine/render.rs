@@ -1,16 +1,16 @@
-// Copyright (C) 2026 ItsAlphaNeon
-// SPDX-License-Identifier: GPL-3.0-or-later
-// This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
+// Copyright (C) 2026 ItsAlphaNeon
+// SPDX-License-Identifier: GPL-3.0-or-later
+// This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! The tick's rendering: sampler voices read through a windowed sinc into their track, and one mixer track's turn in the graph.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use crate::laws;
-use crate::sample::{Sample, SampleLibrary};
-use super::{auto_bypass, multicore, rec};
-use super::{Engine, RecordPoint, RecordTap};
+use crate::sample::SampleLibrary;
+use super::{multicore, rec};
+use super::{RecordPoint, RecordTap};
 use super::channel::{ChannelState, stretched_frames};
-use super::jobs::{input, output, run_slot};
+use super::jobs::run_slot;
 use super::mix::{MixTrack, input_channels};
 use super::voice::{Voice};
 
@@ -172,19 +172,19 @@ fn blackman(t: f64, w: f64) -> f64 {
 
 /// One mixer track's own state for its turn in a tick (`mix_track`).
 pub(crate) struct Lane<'a> {
-    t: usize,
-    track: &'a mut MixTrack,
+    pub(crate) t: usize,
+    pub(crate) track: &'a mut MixTrack,
     /// What reached the track (its voices, channels and inputs); the track's output once it has run.
-    buf: &'a mut Vec<f32>,
+    pub(crate) buf: &'a mut Vec<f32>,
     /// While capturing, the track's capture and the lateness still to skip at its start (`set_track_capture`).
-    capture: Option<&'a mut Vec<f32>>,
-    skip: Option<&'a mut u64>,
+    pub(crate) capture: Option<&'a mut Vec<f32>>,
+    pub(crate) skip: Option<&'a mut u64>,
     /// What it adds to other tracks and to the device's pairs.
-    out: &'a mut multicore::Outbox,
+    pub(crate) out: &'a mut multicore::Outbox,
     /// When the tick stops waiting for hosted plugins busy elsewhere, the ticks they missed, a slot's delay changed.
-    until: &'a mut Option<Instant>,
-    missed: &'a mut u64,
-    moved: &'a mut bool,
+    pub(crate) until: &'a mut Option<Instant>,
+    pub(crate) missed: &'a mut u64,
+    pub(crate) moved: &'a mut bool,
 }
 
 /// A mixer track's turn in a tick (`Engine::mix`): a monitored input joins, its slots, its equaliser, its fader matrix;

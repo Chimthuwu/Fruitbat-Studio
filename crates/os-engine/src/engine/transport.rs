@@ -1,12 +1,11 @@
-// Copyright (C) 2026 ItsAlphaNeon
-// SPDX-License-Identifier: GPL-3.0-or-later
-// This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
+// Copyright (C) 2026 ItsAlphaNeon
+// SPDX-License-Identifier: GPL-3.0-or-later
+// This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! What to play and where it plays from: the play modes, the metronome's bar regions and the spans a render follows.
 
-use os_model::{ChannelKind, ClipSource, ControlPoint, Project, Stretching};
+use os_model::Project;
 use super::{marks};
-use super::{Engine};
 
 /// What to play.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,11 +1,10 @@
-// Copyright (C) 2026 ItsAlphaNeon
-// SPDX-License-Identifier: GPL-3.0-or-later
-// This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
+// Copyright (C) 2026 ItsAlphaNeon
+// SPDX-License-Identifier: GPL-3.0-or-later
+// This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! A project edit a playing engine takes in place, so moving a knob does not build a new engine, and the diff that finds them.
 
-use os_model::{ChannelKind, ClipSource, ControlPoint, Project, Stretching};
-use super::{Engine};
+use os_model::Project;
 
 /// A project edit a playing engine can take in place ([`Engine::apply_edit`]), so that moving a knob does not build a new
 /// engine: the channels' volume, pan and pitch knobs and the mixer tracks' volume, pan and separation, by index, as

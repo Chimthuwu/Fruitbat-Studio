@@ -1,63 +1,60 @@
-// Copyright (C) 2026 ItsAlphaNeon
-// SPDX-License-Identifier: GPL-3.0-or-later
-// This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
+// Copyright (C) 2026 ItsAlphaNeon
+// SPDX-License-Identifier: GPL-3.0-or-later
+// This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! The mixer graph: tracks, their slots, their routes and the device's input/output io, in processing order.
 
 use os_dsp::glide::Glide;
 use crate::effects::Effect;
-use crate::instrument::{Instrument, SharedInstrument, Slot, TransportInfo};
 use crate::laws;
-use super::{auto_bypass, multicore, pdc, rec};
-use super::{Engine};
-use super::jobs::{input, output};
+use super::{auto_bypass, pdc, rec};
 
 pub(crate) struct MixTrack {
     /// Fader (0..16000, 12800 = unity), pan (-6400..6400) and stereo separation (-64..64, positive merges) as stored;
     /// automation rewrites them, then the matrix (spec: audio/mixer.md).
-    vol: i32,
-    pan: i32,
-    sep: i32,
-    on: bool,
+    pub(crate) vol: i32,
+    pub(crate) pan: i32,
+    pub(crate) sep: i32,
+    pub(crate) on: bool,
     /// The project's panning law (event 23), for the pan in the matrix.
-    law: laws::PanLaw,
+    pub(crate) law: laws::PanLaw,
     /// Swap left / right and reverse polarity, on the fader matrix (spec: audio/mixer.md "Fader matrix").
-    swap: bool,
-    polarity: bool,
+    pub(crate) swap: bool,
+    pub(crate) polarity: bool,
     /// The track's "effect slots enabled" switch: when off no slot runs (spec: audio/mixer.md).
-    slots_enabled: bool,
+    pub(crate) slots_enabled: bool,
     /// Allow threaded processing: off, the track renders on the rendering thread even on several cores (spec:
     /// audio/multicore.md §5).
-    threaded: bool,
+    pub(crate) threaded: bool,
     /// The three-band equaliser, after the slots and before the fader.
-    eq: os_dsp::mixer::TrackEq,
+    pub(crate) eq: os_dsp::mixer::TrackEq,
     /// Insert effects in slot order (applied before the fader).
-    effects: Vec<FxSlot>,
+    pub(crate) effects: Vec<FxSlot>,
     /// Slot switches and stored mix levels (0..12800) by slot, for hosted effects attached later.
-    slot_on: [bool; 10],
-    slot_mix: [i32; 10],
+    pub(crate) slot_on: [bool; 10],
+    pub(crate) slot_mix: [i32; 10],
     /// Auto-bypass when silent, by slot (`auto_bypass`), for hosted effects attached later.
-    slot_smart: [bool; 10],
+    pub(crate) slot_smart: [bool; 10],
     /// Largest |sample| per side after the fader since the meters last read them.
-    peak: [f32; 2],
+    pub(crate) peak: [f32; 2],
     /// The fader matrix's target gains `[[L←L, L←R], [R←L, R←R]]`, and the gains as they glide towards them.
-    matrix: [[f32; 2]; 2],
-    gains: [[Glide; 2]; 2],
+    pub(crate) matrix: [[f32; 2]; 2],
+    pub(crate) gains: [[Glide; 2]; 2],
     /// The track's sends. Routes at level 0 (sidechain only) pass no audio but stay: automation may raise them.
-    routes: Vec<Route>,
+    pub(crate) routes: Vec<Route>,
     /// The settings as stored, put back when playback starts at another position.
-    stored: Stored,
+    pub(crate) stored: Stored,
     /// The output and input latency settings in milliseconds (event 236; spec: audio/delay-compensation.md "Settings").
-    latency: (f32, f32),
+    pub(crate) latency: (f32, f32),
     /// What the engine itself plays into the track (sampler voices, the metronome) waits here for the latest path
     /// into it (delay compensation).
-    pad: pdc::Pad,
+    pub(crate) pad: pdc::Pad,
     /// The device input the track hears (-1: none, or not monitored) and the output pair it plays on directly (-1:
     /// none), numbered as stored (spec: audio/track-io.md §2.1, §2.2).
-    input: i32,
-    output: i32,
+    pub(crate) input: i32,
+    pub(crate) output: i32,
     /// Armed for disk recording: where the take is tapped and the input it records (spec: audio/track-io.md §2.5).
-    rec: Option<rec::Arm>,
+    pub(crate) rec: Option<rec::Arm>,
 }
 
 /// The audio device's inputs as they arrive, for the mixer tracks that monitor one (spec: audio/track-io.md §2.2).
@@ -71,11 +68,11 @@ pub trait DeviceInput: Send {
 /// A stream's device: its inputs, and its output pairs, which the master and the tracks' direct outputs play on. With
 /// it the engine hands out `2 × pairs` interleaved channels instead of the master (`Engine::set_device`).
 pub(crate) struct DeviceIo {
-    input: Option<Box<dyn DeviceInput>>,
-    pairs: usize,
+    pub(crate) input: Option<Box<dyn DeviceInput>>,
+    pub(crate) pairs: usize,
     /// This tick's inputs (interleaved), and what the tracks send to the pairs directly.
-    inputs: Vec<f32>,
-    direct: Vec<f32>,
+    pub(crate) inputs: Vec<f32>,
+    pub(crate) direct: Vec<f32>,
 }
 
 /// Input number `n` of a device with `channels` inputs as (left, right) channels: the stereo pairs first, then each
@@ -92,59 +89,59 @@ pub fn input_channels(n: i32, channels: usize) -> Option<(usize, usize)> {
 
 /// A mixer track's settings as the project stores them.
 #[derive(Debug, Clone)]
-struct Stored {
-    vol: i32,
-    pan: i32,
-    sep: i32,
-    eq: [[i32; 3]; 3],
-    slot_on: [bool; 10],
-    slot_mix: [i32; 10],
+pub(crate) struct Stored {
+    pub(crate) vol: i32,
+    pub(crate) pan: i32,
+    pub(crate) sep: i32,
+    pub(crate) eq: [[i32; 3]; 3],
+    pub(crate) slot_on: [bool; 10],
+    pub(crate) slot_mix: [i32; 10],
     /// Send gains, one per route.
-    sends: Vec<f32>,
+    pub(crate) sends: Vec<f32>,
 }
 
 /// A send to another track: its gain and the gain as it glides there (spec: audio/mixer.md "Sends", "Gains ramp").
 pub(crate) struct Route {
-    dest: usize,
-    gain: f32,
-    glide: Glide,
+    pub(crate) dest: usize,
+    pub(crate) gain: f32,
+    pub(crate) glide: Glide,
     /// Delay compensation: the send, after its level, waits here for the latest path into `dest`.
-    pad: pdc::Pad,
+    pub(crate) pad: pdc::Pad,
 }
 
 /// One filled mixer slot: Lemon Studio's own effect or a hosted plugin, with the slot's switch and stored mix level
 /// (0..12800) and its dry level as it glides (spec: audio/mixer.md "An effect slot").
 pub(crate) struct FxSlot {
-    slot: usize,
-    on: bool,
-    mix: i32,
+    pub(crate) slot: usize,
+    pub(crate) on: bool,
+    pub(crate) mix: i32,
     /// Auto-bypass when silent, and how long the slot has heard and put out silence (`auto_bypass`).
-    smart: bool,
-    quiet: auto_bypass::Quiet,
+    pub(crate) smart: bool,
+    pub(crate) quiet: auto_bypass::Quiet,
     /// The last tick passed the effect by.
-    skipped: bool,
-    dry: Glide,
+    pub(crate) skipped: bool,
+    pub(crate) dry: Glide,
     /// Switched on during the song: the effect is emptied before it runs again.
-    fresh: bool,
-    fx: Fx,
+    pub(crate) fresh: bool,
+    pub(crate) fx: Fx,
     /// The delay the effect last reported (read after it processes), and the pad its dry part waits in for it (spec:
     /// audio/delay-compensation.md "A slot's dry part").
-    delay: u32,
-    dry_pad: pdc::Pad,
+    pub(crate) delay: u32,
+    pub(crate) dry_pad: pdc::Pad,
     /// The sidechain input: the track it listens to (worked out with the pads), and the pad that delays that track's
     /// output to the lateness at the slot (spec: audio/sidechain.md "Sidechain input").
-    key: Option<usize>,
-    key_pad: pdc::Pad,
+    pub(crate) key: Option<usize>,
+    pub(crate) key_pad: pdc::Pad,
     /// A hosted plugin's input ports, main and first auxiliary bus (0 = none), and the track its main bus takes instead
     /// of the track's own audio, with the pad that delays it like a sidechain input (spec: audio/sidechain.md "Hosted
     /// plugins' input buses").
-    ports: [usize; 2],
-    main: Option<usize>,
-    main_pad: pdc::Pad,
+    pub(crate) ports: [usize; 2],
+    pub(crate) main: Option<usize>,
+    pub(crate) main_pad: pdc::Pad,
 }
 
 impl FxSlot {
-    fn new(slot: usize, on: bool, mix: i32, smart: bool, fx: Fx) -> FxSlot {
+    pub(crate) fn new(slot: usize, on: bool, mix: i32, smart: bool, fx: Fx) -> FxSlot {
         let delay = match &fx {
             Fx::Own(e) => e.latency() as u32,
             Fx::Hosted(_) => 0,
@@ -170,7 +167,7 @@ impl FxSlot {
     }
 
     /// The number of the track's input the slot listens to, counted from 1 (0 = none).
-    fn key_input(&self) -> usize {
+    pub(crate) fn key_input(&self) -> usize {
         match &self.fx {
             Fx::Own(e) => e.key_input(),
             Fx::Hosted(_) => self.ports[1],
@@ -189,7 +186,7 @@ pub(crate) enum Fx {
 }
 
 impl MixTrack {
-    fn unity() -> MixTrack {
+    pub(crate) fn unity() -> MixTrack {
         let unity = [[1.0, 0.0], [0.0, 1.0]];
         MixTrack {
             vol: 12800,
@@ -228,7 +225,7 @@ impl MixTrack {
     }
 
     /// The settings as they are now, kept to be put back by [`MixTrack::restore`].
-    fn store(&mut self) {
+    pub(crate) fn store(&mut self) {
         self.stored = Stored {
             vol: self.vol,
             pan: self.pan,
@@ -243,7 +240,7 @@ impl MixTrack {
     /// Puts the stored settings back (playback starting at another position: nothing of an automation clip holds
     /// before the clip; spec: audio/automation.md "When a clip acts"), with every gain at its target when `settle`,
     /// else gliding there.
-    fn restore(&mut self, settle: bool) {
+    pub(crate) fn restore(&mut self, settle: bool) {
         let s = self.stored.clone();
         (self.vol, self.pan, self.sep) = (s.vol, s.pan, s.sep);
         for (b, band) in s.eq.iter().enumerate() {
@@ -267,7 +264,7 @@ impl MixTrack {
     }
 
     /// Every gain at its target at once: the matrix, the slots' dry levels, the sends.
-    fn settle(&mut self) {
+    pub(crate) fn settle(&mut self) {
         self.gains = self.matrix.map(|r| r.map(Glide::new));
         for fx in &mut self.effects {
             fx.dry = Glide::new(os_dsp::mixer::dry_level(fx.mix));
@@ -279,7 +276,7 @@ impl MixTrack {
 
     /// Slot `slot`'s switch. A slot switched on empties its effect first; neither way fades (spec: audio/mixer.md
     /// "Changes while the song plays").
-    fn set_slot_on(&mut self, slot: usize, on: bool) {
+    pub(crate) fn set_slot_on(&mut self, slot: usize, on: bool) {
         let Some(s) = self.slot_on.get_mut(slot) else { return };
         *s = on;
         for fx in self.effects.iter_mut().filter(|f| f.slot == slot) {
@@ -289,7 +286,7 @@ impl MixTrack {
     }
 
     /// Slot `slot`'s stored mix level (0..12800); its dry level glides there.
-    fn set_slot_mix(&mut self, slot: usize, mix: i32) {
+    pub(crate) fn set_slot_mix(&mut self, slot: usize, mix: i32) {
         let Some(m) = self.slot_mix.get_mut(slot) else { return };
         *m = mix;
         for fx in self.effects.iter_mut().filter(|f| f.slot == slot) {
@@ -300,7 +297,7 @@ impl MixTrack {
     /// The fader matrix (volume, pan under the project's panning law, stereo separation, switch; spec: audio/mixer.md
     /// "Fader matrix", audio/gain-laws.md "Panning law: Triangular") with swap and polarity on top, as
     /// `[[L←L, L←R], [R←L, R←R]]`.
-    fn compute_matrix(&self) -> [[f32; 2]; 2] {
+    pub(crate) fn compute_matrix(&self) -> [[f32; 2]; 2] {
         let [ll, rl, rr, lr] = os_dsp::mixer::fader_matrix_law(self.vol, self.pan, self.sep, self.on, self.law);
         let mut m = [[ll, rl], [lr, rr]];
         // Swap exchanges the two outputs after pan and separation, not the inputs: (LL, RR, RL, LR) become

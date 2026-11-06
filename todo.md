@@ -1,6 +1,21 @@
 # Lemon Studio — todo.md
 
-## 🎯 Current Session (2026-11-04) — Rack Rework Complete
+## 🎯 Engine Split (2026-11-06) — COMPLETE
+- ✅ `os-engine/src/engine.rs` split into per-concern modules under `engine/`:
+  `channel` (channel state, ramps, control events), `jobs` (instrument/mix job contexts),
+  `live_edit`, `mix` (mixer graph, device io, fx slots), `render` (voice/track render lanes),
+  `sched` (scheduling, automation clips), `transport`, `triggers` (triggers/tunings/clips),
+  `voice` (voice + glide slide), plus pre-existing `auto_bypass`/`controllers`/`layers`/
+  `marks`/`multicore`/`notes`/`param_auto`/`pdc`/`rec`.
+- ✅ engine.rs is now the `Engine` struct + core `impl` + the engine test suite (~7.3k lines,
+  down from ~9.5k); data structs live in their concern modules with `pub(crate)` fields.
+- ✅ Pure structural refactor: no behavior change (verified — every non-visibility diff line
+  is an import statement); `cargo test --workspace` 2248 passed / 0 failed / 79 ignored.
+- ✅ Fixed split-file headers (CRCRLF endings broke the `watermark` header check).
+- Note: working-tree line endings normalized to LF for touched files (git autocrlf handles
+  conversion); remaining repo warnings are pre-existing os-app/os-theme dead-code ones.
+
+## Current Session (2026-11-04) — Rack Rework Complete
 - ✅ `＋ Add` header button → plugin browser (native built-ins first per section, filter radios in footer)
 - ✅ DELETE/Backspace removes selected effect tile (instrument never removable)
 - ✅ Left/Right arrows move selection across the chain

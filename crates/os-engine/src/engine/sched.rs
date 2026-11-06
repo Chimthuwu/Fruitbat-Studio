@@ -1,16 +1,14 @@
-// Copyright (C) 2026 ItsAlphaNeon
-// SPDX-License-Identifier: GPL-3.0-or-later
-// This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
+// Copyright (C) 2026 ItsAlphaNeon
+// SPDX-License-Identifier: GPL-3.0-or-later
+// This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! The song's tick line: what is scheduled on it (notes, automations), swing's delay, and the schedule built from a project.
 
-use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::sync::Arc;
 use os_model::target::Target;
-use os_model::{ChannelKind, ClipSource, ControlPoint, Project, Stretching};
-use crate::envelope;
-use crate::sample::{Sample, SampleLibrary};
-use super::{notes};
-use super::{Engine, EngineReport};
+use os_model::{ChannelKind, ClipSource, Project};
+use crate::sample::Sample;
+use super::EngineReport;
 use super::channel::{CtlEvent, CtlTo};
 use super::transport::{PlayMode};
 use super::triggers::{ClipFx, Swung};
@@ -19,53 +17,53 @@ use super::triggers::{ClipFx, Swung};
 #[derive(Debug, Clone)]
 pub(crate) struct AutoClip {
     /// Ticks at which the clip starts and ends.
-    start: u64,
-    end: u64,
+    pub(crate) start: u64,
+    pub(crate) end: u64,
     /// Beats into the automation at the clip start (its window).
-    from_beat: f64,
+    pub(crate) from_beat: f64,
     /// Index into `Engine::curves`.
-    curve: usize,
+    pub(crate) curve: usize,
     /// Every target the clip drives (one link each, spec: audio/automation.md "The link"), unknown ones left out.
-    targets: Vec<os_model::target::Target>,
+    pub(crate) targets: Vec<os_model::target::Target>,
     /// The walk along the curve and the tick steps it has taken (spec: audio/automation.md "Walking the curve").
-    walk: Option<(os_model::curve::Walk, u64)>,
+    pub(crate) walk: Option<(os_model::curve::Walk, u64)>,
     /// The clip's range (its channel's two level knobs) and its LFO (spec: audio/automation.md "Range", "The LFO").
-    out: os_model::clip_lfo::ClipOut,
+    pub(crate) out: os_model::clip_lfo::ClipOut,
     /// The walk along the LFO's own envelope.
-    env: os_model::clip_lfo::EnvWalk,
+    pub(crate) env: os_model::clip_lfo::EnvWalk,
 }
 /// A scheduled note on the song's tick line.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Sched {
-    tick: u64,
-    channel: usize,
-    key: u16,
+    pub(crate) tick: u64,
+    pub(crate) channel: usize,
+    pub(crate) key: u16,
     /// Note fine pitch byte, 120 = none.
-    fine: u8,
-    velocity: u8,
+    pub(crate) fine: u8,
+    pub(crate) velocity: u8,
     /// Note pan byte, 64 = center.
-    pan: u8,
+    pub(crate) pan: u8,
     /// Note mod X / mod Y bytes, 128 = none.
-    mod_x: u8,
-    mod_y: u8,
+    pub(crate) mod_x: u8,
+    pub(crate) mod_y: u8,
     /// Tick at which the voice is cut (audio clip end).
-    cut: Option<u64>,
+    pub(crate) cut: Option<u64>,
     /// Note length in ticks (0 = a step: it has no end of its own).
-    len: u64,
+    pub(crate) len: u64,
     /// Seconds into the sample where the voice starts (audio clip window start).
-    from_s: f64,
+    pub(crate) from_s: f64,
     /// Seconds into the sample where an audio clip's window ends (`None`: the sample's end).
-    to_s: Option<f64>,
+    pub(crate) to_s: Option<f64>,
     /// An audio clip's fades and gain.
-    clip: Option<ClipFx>,
+    pub(crate) clip: Option<ClipFx>,
     /// A slide note.
-    slide: bool,
+    pub(crate) slide: bool,
     /// The note's colour group.
-    colour: u8,
+    pub(crate) colour: u8,
     /// The note's own portamento switch.
-    porta: bool,
+    pub(crate) porta: bool,
     /// A note the main swing can move.
-    swing: Option<Swung>,
+    pub(crate) swing: Option<Swung>,
 }
 
 impl Sched {
@@ -178,12 +176,12 @@ pub(crate) fn push_note(out: &mut Vec<Sched>, start: i64, n: &os_model::Note, pr
 /// next clip of the same pattern taking the pattern over, or its end).
 #[derive(Debug, Clone, Copy)]
 struct PatternPlay {
-    pattern: u16,
-    from: u64,
-    len: u64,
-    origin: i64,
-    end: u64,
-    starts_until: u64,
+    pub(crate) pattern: u16,
+    pub(crate) from: u64,
+    pub(crate) len: u64,
+    pub(crate) origin: i64,
+    pub(crate) end: u64,
+    pub(crate) starts_until: u64,
 }
 
 /// The pattern clips that play, with their windows. A clip whose start offset is negative (uncut) plays the whole

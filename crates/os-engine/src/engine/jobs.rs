@@ -1,34 +1,33 @@
-// Copyright (C) 2026 ItsAlphaNeon
-// SPDX-License-Identifier: GPL-3.0-or-later
-// This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
+// Copyright (C) 2026 ItsAlphaNeon
+// SPDX-License-Identifier: GPL-3.0-or-later
+// This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! The per-tick jobs the generators run: an instrument channel's turn, its effect slots, and the notes handed to it.
 
-use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant};
-use crate::instrument::{Instrument, SharedInstrument, Slot, TransportInfo};
+use crate::instrument::{Instrument, TransportInfo};
 use super::{auto_bypass, multicore, notes, param_auto, pdc};
-use super::{Engine};
 use super::channel::{ChannelState};
 use super::mix::{Fx, FxSlot, MixTrack, Route};
 use super::triggers::{InstClip, InstTuning};
 
 pub(crate) struct InstCx<'a> {
-    n: usize,
-    rate: u32,
-    song: &'a TransportInfo,
-    export: bool,
-    wait: Duration,
-    channels: &'a [ChannelState],
+    pub(crate) n: usize,
+    pub(crate) rate: u32,
+    pub(crate) song: &'a TransportInfo,
+    pub(crate) export: bool,
+    pub(crate) wait: Duration,
+    pub(crate) channels: &'a [ChannelState],
     /// This tick's notes by channel, the notes instruments missed, controller messages waiting.
-    notes: &'a [(usize, u32, notes::Note)],
-    missed: &'a [(usize, notes::Note)],
-    midi: &'a [(usize, [u8; 3])],
-    params: &'a param_auto::ParamAuto,
-    shapes: multicore::Shapes,
+    pub(crate) notes: &'a [(usize, u32, notes::Note)],
+    pub(crate) missed: &'a [(usize, notes::Note)],
+    pub(crate) midi: &'a [(usize, [u8; 3])],
+    pub(crate) params: &'a param_auto::ParamAuto,
+    pub(crate) shapes: multicore::Shapes,
     /// Per channel: a note held or due to end (`Engine::inst_held`); the program's Auto-bypass when silent setting.
-    held: &'a [bool],
-    auto_bypass: bool,
+    pub(crate) held: &'a [bool],
+    pub(crate) auto_bypass: bool,
 }
 
 // SAFETY: `shapes` is shared under its own rule (each channel's turn touches its own clips); the rest is read only.
@@ -36,12 +35,12 @@ unsafe impl Sync for InstCx<'_> {}
 
 /// A generator channel's own state for its turn.
 pub(crate) struct InstLane<'a> {
-    c: usize,
-    fines: &'a mut InstTuning,
-    owed: &'a mut usize,
-    pad: Option<&'a mut pdc::Pad>,
-    until: &'a mut Option<Instant>,
-    out: &'a mut multicore::InstOut,
+    pub(crate) c: usize,
+    pub(crate) fines: &'a mut InstTuning,
+    pub(crate) owed: &'a mut usize,
+    pub(crate) pad: Option<&'a mut pdc::Pad>,
+    pub(crate) until: &'a mut Option<Instant>,
+    pub(crate) out: &'a mut multicore::InstOut,
 }
 
 /// A generator channel's turn in a tick: its instrument gets the tick's notes and renders; what the channel adds to its
