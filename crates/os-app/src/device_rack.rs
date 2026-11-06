@@ -234,6 +234,11 @@ pub enum RackAct {
     /// Reorder a device: move it from index `from` to index `to`.
     #[allow(dead_code)] // Constructed by the view layer once drag-to-reorder is wired up.
     Reorder { from: usize, to: usize },
+    /// An overflow stepper (the header's ‹ ›): scroll the chain by one tile (negative = left).
+    ScrollBy(f32),
+    /// A tile body's parameter row: set the parameter `id` of the instance under `key` to normalized `v`
+    /// (a click, or a drag's move, on a value bar).
+    ParamSet { key: usize, id: u32, v: f64 },
 }
 
 /// The splitter pressed: a double click (within the browser's double-click window) gives back the default height,
@@ -348,6 +353,15 @@ pub fn run(app: &mut App, act: RackAct) {
             let _ = reorder(&mut app.state, from, to);
             app.invalidate();
         }
+        RackAct::ParamSet { key, id, v } => set_param_value(app, key, id, v),
+        RackAct::ScrollBy(d) => {
+            let s = &mut app.state;
+            let w = s.screen.0;
+            s.device_rack_scroll_x =
+                (crate::views::device_rack::scroll_x(s, w) + d * TILE_W)
+                    .clamp(0.0, (crate::views::device_rack::content_w(s) - w).max(0.0));
+            app.invalidate();
+        }
     }
 }
 
@@ -376,6 +390,17 @@ fn toggle_on(app: &mut App, kind: DeviceKind) {
         DeviceKind::MidiFxAdd => {}
     }
     app.invalidate();
+}
+
+/// Sets the parameter `id` of the hosted instance under `key` to normalized `v`. The ONE set path for the
+/// rack's parameter rows: an edit in the plugin's window, the value box and (later) automation all land here.
+pub fn set_param_value(app: &mut App, key: usize, id: u32, v: f64) {
+    let v = v.clamp(0.0, 1.0);
+    if app.plugins.set_param(key, id, v) {
+        app.state.params.set_by_host(key, id, v);
+        app.state.device_rack_failed.remove(&key);
+        app.invalidate();
+    }
 }
 
 /// Opens `key`'s plugin window with the info its frame shows (a channel row's strip or an `fx_key`'s slot title).
@@ -442,19 +467,20 @@ pub fn sync_embed(app: &mut App) {
         }
     }
     app.state.device_rack_embed = keys;
-    // The tiles' live parameters, for tiles whose editor cannot embed (their placeholder body).
+    // The tiles' live parameters (every device's key, so a tile's placeholder body always has its controls): each
+    // row is (param id, name, normalized value) for the params a tile can render and set.
     app.state.device_rack_params = tiles
         .iter()
-        .map(|&(k, _)| {
+        .filter_map(|&(k, _)| {
             let ps = app
                 .plugins
                 .param_infos(k)
                 .iter()
                 .filter(|i| !i.read_only && !i.bypass)
                 .take(8)
-                .map(|i| (i.name.clone(), app.plugins.param_value(k, i.id).unwrap_or(i.default)))
-                .collect();
-            (k, ps)
+                .map(|i| (i.id, i.name.clone(), app.plugins.param_value(k, i.id).unwrap_or(i.default)))
+                .collect::<Vec<_>>();
+            (!ps.is_empty()).then_some((k, ps))
         })
         .collect();
     // Open what is missing and pin each editor to its tile's rect. Without plugin windows there is nothing to
@@ -735,6 +761,58 @@ mod tests {
         // Delete key: the control plane receives RemoveEffect; here we verify the selection is set
         // so the caller can dispatch the command. The command itself is tested elsewhere.
         assert!(rack_sel(&app.state).is_some());
+    }
+
+    /// Horizontal scroll: a chain wider than the panel scrolls (the wheel), clamped to the content width;
+    /// the layout shifts by the scroll offset (the tiles and every hit rect with them).
+    #[test]
+    fn horizontal_scroll_clamps_and_shifts_tiles() {
+        let mut app = app();
+        crate::playlist::run(
+            &mut app,
+            crate::playlist::Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
+        );
+        app.plugins = crate::plugins::Plugins::builtins();
+        // Three tiles are wider than a narrow panel.
+        app.state.screen.0 = 600.0;
+        let strip = {
+            let tr = app.state.project.tracks.last().unwrap().clone();
+            tr.mixer_strip
+        };
+        let m = crate::mixer::track_mut(&mut app.state, strip).unwrap();
+        m.slots[0] = Some(os_model::SlotPlugin { id: os_model::Id::NONE, name: "Lemon EQ2".into(), state: Vec::new() });
+        m.slots[1] = Some(os_model::SlotPlugin { id: os_model::Id::NONE, name: "Lemon Reverb".into(), state: Vec::new() });
+        assert!(crate::views::device_rack::content_w(&app.state) > 600.0, "the chain overflows");
+        // Wheel down (right) twice, then far beyond: clamped to the content width.
+        let r = crate::views::device_rack::panel_rect(&app.state, 600.0, app.state.screen.1);
+        let (x, y) = (r.x + 50.0, r.y + crate::device_rack::HEADER_H + 20.0);
+        assert!(crate::views::device_rack::wheel(&mut app.state, r, x, y, -1.0), "the wheel is over the body");
+        let one = app.state.device_rack_scroll_x;
+        assert!(one > 0.0, "a wheel notch down scrolls right");
+        crate::views::device_rack::wheel(&mut app.state, r, x, y, -100.0);
+        let max = crate::views::device_rack::scroll_x(&app.state, 600.0);
+        assert!(app.state.device_rack_scroll_x <= max + 0.001, "clamped to the content");
+        assert!((max - (crate::views::device_rack::content_w(&app.state) - 600.0)).abs() < 0.001);
+        // The wheel off the rack's body does not scroll it.
+        app.state.device_rack_scroll_x = 0.0;
+        assert!(!crate::views::device_rack::wheel(&mut app.state, r, x, r.y - 5.0, 1.0));
+        assert_eq!(app.state.device_rack_scroll_x, 0.0);
+        // The layout shifts by the scroll: tiles land one offset left of their unscrolled x.
+        app.state.device_rack_scroll_x = one;
+        let shifted = crate::views::device_rack::layout(&app.state, r);
+        app.state.device_rack_scroll_x = 0.0;
+        let plain = crate::views::device_rack::layout(&app.state, r);
+        assert_eq!(shifted.len(), plain.len());
+        for ((_, a), (_, b)) in shifted.iter().zip(&plain) {
+            assert!((a.x - (b.x - one)).abs() < 0.001, "tiles shift by the scroll");
+            assert!((a.y - b.y).abs() < 0.001);
+        }
+        // The steppers move the scroll a tile at a time, and stop at 0.
+        run(&mut app, RackAct::ScrollBy(1.0));
+        let stepped = app.state.device_rack_scroll_x;
+        assert!(stepped >= one - 0.001, "the › stepper scrolled right");
+        run(&mut app, RackAct::ScrollBy(-10.0));
+        assert_eq!(app.state.device_rack_scroll_x, 0.0, "the ‹ stepper stops at the start");
     }
 
     /// Reorder action: the stub returns Err until the control plane command is wired up.

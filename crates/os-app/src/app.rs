@@ -1114,7 +1114,10 @@ pub struct State {
     pub device_rack_split_click: Option<std::time::Instant>,
     /// Live parameters of the rack's devices, by plugin-window key (refreshed by
     /// `device_rack::sync_embed`): the controls a tile shows when its editor cannot embed.
-    pub device_rack_params: std::collections::BTreeMap<usize, Vec<(String, f64)>>,
+    /// Each row is (param id, name, normalized value).
+    pub device_rack_params: std::collections::BTreeMap<usize, Vec<(u32, String, f64)>>,
+    /// The device rack's horizontal scroll (content px): the chain is wider than the panel at times.
+    pub device_rack_scroll_x: f32,
     /// The selected tile index in the device rack, if any.
     pub device_rack_sel: Option<usize>,
     /// A MIDI track's MIDI FX slots (`crate::midi_fx`), by track id. In memory for now: the `.flp` records them
@@ -1567,6 +1570,7 @@ impl App {
                 device_rack_menu: None,
                 device_rack_split_click: None,
                 device_rack_params: Default::default(),
+                device_rack_scroll_x: 0.0,
                 device_rack_sel: None,
                 midi_fx: Default::default(),
                 browser_marquee: Default::default(),
@@ -7472,6 +7476,14 @@ impl App {
     /// The wheel's work; returns the window when only that window's view moved (else everything is repainted).
     fn wheel_act(&mut self, dx: f32, dy: f32, shift: bool, ctrl: bool) -> Option<Win> {
         let (x, y) = self.mouse;
+        // The device rack's body: the wheel scrolls its chain horizontally (up = left, as the mixer's).
+        if crate::device_rack::visible(&self.state) && !self.state.device_rack_collapsed {
+            let r = crate::views::device_rack::panel_rect(&self.state, self.state.screen.0, self.state.screen.1);
+            if crate::views::device_rack::wheel(&mut self.state, r, x, y, dy + dx) {
+                self.invalidate();
+                return None;
+            }
+        }
         let area = self.top_hit(x, y).map(|h| h.action.clone());
         if matches!(area, Some(Action::BrowserList | Action::BrowserRow(_) | Action::BrowserTab(_))) {
             self.browser_wheel(dy + dx);

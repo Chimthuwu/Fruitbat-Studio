@@ -34,14 +34,39 @@ pub(crate) fn layout(s: &State, r: Rect) -> Vec<(Device, Rect)> {
         return Vec::new();
     }
     let body = Rect::new(r.x, r.y + HEADER_H, r.w, r.h - HEADER_H);
+    // Horizontally scrolled: the chain is wider than the panel at times, so the tiles (and every hit rect
+    // derived from this layout) shift left by the clamped scroll offset.
+    let scroll = scroll_x(s, r.w);
     device_rack::rack_chain(s)
         .into_iter()
-        .scan(body.x, |x, d| {
+        .scan(body.x - scroll, |x, d| {
             let tile = Rect::new(*x, body.y, TILE_W, body.h);
             *x += TILE_W + GAP;
             Some((d, tile))
         })
         .collect()
+}
+
+/// The chain's content width over a panel `w` wide: every tile plus the gap after it.
+pub(crate) fn content_w(s: &State) -> f32 {
+    let n = device_rack::rack_chain(s).len();
+    n as f32 * (TILE_W + GAP)
+}
+
+/// The rack's horizontal scroll clamped to what the panel's width `w` can show.
+pub(crate) fn scroll_x(s: &State, w: f32) -> f32 {
+    s.device_rack_scroll_x.clamp(0.0, (content_w(s) - w).max(0.0))
+}
+
+/// The wheel over the rack's body scrolls the chain horizontally (`d` notches, up = left, as the mixer's);
+/// `r` is the rack panel rect. Returns whether the wheel was over the rack.
+pub(crate) fn wheel(s: &mut State, r: Rect, x: f32, y: f32, d: f32) -> bool {
+    let body = Rect::new(r.x, r.y + HEADER_H, r.w, r.h - HEADER_H);
+    if !body.contains(x, y) || d == 0.0 {
+        return false;
+    }
+    s.device_rack_scroll_x = (scroll_x(s, r.w) - d * 44.0).clamp(0.0, (content_w(s) - r.w).max(0.0));
+    true
 }
 
 /// The tiles at the current screen size (for hit-testing a tile drag's drop position).
@@ -95,8 +120,33 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
         t.text,
         &format!("Device rack - {name}"),
     );
-    // The header buttons, right-aligned: ＋ Add (the plugin browser), Pin, Show / Hide.
-    let mut bx = r.right() - 198.0;
+    // The header buttons, right-aligned: ＋ Add (the plugin browser), Pin, Show / Hide — and, when the chain
+    // overflows the panel, the ‹ › steppers (an alternative to the wheel).
+    let overflow = crate::views::device_rack::content_w(s) > r.w
+        && !s.device_rack_collapsed
+        && r.h > HEADER_H;
+    let mut bx = r.right() - 198.0 - 56.0 * f32::from(overflow);
+    if overflow {
+        let (at_start,) = (s.device_rack_scroll_x <= 0.5,);
+        let steppers = [
+            ("‹", -1.0, Rect::new(bx, head.y + 2.0, 24.0, 17.0)),
+            ("›", 1.0, Rect::new(bx + 28.0, head.y + 2.0, 24.0, 17.0)),
+        ];
+        for (label, d, b) in steppers {
+            let dim = d < 0.0 && at_start;
+            if dim {
+                header_button(ui, b, label, false, Action::DeviceRack(RackAct::ScrollBy(0.0)), "");
+            } else {
+                ui.hit(
+                    b,
+                    Action::DeviceRack(RackAct::ScrollBy(d)),
+                    if d < 0.0 { "Scroll the chain left" } else { "Scroll the chain right" },
+                );
+                header_button(ui, b, label, false, Action::DeviceRack(RackAct::ScrollBy(0.0)), "");
+            }
+        }
+        bx += 56.0;
+    }
     header_button(
         ui,
         Rect::new(bx, head.y + 2.0, 60.0, 17.0),
@@ -269,14 +319,24 @@ fn placeholder(ui: &mut Ui, s: &State, d: &Device, body: Rect, button: Option<Ac
         _ => "No embedded editor for this plugin yet",
     };
     ui.c.text(fnt(13.0), body.x + 10.0, body.y + 8.0, t.text_dim, label);
-    // Live parameters (cached by `sync_embed`): the tile's controls when its editor cannot embed.
+    // Live parameters (cached by `sync_embed`): the tile's controls when its editor cannot embed. A row's bar
+    // sets the parameter where it is clicked or dragged (through `device_rack::set_param_value`, the one set
+    // path — automation hooks it later).
     if let Some(key) = d.key {
         let mut py = body.y + 56.0;
-        for (name, val) in s.device_rack_params.get(&key).map_or(&Vec::new(), |v| v) {
+        for (id, name, val) in s.device_rack_params.get(&key).map_or(&Vec::new(), |v| v) {
             ui.c.text_clip(fnt(12.0), body.x + 10.0, py, body.w - 20.0, t.text_dim, name);
             let bar = Rect::new(body.x + 10.0, py + 15.0, (body.w - 20.0).min(180.0), 4.0);
+            let v = (*val as f32).clamp(0.0, 1.0);
+            let hit = Rect::new(bar.x - 4.0, py - 2.0, bar.w + 8.0, 23.0);
+            let hov = ui.hit(
+                hit,
+                Action::DeviceRack(RackAct::ParamSet { key, id: *id, v: (((ui.mouse.0 - bar.x) / bar.w).clamp(0.0, 1.0)) as f64 }),
+                "Drag to set this parameter",
+            );
+            let _ = hov;
             ui.c.fill_rect(bar, t.s(0x2b3134));
-            ui.c.fill_rect(Rect::new(bar.x, bar.y, bar.w * (*val as f32).clamp(0.0, 1.0), bar.h), t.glyph);
+            ui.c.fill_rect(Rect::new(bar.x, bar.y, bar.w * v, bar.h), t.glyph);
             py += 26.0;
             if py > body.bottom() - 20.0 {
                 break;

@@ -885,6 +885,15 @@ impl Plugins {
         p.set_param(info.id, n.clamp(0.0, 1.0))
     }
 
+    /// Sets the parameter `id` of the instance under `key` to normalized `value`. False when the instance
+    /// is missing or cannot be locked (the device rack's parameter rows go through this).
+    pub fn set_param(&self, key: usize, id: u32, value: f64) -> bool {
+        self.hosted
+            .get(&key)
+            .and_then(|h| h.plugin.lock().ok())
+            .is_some_and(|mut p| p.set_param(id, value.clamp(0.0, 1.0)))
+    }
+
     /// The parameters of the instance under `key`, in the plugin's order.
     pub fn param_infos(&self, key: usize) -> Vec<os_host::ParamInfo> {
         let Some(p) = self.hosted.get(&key).and_then(|h| h.plugin.lock().ok()) else { return Vec::new() };
