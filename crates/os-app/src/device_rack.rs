@@ -443,10 +443,10 @@ pub fn run(app: &mut App, act: RackAct) {
             app.invalidate();
         }
         RackAct::ParamSet { key, id, v } => {
-            // The click sets the value at once and keeps dragging it: the row's bar follows the pointer
-            // (the drag's move maps x onto the same bar via `views::device_rack::param_bar`).
+            // Sets the value at once (a bar's click, or the dial's start value) and keeps dragging it: the
+            // drag's move maps y onto a vertical dial drag.
             set_param_value(app, key, id, v);
-            app.drag = Some(Drag::DeviceRackParam { key, id });
+            app.drag = Some(Drag::DeviceRackParam { key, id, y0: app.mouse.1, v0: v });
         }
         RackAct::Remove(kind) => {
             app.state.device_rack_menu = None;
@@ -1625,9 +1625,9 @@ mod tests {
             }
             let ps = app.state.device_rack_params.get(&key).unwrap_or_else(|| panic!("{} has no params cached", d.name));
             assert!(!ps.is_empty(), "{}", d.name);
-            let bar = crate::views::device_rack::param_bar(&app.state, key, ps[0].0)
-                .unwrap_or_else(|| panic!("{}: first param row is not on screen", d.name));
-            assert!(bar.w > 20.0 && bar.h > 0.0 && tile.contains(bar.x + 1.0, bar.y + 1.0), "{}: {bar:?}", d.name);
+            let dial = crate::views::device_rack::param_dial(&app.state, key, ps[0].0)
+                .unwrap_or_else(|| panic!("{}: first param dial is not on screen", d.name));
+            assert!(dial.w > 20.0 && dial.h > 0.0 && tile.contains(dial.x + 1.0, dial.y + 1.0), "{}: {dial:?}", d.name);
             let hit = app.hits.iter().any(|h| matches!(h.action, Action::DeviceRack(RackAct::ParamSet { key: k, .. }) if k == key));
             assert!(hit, "{}: no painted param row hit", d.name);
         }

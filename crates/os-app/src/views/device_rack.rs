@@ -345,34 +345,42 @@ pub(crate) fn body_mode(s: &State, d: &Device) -> BodyMode {
     }
 }
 
-/// Height of one parameter row (label line + bar).
-const ROW_H: f32 = 26.0;
+/// Width / height of one dial cell (name above, knob, value below).
+const DIAL_W: f32 = 64.0;
+const DIAL_H: f32 = 68.0;
 
-/// The top of the first parameter row: below the Pop out button strip when the tile has one.
-fn rows_top(body: Rect, button: bool) -> f32 {
-    body.y + if button { 32.0 } else { 8.0 }
+/// The top of the dial grid: below the Pop out button strip when the tile has one.
+fn dials_top(body: Rect, button: bool) -> f32 {
+    body.y + if button { 34.0 } else { 10.0 }
 }
 
-/// A tile body's parameter row bar, by hosted key and param id: what a drag maps the pointer's x onto
-/// (the same geometry the placeholder paints: cached params, `ROW_H` px a row, from the tile's body).
-pub(crate) fn param_bar(s: &State, key: usize, id: u32) -> Option<Rect> {
+/// The dial grid that fits `body` below `top`: columns, rows, and the left edge of the first column (centred).
+fn dial_grid(body: Rect, top: f32) -> (usize, usize, f32) {
+    let cols = ((body.w - 12.0) / DIAL_W).floor().max(1.0) as usize;
+    let rows = ((body.bottom() - top - 6.0) / DIAL_H).floor().max(0.0) as usize;
+    let x0 = body.x + (body.w - cols as f32 * DIAL_W) * 0.5;
+    (cols, rows, x0)
+}
+
+/// The centre of dial `i` in the grid, or `None` when it would not fit.
+fn dial_centre(body: Rect, top: f32, i: usize) -> Option<(f32, f32)> {
+    let (cols, rows, x0) = dial_grid(body, top);
+    if i >= cols * rows {
+        return None;
+    }
+    let (col, row) = (i % cols, i / cols);
+    Some((x0 + col as f32 * DIAL_W + DIAL_W * 0.5, top + row as f32 * DIAL_H + DIAL_H * 0.5))
+}
+
+/// A tile body's dial hit rect, by hosted key and param id (the same geometry `placeholder` paints).
+pub(crate) fn param_dial(s: &State, key: usize, id: u32) -> Option<Rect> {
     let (_, w, h) = ((), s.screen.0, s.screen.1);
     let (d, tile) = layout(s, panel_rect(s, w, h)).into_iter().find(|(d, _)| d.key == Some(key))?;
-    let row = s.device_rack_params.get(&key)?.iter().position(|(i, ..)| *i == id)?;
+    let i = s.device_rack_params.get(&key)?.iter().position(|(pid, ..)| *pid == id)?;
     let body = body(tile);
     let button = !s.device_rack_float.contains(&key) && d.key.is_some();
-    let bar = row_bar(body, rows_top(body, button), row);
-    (bar.bottom() <= body.bottom() - 2.0).then_some(bar)
-}
-
-/// Row `i`'s bar: the body width less its margins, under the label line.
-fn row_bar(body: Rect, top: f32, i: usize) -> Rect {
-    Rect::new(body.x + 10.0, top + 15.0 + ROW_H * i as f32, (body.w - 20.0).max(20.0), 4.0)
-}
-
-/// How many parameter rows fit in `body` below `top`.
-pub(crate) fn rows_fit(body: Rect, top: f32) -> usize {
-    ((body.bottom() - top - 2.0) / ROW_H).floor().max(0.0) as usize
+    let (cx, cy) = dial_centre(body, dials_top(body, button), i)?;
+    Some(Rect::new(cx - 15.0, cy - 15.0, 30.0, 30.0))
 }
 
 /// A placeholder body: parameter rows (when the device has any), and a `button` when there is one to press.
@@ -381,32 +389,28 @@ fn placeholder(ui: &mut Ui, s: &State, d: &Device, body: Rect, button: Option<Ac
     ui.c.fill_rect(body, t.s(0x131718));
     ui.c.stroke_rrect(body.inset(1.0), 2.0, 1.0, t.splitter_dark);
     let params: &[(u32, String, f64)] = d.key.and_then(|k| s.device_rack_params.get(&k)).map_or(&[], |v| v);
-    let top = rows_top(body, button.is_some());
+    let top = dials_top(body, button.is_some());
     if params.is_empty() {
         let label = if d.key.is_some() { "No parameters to show" } else { "No device" };
         ui.c.text_clip(fnt(13.0), body.x + 10.0, top, body.w - 20.0, t.text_dim, label);
     }
-    // Live parameters (cached by `sync_embed`): the tile's controls when its editor is not embedded. A row's bar
-    // sets the parameter where it is clicked or dragged (through `device_rack::set_param_value`, the one set
-    // path). The name sits above the bar, truncated, with the value at its right end.
+    // Live parameters (cached by `sync_embed`): the tile's dials when its editor is not embedded. A dial's press
+    // starts a vertical drag from the value now (through `device_rack::set_param_value`, the one set path); the
+    // name sits above the knob and the value below it.
     if let Some(key) = d.key {
-        let fit = rows_fit(body, top);
-        for (i, (id, name, val)) in params.iter().take(fit).enumerate() {
-            let bar = row_bar(body, top, i);
-            let py = bar.y - 15.0;
+        for (i, (id, name, val)) in params.iter().enumerate() {
+            let Some((cx, cy)) = dial_centre(body, top, i) else { break };
             let v = (*val as f32).clamp(0.0, 1.0);
-            let value = format!("{:.0}%", v * 100.0);
-            let vw = 36.0;
-            ui.c.text_clip(fnt(12.0), body.x + 10.0, py, body.w - 20.0 - vw, t.text_dim, name);
-            ui.c.text(fnt(12.0), body.right() - 10.0 - vw + 6.0, py, t.text_dim, &value);
-            let hit = Rect::new(bar.x - 4.0, py - 2.0, bar.w + 8.0, ROW_H - 3.0);
-            ui.hit(
+            ui.c.text_clip(fnt(11.0), cx - DIAL_W * 0.5 + 6.0, cy - 32.0, DIAL_W - 12.0, t.text_dim, name);
+            let hit = Rect::new(cx - 15.0, cy - 15.0, 30.0, 30.0);
+            let hov = ui.hit(
                 hit,
-                Action::DeviceRack(RackAct::ParamSet { key, id: *id, v: (((ui.mouse.0 - bar.x) / bar.w).clamp(0.0, 1.0)) as f64 }),
-                "Click or drag to set this parameter",
+                Action::DeviceRack(RackAct::ParamSet { key, id: *id, v: *val }),
+                "Drag up / down to set this parameter",
             );
-            ui.c.fill_rect(bar, t.s(0x2b3134));
-            ui.c.fill_rect(Rect::new(bar.x, bar.y, bar.w * v, bar.h), t.glyph);
+            kit::knob(ui.c, t, cx, cy, 13.0, v, false, kit::KnobLook::Ring, kit::State::hover(hov));
+            let value = format!("{:.0}%", v * 100.0);
+            ui.c.text_center(fnt(11.0), Rect::new(cx - DIAL_W * 0.5, cy + 19.0, DIAL_W, 14.0), t.text_dim, &value);
         }
     }
     if let Some(action) = button {

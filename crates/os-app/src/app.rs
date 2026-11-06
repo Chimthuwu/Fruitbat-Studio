@@ -913,7 +913,7 @@ pub enum Drag {
     /// A device rack tile header held: drag left/right to reorder (`x0` = press x; FX tiles swap mixer slots).
     DeviceRackTile { kind: crate::device_rack::DeviceKind, _x0: f32 },
     /// A device tile's parameter row dragged: the value follows the pointer along its bar.
-    DeviceRackParam { key: usize, id: u32 },
+    DeviceRackParam { key: usize, id: u32, y0: f32, v0: f64 },
     /// Monitor debug panel slider.
     MonParam(usize),
     /// Cable physics debug panel slider.
@@ -6144,11 +6144,10 @@ impl App {
                 }
                 Drag::BrowserSplit { dx } => self.browser_split_drag(x - dx),
                 Drag::DeviceRackSplit { dy } => crate::device_rack::split_drag(self, y, dy),
-                Drag::DeviceRackParam { key, id } => {
-                    if let Some(bar) = crate::views::device_rack::param_bar(&self.state, key, id) {
-                        let v = (((x - bar.x) / bar.w).clamp(0.0, 1.0)) as f64;
-                        crate::device_rack::set_param_value(self, key, id, v);
-                    }
+                Drag::DeviceRackParam { key, id, y0, v0 } => {
+                    // A dial: dragging up raises the value (0.005 of the range per logical px).
+                    let v = (v0 - (y - y0) as f64 * 0.005).clamp(0.0, 1.0);
+                    crate::device_rack::set_param_value(self, key, id, v);
                 }
                 Drag::DeviceRackTile { .. } => {
                     // While the tile drags, the gap it would drop at follows the pointer (the highlight).
