@@ -11679,6 +11679,38 @@ mod tests {
     }
 
     #[test]
+    fn the_midi_fx_add_tile_opens_the_midi_fx_browser() {
+        let Ok(mut c) = Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = App::new(None);
+        app.linear_project();
+        crate::playlist::run(
+            &mut app,
+            crate::playlist::Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
+        );
+        frame(&mut app, &mut c, None);
+        // The ＋ Add tile registers its whole body as the hit: clicking it opens the MIDI FX browser.
+        let r = hit_rect(&app, &Action::DeviceRack(crate::device_rack::RackAct::AddMidiFx));
+        assert!(r.w > 0.0 && r.h > 0.0, "the MIDI FX +Add tile has a click target");
+        app.mouse_move(r.cx(), r.cy());
+        frame(&mut app, &mut c, None);
+        let top = app.top_hit(r.cx(), r.cy()).map(|h| format!("{:?}", h.action)).unwrap_or_default();
+        assert!(
+            top.contains("AddMidiFx"),
+            "the topmost hit at the tile body should be AddMidiFx, got {top}"
+        );
+        app.mouse_down();
+        let p = app.state.playlist.popup.as_ref().expect("the click opens the MIDI FX browser");
+        // The test exe cannot load the linked CLAP entries (`linked` needs the running app binary), so the
+        // browser shows its empty fallback here; the head row proves the right menu opened.
+        assert_eq!(p.items.first().map(|i| i.label.as_ref()), Some("MIDI FX"));
+        assert!(
+            p.items.iter().any(|i| !i.enabled),
+            "an empty list shows its fallback row"
+        );
+        app.mouse_up();
+    }
+
+    #[test]
     fn tempo_drag_locks_the_cursor() {
         let Ok(mut a) = Canvas::new(1920, 1080, 1.0) else { return };
         let mut app = App::new(None);

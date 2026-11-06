@@ -338,7 +338,12 @@ pub fn run(app: &mut App, act: RackAct) {
             app.drag = Some(Drag::DeviceRackTile { kind, _x0: app.mouse.0 });
         }
         RackAct::AddDevice => {}
-        RackAct::AddMidiFx => {} // The popup opens on the action (app.rs), like AddDevice.
+        RackAct::AddMidiFx => {
+            // The MIDI FX browser (the app-level handler never sees DeviceRack actions: this `run`
+            // intercepts them first, so the popup opens here).
+            let p = crate::views::device_rack::midi_fx_menu(&app.plugins.midi_fx, app.mouse.0, app.mouse.1);
+            app.state.playlist.popup = Some(p);
+        }
         RackAct::Reorder { from, to } => {
             let _ = reorder(&mut app.state, from, to);
             app.invalidate();
