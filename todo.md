@@ -1,5 +1,11 @@
 # Lemon Studio — todo.md
 
+## 🎯 Engine Split (2026-11-06) — COMPLETE
+- ✅ `os-engine/src/engine.rs` split into per-concern modules under `engine/` (18 modules: channel, jobs,
+  live_edit, mix, render, sched, transport, triggers, voice + pre-existing auto_bypass/controllers/layers/
+  marks/multicore/notes/param_auto/pdc/rec). engine.rs = Engine struct + core impl + tests (~9.5k → 7.3k lines).
+- ✅ Pure structural refactor, no behavior change; `cargo test --workspace` 2248 passed / 0 failed / 79 ignored.
+- ✅ Commit `57df0c97` pushed to `orchestra/engine-split`; merged to main.
 ## 🎯 Current Session (2026-11-04) — Rack Rework Complete
 - ✅ `＋ Add` header button → plugin browser (native built-ins first per section, filter radios in footer)
 - ✅ DELETE/Backspace removes selected effect tile (instrument never removable)
