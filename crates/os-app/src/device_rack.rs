@@ -342,6 +342,8 @@ pub fn run(app: &mut App, act: RackAct) {
             app.state.playlist.popup = Some(p);
         }
         RackAct::TilePress(kind) => {
+            app.state.device_rack_drag = Some(kind);
+            app.state.device_rack_drop = None;
             app.drag = Some(Drag::DeviceRackTile { kind, _x0: app.mouse.0 });
         }
         RackAct::AddDevice => {
@@ -423,33 +425,77 @@ fn open_editor(app: &mut App, key: usize) -> Option<Result<(), String>> {
     Some(app.plugins.open_window(key, info))
 }
 
-/// A tile drag released at mouse x: FX tiles swap mixer slot positions (adjacent
-/// `SlotMove`s on their strip, so remapping/automation follow), the instrument stays.
+/// A tile drag released at mouse x: the device moves to the chain position the drop gap says — MIDI FX reorder
+/// among themselves (never past the instrument: they only ever sit in the MIDI FX slots), FX among their strip's
+/// slots (adjacent `SlotMove`s, so remapping/automation follow), the instrument stays (a track holds one).
 pub fn tile_drop(app: &mut App, kind: DeviceKind, x: f32) {
-    let DeviceKind::Fx(track, slot) = kind else { return };
+    app.state.device_rack_drag = None;
+    app.state.device_rack_drop = None;
     let tiles = crate::views::device_rack::tiles(&app.state);
-    let src = tiles.iter().position(|(d, _)| d.kind == kind);
-    let Some(src) = src else { return };
-    let dst = tiles.iter().filter(|(_, t)| t.cx() < x).count().saturating_sub(1);
-    if dst == src {
-        return;
+    let Some(src) = tiles.iter().position(|(d, _)| d.kind == kind) else { return };
+    // The drop gap: how many tile middles the pointer passed (0..=len).
+    let gap = tiles.iter().filter(|(_, t)| t.cx() < x).count();
+    match kind {
+        DeviceKind::MidiFx(_) => {
+            let Some(tr) = rack_track(&app.state) else { return };
+            let id = tr.id.0;
+            let src_pos = tiles[..src].iter().filter(|(d, _)| matches!(d.kind, DeviceKind::MidiFx(_))).count();
+            let mut to = tiles[..gap.min(tiles.len())]
+                .iter()
+                .filter(|(d, _)| matches!(d.kind, DeviceKind::MidiFx(_)))
+                .count();
+            if to > src_pos {
+                to -= 1; // the removal shifts the later slots left by one
+            }
+            let n = crate::midi_fx::filled(&app.state, id).len();
+            if to >= n {
+                return;
+            }
+            if to != src_pos {
+                crate::midi_fx::reorder(app, id, src_pos, to);
+            }
+        }
+        DeviceKind::Fx(track, slot) => {
+            // The strip's FX slots in visual order; the drop lands among them (self excluded).
+            let fx: Vec<u8> = tiles
+                .iter()
+                .filter_map(|(d, _)| match d.kind {
+                    DeviceKind::Fx(t, k) if t == track => Some(k),
+                    _ => None,
+                })
+                .collect();
+            let Some(src_i) = fx.iter().position(|&k| k == slot) else { return };
+            let mut to = tiles[..gap.min(tiles.len())]
+                .iter()
+                .filter(|(d, _)| matches!(d.kind, DeviceKind::Fx(t, _) if t == track))
+                .count();
+            if to > src_i {
+                to -= 1;
+            }
+            let others: Vec<u8> = fx.iter().copied().filter(|&k| k != slot).collect();
+            if to >= others.len() + 1 || to == src_i {
+                return;
+            }
+            let target = others.get(to).copied().unwrap_or_else(|| others.iter().max().copied().unwrap_or(slot) + 1);
+            if target >= 10 || target == slot {
+                return;
+            }
+            let prev = app.state.selected_mixer;
+            app.state.selected_mixer = track;
+            let mut cur = i32::from(slot);
+            let target = i32::from(target);
+            while cur != target {
+                let step = (target - cur).clamp(-1, 1) as i8;
+                crate::mixer::run(app, crate::mixer::MCmd::SlotMove(cur as u8, step));
+                cur += i32::from(step);
+            }
+            app.state.selected_mixer = prev;
+            app.invalidate();
+        }
+        DeviceKind::Instrument(_) => {
+            // A track holds one instrument: nothing to reorder it with (its channel is the track's).
+        }
     }
-    // The FX device at the target tile (if any) on the same strip: swap slot positions.
-    let Some((d, _)) = tiles.get(dst) else { return };
-    let DeviceKind::Fx(t2, slot2) = d.kind else { return };
-    if t2 != track || slot2 == slot {
-        return;
-    }
-    let prev = app.state.selected_mixer;
-    app.state.selected_mixer = track;
-    let mut cur = i32::from(slot);
-    let target = i32::from(slot2);
-    while cur != target {
-        let step = (target - cur).clamp(-1, 1) as i8;
-        crate::mixer::run(app, crate::mixer::MCmd::SlotMove(cur as u8, step));
-        cur += i32::from(step);
-    }
-    app.state.selected_mixer = prev;
     app.invalidate();
 }
 
@@ -868,6 +914,63 @@ mod tests {
                 "out-of-range values clamp to 1.0"
             );
         }
+    }
+
+    /// Tile drag and drop: the drop gap follows the pointer (`drop_index`), and a release reorders — an FX
+    /// tile lands at any of its strip's slots, a MIDI FX among the MIDI FX slots (never past the instrument),
+    /// and the drag state clears.
+    #[test]
+    fn drag_reorders_with_drop_highlight_state() {
+        let mut app = app();
+        crate::playlist::run(
+            &mut app,
+            crate::playlist::Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
+        );
+        let tr = app.state.project.tracks.last().unwrap().clone();
+        let strip = tr.mixer_strip;
+        let m = crate::mixer::track_mut(&mut app.state, strip).unwrap();
+        m.slots[0] = Some(os_model::SlotPlugin { id: os_model::Id::NONE, name: "Lemon EQ2".into(), state: Vec::new() });
+        m.slots[1] = Some(os_model::SlotPlugin { id: os_model::Id::NONE, name: "Lemon Reverb".into(), state: Vec::new() });
+        m.slots[2] = Some(os_model::SlotPlugin { id: os_model::Id::NONE, name: "Lemon Chorus".into(), state: Vec::new() });
+        // Two MIDI FX slots in front (their slots keep fake data; the test exe cannot host, the order is the point).
+        app.state.midi_fx.entry(tr.id.0).or_default().resize(crate::midi_fx::SLOTS, None);
+        app.state.midi_fx.get_mut(&tr.id.0).unwrap()[0] = Some(crate::midi_fx::Slot { name: "A".into(), index: 0, on: true });
+        app.state.midi_fx.get_mut(&tr.id.0).unwrap()[1] = Some(crate::midi_fx::Slot { name: "B".into(), index: 0, on: true });
+        let tiles = crate::views::device_rack::tiles(&app.state);
+        assert_eq!(
+            tiles.iter().filter(|(d, _)| matches!(d.kind, DeviceKind::MidiFx(_))).count(),
+            2,
+            "two MIDI FX tiles first"
+        );
+        assert_eq!(
+            tiles.iter().filter(|(d, _)| matches!(d.kind, DeviceKind::Fx(_, _))).count(),
+            3,
+            "three FX tiles"
+        );
+        assert!(matches!(tiles[0].0.kind, DeviceKind::MidiFx(_)), "the MIDI FX lead the chain");
+        // The drop gap follows the pointer: over the third tile's middle, the gap is 3.
+        let x3 = tiles[3].1.cx();
+        assert_eq!(crate::views::device_rack::drop_index(&app.state, x3), 3);
+        // A drag starts (TilePress), the highlight state rides the drag, the release clears it.
+        run(&mut app, RackAct::TilePress(tiles[5].0.kind));
+        assert!(app.state.device_rack_drag.is_some());
+        app.state.device_rack_drop = Some(1);
+        // Release the last FX (slot 2) left of the first FX's tile (gap 2, before slot 0): they swap.
+        let x0 = tiles[2].1.cx();
+        app.mouse.0 = x0;
+        app.drag = Some(Drag::DeviceRackTile { kind: DeviceKind::Fx(strip, 2), _x0: 0.0 });
+        crate::device_rack::tile_drop(&mut app, DeviceKind::Fx(strip, 2), x0);
+        assert!(app.state.device_rack_drag.is_none() && app.state.device_rack_drop.is_none(), "the drag cleared");
+        let m = crate::mixer::track(&app.state, strip).unwrap();
+        assert_eq!(m.slots[0].as_ref().unwrap().name, "Lemon Chorus", "the dragged FX took slot 0");
+        // Adjacent SlotMoves: EQ2 shifts to slot 1, Reverb to slot 2.
+        assert_eq!(m.slots[1].as_ref().unwrap().name, "Lemon EQ2");
+        assert_eq!(m.slots[2].as_ref().unwrap().name, "Lemon Reverb");
+        // A MIDI FX drag reorders among the MIDI FX slots only.
+        crate::midi_fx::reorder(&mut app, tr.id.0, 1, 0);
+        let sl = crate::midi_fx::slots(&app.state, tr.id.0);
+        assert_eq!(sl[0].as_ref().unwrap().name, "B", "the second MIDI FX moved to the front");
+        assert_eq!(sl[1].as_ref().unwrap().name, "A");
     }
 
     /// Reorder action: the stub returns Err until the control plane command is wired up.

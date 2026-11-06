@@ -75,6 +75,29 @@ pub(crate) fn tiles(s: &State) -> Vec<(Device, Rect)> {
     layout(s, panel_rect(s, s.screen.0, s.screen.1))
 }
 
+/// The chain gap a tile drag over `x` would drop at (0..=chain length): how many tile middles it passed.
+pub(crate) fn drop_index(s: &State, x: f32) -> usize {
+    tiles(s).iter().filter(|(_, t)| t.cx() < x).count()
+}
+
+/// Paints the drop indicator for a running tile drag: an accent bar in the gap the device would land at.
+fn drop_highlight(ui: &mut Ui, s: &State, tiles: &[(Device, Rect)]) {
+    if s.device_rack_drag.is_none() {
+        return;
+    }
+    let Some(gap) = s.device_rack_drop else { return };
+    let t = ui.t;
+    let x = match tiles.get(gap) {
+        Some((_, tile)) => tile.x - GAP / 2.0,
+        None => tiles.last().map_or(0.0, |(_, tile)| tile.right() + GAP / 2.0),
+    };
+    let h = tiles.first().map_or(0.0, |(_, tile)| tile.h);
+    if h <= 0.0 {
+        return;
+    }
+    ui.c.fill_rect(Rect::new(x - 2.0, tiles[0].1.y, 4.0, h), t.glyph);
+}
+
 /// The tile bodies the rack embeds a built-in editor into: the built-in devices the user has not popped out. The
 /// app pins each editor's native window here on the next tick (`device_rack::sync_embed`).
 pub fn device_rects(s: &State) -> Vec<(usize, Rect)> {
@@ -207,9 +230,10 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
         gx = tile.right();
     }
     gap_button(ui, gx, r.y + HEADER_H, None, tiles.first().map_or(r.h - HEADER_H, |(_, t)| t.h));
+    drop_highlight(ui, s, &tiles);
 }
 
-/// A "+" gap button at x: opens the FX palette for the slot that follows it (`None` = first empty slot).
+/// A "+" gap button at x: opens the device browser for the slot that follows it (`None` = first empty slot).
 fn gap_button(ui: &mut Ui, x: f32, y: f32, slot: Option<u8>, h: f32) {
     let t = ui.t;
     let b = Rect::new(x + 2.0, y + h / 2.0 - 9.0, GAP - 4.0, 18.0);

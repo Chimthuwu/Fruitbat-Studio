@@ -1120,6 +1120,9 @@ pub struct State {
     pub device_rack_params: std::collections::BTreeMap<usize, Vec<(u32, String, f64)>>,
     /// The device rack's horizontal scroll (content px): the chain is wider than the panel at times.
     pub device_rack_scroll_x: f32,
+    /// The device tile being dragged (its kind), and the gap it would drop at (a chain index).
+    pub device_rack_drag: Option<crate::device_rack::DeviceKind>,
+    pub device_rack_drop: Option<usize>,
     /// The selected tile index in the device rack, if any.
     pub device_rack_sel: Option<usize>,
     /// A MIDI track's MIDI FX slots (`crate::midi_fx`), by track id. In memory for now: the `.flp` records them
@@ -1573,6 +1576,8 @@ impl App {
                 device_rack_split_click: None,
                 device_rack_params: Default::default(),
                 device_rack_scroll_x: 0.0,
+                device_rack_drag: None,
+                device_rack_drop: None,
                 device_rack_sel: None,
                 midi_fx: Default::default(),
                 browser_marquee: Default::default(),
@@ -6125,7 +6130,11 @@ impl App {
                         crate::device_rack::set_param_value(self, key, id, v);
                     }
                 }
-                Drag::DeviceRackTile { .. } => self.invalidate(),
+                Drag::DeviceRackTile { .. } => {
+                    // While the tile drags, the gap it would drop at follows the pointer (the highlight).
+                    self.state.device_rack_drop = Some(crate::views::device_rack::drop_index(&self.state, x));
+                    self.invalidate();
+                }
                 Drag::SongPosHold { .. } => {}
                 Drag::PrefSlider { label, x: x0, w } => self.pref_slider_drag(label, x0, w),
                 Drag::Ppi { x0, n0 } => self.ppi_set(crate::ppi::dragged(n0, x - x0, self.px_scale)),

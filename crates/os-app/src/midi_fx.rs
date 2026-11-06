@@ -67,6 +67,34 @@ pub fn add(app: &mut App, track: u32, slot: Option<usize>, index: usize) -> Opti
     }
 }
 
+/// Moves the MIDI FX at filled position `from` to filled position `to` (both among the track's filled slots,
+/// so a MIDI FX never crosses the instrument — the slots sit before it in signal flow): the filled order is
+/// rebuilt compacted from slot 0, and the moved instance re-hosts under its new slot's key (a host failure
+/// leaves the order standing, the tile degrading to its placeholder).
+pub fn reorder(app: &mut App, track: u32, from: usize, to: usize) {
+    let filled = filled(&app.state, track);
+    if from >= filled.len() {
+        return;
+    }
+    let old_slot = filled[from].0;
+    let mut order: Vec<Slot> = filled.into_iter().map(|(_, sl)| sl).collect();
+    let moving = order.remove(from);
+    let to = to.min(order.len());
+    let moving_index = moving.index;
+    order.insert(to, moving);
+    {
+        let v = app.state.midi_fx.entry(track).or_default();
+        v.resize(SLOTS, None);
+        for (i, sl) in order.iter().enumerate() {
+            v[i] = Some(sl.clone());
+        }
+    }
+    // The moved instance re-hosts under its new slot's key (the old key's editor window goes with it).
+    app.plugins.drop_key(crate::plugins::midi_fx_key(track, old_slot));
+    let _ = app.plugins.create_midi_fx(track, to, moving_index, None);
+    app.invalidate();
+}
+
 /// Removes track `track`'s MIDI FX slot `slot` (its instance goes with it).
 pub fn remove(app: &mut App, track: u32, slot: usize) {
     if let Some(v) = app.state.midi_fx.get_mut(&track) {
