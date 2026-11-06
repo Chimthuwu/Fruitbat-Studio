@@ -1121,7 +1121,9 @@ pub struct State {
     pub device_rack_split_click: Option<std::time::Instant>,
     /// Live parameters of the rack's devices, by plugin-window key (refreshed by
     /// `device_rack::sync_embed`): the controls a tile shows when its editor cannot embed.
-    pub device_rack_params: std::collections::BTreeMap<usize, Vec<(String, f64)>>, 
+    pub device_rack_params: std::collections::BTreeMap<usize, Vec<(String, f64)>>,
+    /// The selected tile index in the device rack, if any.
+    pub device_rack_sel: Option<usize>,
     /// The hovered row whose label is scrolling, as last painted (spec: ui/browser.md §9).
     pub browser_marquee: std::cell::RefCell<Option<views::browser::Marquee>>,
     /// Favorite files (spec: ui/browser.md §10) and the index of the browser's disk folders (§11).
@@ -1569,6 +1571,7 @@ impl App {
                 device_rack_menu: None,
                 device_rack_split_click: None,
                 device_rack_params: Default::default(),
+                device_rack_sel: None,
                 browser_marquee: Default::default(),
                 browser_favs: crate::browser::load_favs(),
                 browser_index: Default::default(),
@@ -7843,15 +7846,58 @@ impl App {
             return self.invalidate();
         }
         // The channel rack's keys while it is in front (spec: ui/channel-rack.md §20).
-        let s = &self.state;
-        if (s.z.last() == Some(&Win::ChannelRack) || s.rack.fill.is_some())
-            && s.menu_open.is_none()
-            && !s.settings.open
-            && s.playlist.edit.is_none()
+        if (self.state.z.last() == Some(&Win::ChannelRack) || self.state.rack.fill.is_some())
+            && self.state.menu_open.is_none()
+            && !self.state.settings.open
+            && self.state.playlist.edit.is_none()
             && crate::rack::key(self, key, ctrl, alt)
         {
             self.rack_pending();
             return;
+        }
+        // The device rack's keys when a tile is selected (main window in front, no dialog, no playlist edit):
+        // arrows move the selection across the device chain, Delete / Backspace remove the selected effect.
+        if self.state.device_rack_sel.is_some()
+            && self.state.playlist.edit.is_none()
+            && self.state.menu_open.is_none()
+            && crate::device_rack::visible(&self.state)
+        {
+            match key {
+                Key::Named(NamedKey::ArrowLeft) => {
+                    if let Some(i) = self.state.device_rack_sel {
+                        let i = i.saturating_sub(1);
+                        *crate::device_rack::rack_sel_mut(&mut self.state) = Some(i);
+                        self.invalidate();
+                    }
+                }
+                Key::Named(NamedKey::ArrowRight) => {
+                    if let Some(i) = self.state.device_rack_sel {
+                        let chain = crate::device_rack::rack_chain(&self.state);
+                        let i = (i + 1).min(chain.len().saturating_sub(1));
+                        *crate::device_rack::rack_sel_mut(&mut self.state) = Some(i);
+                        self.invalidate();
+                    }
+                }
+                Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace) => {
+                    // The instrument tile (chain index 0) is never removable; the effect tiles follow it.
+                    if let Some(i) = self.state.device_rack_sel {
+                        let chain = crate::device_rack::rack_chain(&self.state);
+                        if i > 0 {
+                            if let crate::device_rack::DeviceKind::Fx(track, slot) = chain[i].kind {
+                                let fxk = crate::plugins::fx_key(track, slot);
+                                self.plugins.drop_key(fxk);
+                                if let Some(m) = crate::mixer::track_mut(&mut self.state, track) {
+                                    m.slots[usize::from(slot)] = None;
+                                    m.slot_on[usize::from(slot)] = false;
+                                }
+                                self.invalidate();
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return self.invalidate();
         }
         // The mixer's keys while it is in front (spec: ui/mixer.md §2).
         let s = &self.state;
@@ -9207,6 +9253,11 @@ impl App {
             }
             Action::RackOptions => {
                 let p = rk::options_menu(&self.state, self.state.rack_pos.0, self.state.rack_pos.1 + 28.0);
+                self.state.playlist.popup = Some(p);
+            }
+            Action::DeviceRack(crate::device_rack::RackAct::AddDevice) => {
+                // The device-rack plugin browser: built-in (native) plugins first, display-mode radios as the filter.
+                let p = crate::views::device_rack::add_device_menu(&self.state, self.mouse.0, self.mouse.1);
                 self.state.playlist.popup = Some(p);
             }
             Action::RackFilter => {

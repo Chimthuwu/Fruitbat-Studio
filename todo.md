@@ -6,6 +6,27 @@
 - ✅ `lemon-audio-layer` (10 tests), `lemon-audio-selector` (7 tests) — parallel/selected Bypass/Filter/Delay/Chorus/Drive slots
 - ✅ 58 tests pass across all 7 MIDI/Audio containers (`cargo test -p lemon-arp -p lemon-chord -p lemon-echo -p lemon-note-layer -p lemon-note-selector -p lemon-audio-layer -p lemon-audio-selector`)
 - 📋 **Next: real editor UIs** (currently stubs) + full MIDI processing in note containers (arp timing, chord router)
+## 🎯 Engine Split (2026-11-06) — COMPLETE
+- ✅ `os-engine/src/engine.rs` split into per-concern modules under `engine/` (18 modules: channel, jobs,
+  live_edit, mix, render, sched, transport, triggers, voice + pre-existing auto_bypass/controllers/layers/
+  marks/multicore/notes/param_auto/pdc/rec). engine.rs = Engine struct + core impl + tests (~9.5k → 7.3k lines).
+- ✅ Pure structural refactor, no behavior change; `cargo test --workspace` 2248 passed / 0 failed / 79 ignored.
+- ✅ Commit `57df0c97` pushed to `orchestra/engine-split`; merged to main.
+## 🎯 Current Session (2026-11-04) — Rack Rework Complete
+- ✅ `＋ Add` header button → plugin browser (native built-ins first per section, filter radios in footer)
+- ✅ DELETE/Backspace removes selected effect tile (instrument never removable)
+- ✅ Left/Right arrows move selection across the chain
+- ✅ Hosted plugin tiles replace MIDI FX placeholder
+- ✅ `MoveEffect` / `RemoveInstrument` / `HostReq::RemovePlugin` in control plane (undoable)
+- ✅ Workspace `cargo test` green, release build OK
+- ✅ Commit pushed (`b25bf8fc`, main in sync with origin)
+- 📋 **Next session starts at M9 MIDI-FX crates** (see below)
+
+## 🎯 Session (2026-11-06) — Audit
+- ✅ Audit of all local copies + stray folders: `docs/session-audit-2026-11-06.md`
+- ✅ WIP secured: `orchestra/engine-split` (engine.rs module split) and
+  `orchestra/midi-fx-plugins` (M9 crates) committed and pushed to origin
+- 📋 Order forward: land engine split → midi-fx editors + note processing → M8 track model
 
 ## In flight / partial (from README capabilities)
 - [ ] Playback engine: render-ahead hardening, voice limits, cut groups, glides, layer channels

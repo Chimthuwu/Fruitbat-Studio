@@ -799,6 +799,7 @@ pub(super) mod tests {
     use crate::parallel::Pool;
     use os_model::{Channel, MixerTrack, Note, Pattern, SlotPlugin};
 
+    use std::sync::Mutex;
     /// A small pseudo-random generator, so the projects are the same every run.
     pub struct Lcg(pub u64);
 

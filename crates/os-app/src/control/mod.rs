@@ -74,6 +74,8 @@ impl By {
 pub enum HostReq {
     Instrument { channel: os_model::Id, plugin: String },
     Effect { slot: os_model::Id, plugin: String },
+    /// Remove a hosted plugin instance for channel or slot `owner`.
+    RemovePlugin { owner: u32 },
 }
 
 /// One applied change (a transaction, an undo, a redo, an edit in the interface), as clients read it.
@@ -240,6 +242,8 @@ fn op(c: &Command) -> &'static str {
         Command::SetEq { .. } => "set_eq",
         Command::AddEffect { .. } => "add_effect",
         Command::RemoveEffect { .. } => "remove_effect",
+        Command::MoveEffect { .. } => "move_effect",
+        Command::RemoveInstrument { .. } => "remove_instrument",
         Command::SetSlot { .. } => "set_slot",
         Command::AddPattern { .. } => "add_pattern",
         Command::DeletePattern { .. } => "delete_pattern",
