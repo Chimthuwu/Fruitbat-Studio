@@ -33,6 +33,8 @@
   `orchestra/midi-fx-plugins` (M9 crates) committed and pushed to origin
 - 📋 Order forward: land engine split → midi-fx editors + note processing → M8 track model
 
+- Drag & drop plugins from the browser panel onto device-rack slots (drop inserts at that position; reuse the TilePress reorder-drag machinery)
+
 ## In flight / partial (from README capabilities)
 - [ ] Playback engine: render-ahead hardening, voice limits, cut groups, glides, layer channels
 - [ ] Automation: record into automation clips (clip curves + LFO exist)
