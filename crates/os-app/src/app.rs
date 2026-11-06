@@ -322,11 +322,6 @@ pub enum Action {
     PlArrangement,
     /// Stretch mode switch in the playlist title (Shift+M, spec: ui/playlist.md §9b).
     PlStretch,
-    PlPickTab(crate::playlist::PickKind),
-    PlPick(os_model::ClipSource),
-    /// Picker list background / footer "+".
-    PlPickList,
-    PlPickAdd,
     PlPopup(usize),
     PlPopupSub(usize),
     /// Channel rack title bar (spec: ui/channel-rack.md §7): options ▸, display filter combo, name-width dots,
@@ -632,8 +627,6 @@ pub enum Seg {
     Browser,
     Win(Win),
     Toolbar,
-    /// The playlist's clip source list (inside `Win(Playlist)`: a scroll of the grid leaves it alone).
-    PlPicker,
     /// The device rack panel docked at the bottom (Linear mode; spec model/track-model.md §7).
     DeviceRack,
 }
@@ -6339,8 +6332,6 @@ impl App {
                     | Action::PlGroupArrow(_)
                     | Action::PlLaneArrow(_, _)
                     | Action::PlStretch
-                    | Action::PlPickTab(_)
-                    | Action::PlPickAdd
                     | Action::PlPopup(_)
                     | Action::RackSpeaker
                     | Action::RackLoop
@@ -7579,10 +7570,6 @@ impl App {
             self.state.message = Some(crate::snap::wheel(&mut self.state, notches));
             return None;
         }
-        if matches!(area, Some(Action::PlPick(_) | Action::PlPickList)) {
-            self.scroll_set(Scroll::PlPick, self.scroll_get(Scroll::PlPick) - (dy + dx) * self.state.playlist.pick_row());
-            return Some(Win::Playlist);
-        }
         if matches!(area, Some(Action::PatternNext)) {
             let d = if dy + dx > 0.0 { 1 } else { -1 };
             let n = (i32::from(self.state.pattern.max(1)) + d).clamp(1, i32::from(crate::patterns::MAX)) as u16;
@@ -8541,28 +8528,6 @@ impl App {
                 self.state.playlist.arr_anchor = (r.x - 4.0, r.y);
                 self.state.playlist.popup = Some(pl::arrangement_menu(&self.state, r.x, r.bottom() + 2.0));
             }
-            Action::PlPickTab(k) => self.state.playlist.picker = k,
-            Action::PlPick(src) => {
-                self.state.playlist.source = Some(src);
-                if let os_model::ClipSource::Pattern(n) = src {
-                    self.state.pattern = n;
-                }
-                if right {
-                    let (x, y) = self.mouse;
-                    match src {
-                        // Right-click on a pattern: the PATTERNS commands for it (spec: ui/pattern-menu.md §3).
-                        os_model::ClipSource::Pattern(_) => self.state.playlist.popup = Some(views::menus::pattern_popup(x, y)),
-                        // On an audio or automation clip: its channel's menu, the channel selected in the rack (spec:
-                        // ui/playlist.md §10a).
-                        os_model::ClipSource::Channel(ch) => {
-                            if let Some(row) = self.state.project.channels.iter().position(|c| c.index == ch) {
-                                self.state.rack.select_only(row);
-                            }
-                            self.state.playlist.popup = Some(pl::pick_menu(&self.state, ch, x, y));
-                        }
-                    }
-                }
-            }
             Action::PlPopup(i) => {
                 let Some(p) = self.state.playlist.popup.as_mut() else { return true };
                 let Some(item) = p.items.get(i).cloned() else { return true };
@@ -8819,12 +8784,6 @@ impl App {
             Action::Pat(h) => crate::patterns::hit(s, h),
             Action::Dlg(h) => self.dialog_click(h),
             Action::SongInfo => self.close_song_info(),
-            Action::PlPickList => {}
-            Action::PlPickAdd => {
-                let at = crate::patterns::box_at_mouse(self.mouse);
-                crate::patterns::run(s, crate::patterns::Cmd::FindFirst, at);
-                s.playlist.source = None;
-            }
             Action::Mix(crate::mixer::MHit::EqGraph) => {
                 if let Some(g) = self.top_hit(self.mouse.0, self.mouse.1).map(|h| h.rect) {
                     let (track, band) = (self.state.selected_mixer, crate::mixer::eq_band_at(&self.state, g, self.mouse.0));
@@ -9049,8 +9008,6 @@ impl App {
             | Action::PlLaneArrow(..)
             | Action::PlArrangement
             | Action::PlStretch
-            | Action::PlPickTab(_)
-            | Action::PlPick(_)
             | Action::PlPopup(_)
             | Action::PlPopupSub(_)
             | Action::DeviceRack(_) => {}

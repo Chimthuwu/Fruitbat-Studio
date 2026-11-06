@@ -80,9 +80,11 @@ pub fn scan(root: &Path) -> Vec<Category> {
         .collect()
 }
 
-/// The pick as kept: "Empty" or "<category>/<template>".
+/// The pick as kept: "Linear", "Empty" or "<category>/<template>".
 fn picked() -> String {
-    prefs::text(TEMPLATE_KEY).unwrap_or_else(|| EMPTY.into())
+    // Linear mode is the default template (spec: model/track-model.md §2 "Make it the default project mode"): a new
+    // session and FILE ▸ New open the built-in Linear project until another template is picked.
+    prefs::text(TEMPLATE_KEY).unwrap_or_else(|| LINEAR.into())
 }
 
 /// The picked template's file; `None` for Empty, and for a template whose file has gone (FILE ▸ New gives Empty then).
@@ -125,12 +127,15 @@ pub(crate) fn restore_last(kept: Option<String>) {
 }
 
 impl App {
-    /// The Default template combo was clicked: its tree under the box (`x`, `y`: the box's bottom left), "Empty" then a
-    /// submenu per category, the current pick marked.
+    /// The Default template combo was clicked: its tree under the box (`x`, `y`: the box's bottom left), the built-ins
+    /// then a submenu per category, the current pick marked.
     pub(crate) fn template_menu(&mut self, x: f32, y: f32) {
         use crate::playlist::{Cmd, Mark, PItem, Popup};
         let now = if picked() == LINEAR { LINEAR.into() } else if file().is_some() { picked() } else { EMPTY.into() };
-        let mut items = vec![PItem::new(EMPTY, Cmd::Template(EMPTY.into())).mark(Mark::Radio(now == EMPTY))];
+        let mut items = vec![
+            PItem::new(LINEAR, Cmd::Template(LINEAR.into())).mark(Mark::Radio(now == LINEAR)),
+            PItem::new(EMPTY, Cmd::Template(EMPTY.into())).mark(Mark::Radio(now == EMPTY)),
+        ];
         for c in root().map(|r| scan(&r)).unwrap_or_default() {
             let children = c
                 .templates
@@ -250,9 +255,13 @@ mod tests {
         assert_eq!(items.last().map(|i| i.label.as_ref()), Some(EMPTY));
         let linear = items.iter().find(|i| i.label == LINEAR).expect("the Linear row");
         assert_eq!(linear.cmd, Cmd::NewTemplate(LINEAR.into()));
-        // Classic by default, as every other template and project file gives.
+        // The startup default (Startup project = "Default template", the default pick "Linear"): the Linear project;
+        // the plain built-in project stays Classic, and so does every other template and project file.
         let fresh = App::new(None);
         assert!(!fresh.state.project.linear_mode && fresh.state.project.tracks.is_empty());
+        let mut started = App::new(None);
+        started.startup_project();
+        assert!(started.state.project.linear_mode && !started.state.project.tracks.is_empty());
         // FILE ▸ New with the pick "Linear": the Linear project.
         app.set_template(LINEAR);
         assert_eq!(name(), "Linear");
@@ -304,14 +313,14 @@ mod tests {
             ]
         );
         let mut app = App::new(None);
-        assert_eq!((name(), file_new_label()), ("Empty".to_string(), "New (Empty)".to_string()));
+        assert_eq!((name(), file_new_label()), ("Linear".to_string(), "New (Linear)".to_string()));
         app.open_settings(settings::GENERAL);
         app.act(Action::Settings(SAct::Combo(settings::DEFAULT_TEMPLATE, 10.0, 20.0)));
         let p = app.state.playlist.popup.as_ref().expect("the tree");
         let labels: Vec<&str> = p.items.iter().map(|i| i.label.as_ref()).collect();
-        assert_eq!(labels, ["Empty", "Minimal", "Utility"]);
-        assert_eq!((p.items[0].mark, p.items[1].children.len()), (Mark::Radio(true), 1));
-        let pick = p.items[1].children[0].clone();
+        assert_eq!(labels, ["Linear", "Empty", "Minimal", "Utility"]);
+        assert_eq!((p.items[0].mark, p.items[2].children.len()), (Mark::Radio(true), 1));
+        let pick = p.items[2].children[0].clone();
         assert_eq!((pick.label.as_ref(), &pick.cmd), ("Basic with limiter", &Cmd::Template("Minimal/Basic with limiter".into())));
         let msg = crate::playlist::run(&mut app, pick.cmd);
         assert_eq!(msg.as_deref(), Some("Default template: Basic with limiter"));
@@ -319,7 +328,7 @@ mod tests {
         assert_eq!(file_new_label(), "New (Basic with limiter)");
         app.act(Action::Settings(SAct::Combo(settings::DEFAULT_TEMPLATE, 10.0, 20.0)));
         let p = app.state.playlist.popup.as_ref().unwrap();
-        assert_eq!((p.items[0].mark, p.items[1].children[0].mark), (Mark::Radio(false), Mark::Radio(true)));
+        assert_eq!((p.items[1].mark, p.items[2].children[0].mark), (Mark::Radio(false), Mark::Radio(true)));
         // The settings page's combo shows the pick and opens the tree.
         if let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) {
             app.state.playlist.popup = None;
