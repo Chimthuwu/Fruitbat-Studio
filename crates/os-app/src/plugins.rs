@@ -420,9 +420,7 @@ pub fn builtin_effects() -> Vec<Available> {
 /// device rack (`crate::midi_fx`, spec: plugins/lemon-arp.md). They process notes on the track model's note path
 /// (the engine's MIDI FX milestone wires the audio through; hosting shows and loads them today).
 pub fn builtin_midi_fx() -> Vec<Available> {
-    const N: usize = LINKED_MIDI_FX: [&'static str; 1] = [
-    "const { OnceLock::new() }; N",
-];
+    const N: usize = LINKED_MIDI_FX.len();
     let entries: [*const std::ffi::c_void; N] = [
         &lemon_arp::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
         &lemon_chord::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
@@ -430,12 +428,20 @@ pub fn builtin_midi_fx() -> Vec<Available> {
         &lemon_transpose::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
         &lemon_quantize::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
         &lemon_note_length::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
+        &lemon_key_filter::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
+        &lemon_humanize::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
+        &lemon_velocity_curve::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
+        &lemon_note_delay::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
+        &lemon_note_repeats::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
+        &lemon_note_filter::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
+        &lemon_random::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
+        &lemon_strum::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
     ];
     LIBS.iter().zip(entries).zip(LINKED_MIDI_FX).flat_map(|((lib, entry), name)| linked(lib, entry, name)).collect()
 }
 
 /// The Lemon MIDI FX compiled in (`builtin_midi_fx`, in this order).
-pub const LINKED_MIDI_FX: [&str; 6] = ["Lemon Arp", "Lemon Chord", "Lemon Echo", "Lemon Transpose", "Lemon Quantize", "Lemon Note Length"];
+pub const LINKED_MIDI_FX: [&str; 14] = ["Lemon Arp", "Lemon Chord", "Lemon Echo", "Lemon Transpose", "Lemon Quantize", "Lemon Note Length", "Lemon Key Filter", "Lemon Humanize", "Lemon Velocity Curve", "Lemon Note Delay", "Lemon Note Repeats", "Lemon Note Filter", "Lemon Random", "Lemon Strum"];
 
 /// The plugins of a CLAP entry table linked into this program.
 fn linked(cell: &OnceLock<Option<Arc<os_clap::Library>>>, entry: *const std::ffi::c_void, name: &str) -> Vec<Available> {
