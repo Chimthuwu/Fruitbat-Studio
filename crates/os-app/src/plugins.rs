@@ -426,6 +426,7 @@ pub fn builtin_midi_fx() -> Vec<Available> {
         &lemon_arp::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
         &lemon_chord::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
         &lemon_echo::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
+        &lemon_velocity_curve::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
         &lemon_humanize::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
         &lemon_key_filter::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
     ];
@@ -433,7 +434,7 @@ pub fn builtin_midi_fx() -> Vec<Available> {
 }
 
 /// The Lemon MIDI FX compiled in (`builtin_midi_fx`, in this order).
-pub const LINKED_MIDI_FX: [&str; 5] = ["Lemon Arp", "Lemon Chord", "Lemon Echo", "Lemon Key Filter", "Lemon Humanize"];
+pub const LINKED_MIDI_FX: [&str; 6] = ["Lemon Arp", "Lemon Chord", "Lemon Echo", "Lemon Key Filter", "Lemon Humanize", "Lemon Velocity Curve"];
 
 /// The plugins of a CLAP entry table linked into this program.
 fn linked(cell: &OnceLock<Option<Arc<os_clap::Library>>>, entry: *const std::ffi::c_void, name: &str) -> Vec<Available> {
