@@ -95,6 +95,13 @@ fn drop_highlight(ui: &mut Ui, s: &State, tiles: &[(Device, Rect)]) {
     ui.c.fill_rect(Rect::new(x - 2.0, tiles[0].1.y, 4.0, h), t.glyph);
 }
 
+/// The keys of every device tile in the rack (any kind, floated or not): what the params cache covers so a hosted
+/// (non-builtin) tile's placeholder body gets its parameter rows too.
+pub fn device_keys(s: &State) -> Vec<usize> {
+    let r = panel_rect(s, s.screen.0, s.screen.1);
+    layout(s, r).into_iter().filter_map(|(d, _)| d.key).collect()
+}
+
 /// The tile bodies the rack embeds a built-in editor into: the built-in devices the user has not popped out. The
 /// app pins each editor's native window here on the next tick (`device_rack::sync_embed`).
 pub fn device_rects(s: &State) -> Vec<(usize, Rect)> {

@@ -524,11 +524,13 @@ pub fn sync_embed(app: &mut App) {
         }
     }
     app.state.device_rack_embed = keys;
-    // The tiles' live parameters (every device's key, so a tile's placeholder body always has its controls): each
-    // row is (param id, name, normalized value) for the params a tile can render and set.
-    app.state.device_rack_params = tiles
+    // The tiles' live parameters (every device's key, so a tile's placeholder body always has its controls —
+    // hosted, non-builtin devices included: their param list is read straight off the hosted instance, no editor
+    // needed): each row is (param id, name, normalized value) for the params a tile can render and set.
+    let keys = crate::views::device_rack::device_keys(&app.state);
+    app.state.device_rack_params = keys
         .iter()
-        .filter_map(|&(k, _)| {
+        .filter_map(|&k| {
             let ps = app
                 .plugins
                 .param_infos(k)
@@ -889,6 +891,101 @@ mod tests {
         assert!(stepped >= one - 0.001, "the › stepper scrolled right");
         run(&mut app, RackAct::ScrollBy(-10.0));
         assert_eq!(app.state.device_rack_scroll_x, 0.0, "the ‹ stepper stops at the start");
+    }
+
+    /// A hosted (non-builtin) device tile gets parameter rows without its editor ever being opened: the params
+    /// cache (`device_rack_params`) covers every keyed tile's instance, built-in or not. A fake effect with one
+    /// parameter stands in for the hosted instance.
+    #[test]
+    fn hosted_tile_gets_param_rows() {
+        struct P;
+        impl os_engine::Instrument for P {
+            fn note_on(&mut self, _: u32, _: u8, _: f32) {}
+            fn note_off(&mut self, _: u32, _: u8) {}
+            fn process(&mut self, _: u32, _: &mut [f32], _: &mut [f32]) {}
+        }
+        impl os_engine::HostedEffect for P {
+            fn process_fx(&mut self, _: u32, _: &mut [f32], _: &mut [f32]) {}
+        }
+        impl os_host::Plugin for P {
+            fn desc(&self) -> &os_host::Descriptor {
+                static D: std::sync::OnceLock<os_host::Descriptor> = std::sync::OnceLock::new();
+                D.get_or_init(|| os_host::Descriptor {
+                    format: os_host::Format::Clap,
+                    id: "test.fx".into(),
+                    name: "Test FX".into(),
+                    vendor: "Test".into(),
+                    version: "1.0".into(),
+                    features: Vec::new(),
+                    kind: os_host::Kind::Effect,
+                    path: std::path::PathBuf::from("C:/Plugins/Test FX.clap"),
+                })
+            }
+            fn activate(&mut self, _: u32) -> bool {
+                true
+            }
+            fn idle(&mut self) {}
+            fn has_editor(&self) -> bool {
+                false
+            }
+            fn editor_open(&self) -> bool {
+                false
+            }
+            fn open_editor(&mut self, _: *mut std::ffi::c_void, _: f32) -> Result<(u32, u32), String> {
+                Err(String::new())
+            }
+            fn editor_size(&self) -> Option<(u32, u32)> {
+                None
+            }
+            fn close_editor(&mut self) {}
+            fn save_state(&self) -> Option<Vec<u8>> {
+                None
+            }
+            fn load_state(&mut self, _: &[u8]) -> bool {
+                false
+            }
+            fn param_count(&self) -> usize {
+                1
+            }
+            fn param_info(&self, index: usize) -> Option<os_host::ParamInfo> {
+                (index == 0).then(|| os_host::ParamInfo {
+                    id: 7,
+                    name: "Drive".into(),
+                    unit: String::new(),
+                    group: String::new(),
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.5,
+                    steps: 0,
+                    automatable: true,
+                    read_only: false,
+                    hidden: false,
+                    bypass: false,
+                    enumerated: false,
+                })
+            }
+            fn param_value(&self, _: u32) -> Option<f64> {
+                Some(0.5)
+            }
+        }
+        let mut app = app();
+        crate::playlist::run(
+            &mut app,
+            crate::playlist::Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
+        );
+        let tr = app.state.project.tracks.last().unwrap().clone();
+        let strip = tr.mixer_strip;
+        // The slot holds a (non-builtin) device and an instance is hosted under its key: the rack tile's state.
+        crate::mixer::track_mut(&mut app.state, strip).unwrap().slots[0] =
+            Some(os_model::SlotPlugin { id: os_model::Id::NONE, name: "Test FX".into(), state: Vec::new() });
+        let plugin: std::sync::Arc<std::sync::Mutex<P>> = std::sync::Arc::new(std::sync::Mutex::new(P));
+        app.plugins.hosted.insert(crate::plugins::fx_key(strip, 0), crate::plugins::Hosted::new(plugin));
+        sync_embed(&mut app);
+        let key = crate::plugins::fx_key(strip, 0);
+        assert!(
+            app.state.device_rack_params.get(&key).map(|ps| !ps.is_empty()).unwrap_or(false),
+            "the hosted slot tile has >= 1 param row"
+        );
     }
 
     /// The tile's parameter rows set through the one path (`set_param_value` → `Plugins::set_param`): with an
