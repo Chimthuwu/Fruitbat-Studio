@@ -11719,14 +11719,31 @@ mod tests {
             "the topmost hit at the gap should be AddAt, got {top}"
         );
         app.mouse_down();
-        let p = app.state.playlist.popup.as_ref().expect("the click opens the device browser");
-        // The MIDI FX section leads the browser (the pick lands in the track's MIDI FX slots).
-        assert_eq!(p.items.first().map(|i| i.label.as_ref()), Some("MIDI FX"));
+        app.mouse_up();
+        // The gap ＋ opens the palette-style device browser (rack form), whose first section is MIDI FX.
+        assert!(crate::plugin_palette::is_open(&app.state), "the click opens the device browser");
+        assert_eq!(
+            crate::plugin_palette::title(&app.state.palette),
+            "Add device",
+            "the rack browser's title"
+        );
+        let rows = crate::plugin_palette::rows(&app.state);
+        assert_eq!(
+            rows.first().map(|r| match r {
+                crate::plugin_palette::Row::Head { label, .. } => label.clone(),
+                _ => String::new(),
+            }),
+            Some("MIDI FX".to_string()),
+            "the MIDI FX section leads the browser (the pick lands in the track's MIDI FX slots)"
+        );
         assert!(
-            p.items.iter().any(|i| !i.enabled),
+            !rows.iter().any(|r| matches!(r, crate::plugin_palette::Row::MidiFx { .. })),
+            "no MIDI FX compiled in shows the fallback note"
+        );
+        assert!(
+            rows.iter().any(|r| matches!(r, crate::plugin_palette::Row::Note(_))),
             "an empty list shows its fallback row"
         );
-        app.mouse_up();
     }
 
     #[test]

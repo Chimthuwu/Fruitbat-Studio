@@ -330,16 +330,10 @@ pub fn run(app: &mut App, act: RackAct) {
             app.open_plugin_palette(crate::plugin_menu::Target::All, at, None);
         }
         RackAct::AddAt(slot) => {
-            // Every ＋ opens the one device browser: MIDI FX, instruments and effects (effects land in
-            // `slot`, MIDI FX in the track's MIDI FX slots, instruments as a new channel).
-            let p = crate::views::device_rack::add_device_menu(
-                &app.state,
-                &app.plugins.midi_fx,
-                app.mouse.0,
-                app.mouse.1,
-                slot,
-            );
-            app.state.playlist.popup = Some(p);
+            // Every ＋ opens the palette-style device browser (the rack's Target::Rack): MIDI FX first, then
+            // instruments and effects — an effect pick lands in `slot`, MIDI FX in the MIDI FX slots, an
+            // instrument on the track's channel.
+            app.open_plugin_palette(crate::plugin_menu::Target::Rack(slot), app.mouse, None);
         }
         RackAct::TilePress(kind) => {
             app.state.device_rack_drag = Some(kind);
@@ -347,14 +341,7 @@ pub fn run(app: &mut App, act: RackAct) {
             app.drag = Some(Drag::DeviceRackTile { kind, _x0: app.mouse.0 });
         }
         RackAct::AddDevice => {
-            let p = crate::views::device_rack::add_device_menu(
-                &app.state,
-                &app.plugins.midi_fx,
-                app.mouse.0,
-                app.mouse.1,
-                None,
-            );
-            app.state.playlist.popup = Some(p);
+            app.open_plugin_palette(crate::plugin_menu::Target::Rack(None), app.mouse, None);
         }
         RackAct::Reorder { from, to } => {
             let _ = reorder(&mut app.state, from, to);
@@ -987,10 +974,11 @@ mod tests {
         // The selection is untouched by a failed reorder.
     }
 
-    /// The device rack's "＋ Add" browser lists the native (built-in) plugins first, then the installed ones, and
-    /// exposes the display-mode radios as the filter option for the full plugin hierarchy.
+    /// The device rack's ＋ browser is the plugin palette in its rack form: a MIDI FX section first, then the
+    /// instruments and effects each led by a "Lemon" group of the built-ins before the installed ones.
     #[test]
     fn add_device_browser_lists_native_plugins_first() {
+        use crate::plugin_palette::{self as pal, Row};
         let mut app = app();
         crate::playlist::run(
             &mut app,
@@ -1000,21 +988,29 @@ mod tests {
         app.plugins.available.push(crate::plugin_db::fake("Test Synth", os_host::Kind::Instrument));
         app.plugins.effects.push(crate::plugin_db::fake("Test FX", os_host::Kind::Effect));
         app.state.plugdb.rebuild(&app.plugins);
-        let s = &app.state;
-        let popup = crate::views::device_rack::add_device_menu(s, &app.plugins.midi_fx, 0.0, 0.0, None);
-        let labels: Vec<&str> = popup.items.iter().map(|i| i.label.as_ref()).collect();
-        // Native plugins must appear before installed plugins (native-first), within each section.
-        let at = |name: &str| labels.iter().position(|l| *l == name).unwrap_or_else(|| panic!("{name} missing\nlabels={labels:?}"));
+        app.open_plugin_palette(crate::plugin_menu::Target::Rack(Some(1)), (0.0, 0.0), None);
+        assert!(pal::is_open(&app.state), "the ＋ opens the palette-style browser");
+        let rows = pal::rows(&app.state);
+        let labels: Vec<String> = rows
+            .iter()
+            .map(|r| match r {
+                Row::Head { label, .. } => label.clone(),
+                Row::MidiFx { at } => app.state.palette.midi_fx[*at].0.clone(),
+                Row::Plugin { effect, at } => pal::entry(&app.state, *effect, *at).map(|e| e.label.clone()).unwrap_or_default(),
+                Row::Note(t) => (*t).to_string(),
+            })
+            .collect();
+        let at = |name: &str| labels.iter().position(|l| l == name).unwrap_or_else(|| panic!("{name} missing\nlabels={labels:?}"));
         // The MIDI FX section leads the browser (its picks go to the MIDI FX slots, before the instrument).
-        assert_eq!(labels.first().copied(), Some("MIDI FX"), "the MIDI FX section is first\nlabels={labels:?}");
+        assert_eq!(labels.first().map(String::as_str), Some("MIDI FX"), "the MIDI FX section is first\nlabels={labels:?}");
         assert!(at("Lemon Arp") < at("Instruments"), "MIDI FX built-ins listed above the instruments");
         assert!(at("Lemon Sampler") < at("Test Synth"), "native instruments first\nlabels={labels:?}");
         assert!(at("Lemon Reverb") < at("Test FX"), "native effects first\nlabels={labels:?}");
         assert!(at("Instruments") < at("Test Synth") && at("Test Synth") < at("Effects") && at("Effects") < at("Test FX"));
         // Each section groups its built-ins under a "Lemon" header at the very top, before third-party.
         let lemon_after = |head: &str| {
-            let h = labels.iter().position(|l| *l == head).unwrap();
-            labels[h..].iter().position(|l| *l == "Lemon").unwrap() + h
+            let h = labels.iter().position(|l| l == head).unwrap();
+            labels[h..].iter().position(|l| l == "Lemon").unwrap() + h
         };
         assert_eq!(labels[lemon_after("Instruments")], "Lemon", "the instruments' Lemon group");
         assert!(lemon_after("Instruments") < at("Test Synth"), "the Lemon group precedes installed instruments");
@@ -1027,11 +1023,104 @@ mod tests {
         for a in crate::plugins::builtin_effects().iter() {
             assert!(at(&a.desc.name) < at("Test FX"), "{} must precede installed effects", a.desc.name);
         }
-        // The footer of the browser holds the display-mode filter radios (Categories / Simple / By vendor).
-        let footer = popup.items[popup.items.len() - 3..].to_vec();
-        assert!(
-            footer.iter().any(|i| i.label == "Categories"),
-            "footer must offer the display-mode filter\nfooter={footer:?}"
+    }
+
+    /// The rack browser follows the track's kind (§7's chain): a MIDI track's ＋ offers MIDI FX, instruments and
+    /// audio FX; an audio track's ＋ offers only audio FX (no instruments, no MIDI FX).
+    #[test]
+    fn rack_browser_filters_by_track_kind() {
+        use crate::plugin_palette::{self as pal, Row};
+        let mut app = app();
+        crate::playlist::run(
+            &mut app,
+            crate::playlist::Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
         );
+        app.plugins = crate::plugins::Plugins::builtins();
+        app.plugins.available.push(crate::plugin_db::fake("Test Synth", os_host::Kind::Instrument));
+        app.plugins.effects.push(crate::plugin_db::fake("Test FX", os_host::Kind::Effect));
+        app.state.plugdb.rebuild(&app.plugins);
+        // A MIDI track: all three sections.
+        app.open_plugin_palette(crate::plugin_menu::Target::Rack(None), (0.0, 0.0), None);
+        let rows = pal::rows(&app.state);
+        let heads: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| match r {
+                Row::Head { label, major: true } => Some(label.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(heads, ["MIDI FX", "Instruments", "Effects"], "a MIDI track's sections\n{heads:?}");
+        // An audio track: only the effects (no MIDI FX rows, no instrument rows).
+        crate::playlist::run(
+            &mut app,
+            crate::playlist::Cmd::TrackMode(2, crate::track_links::Mode::LinearAudio),
+        );
+        app.open_plugin_palette(crate::plugin_menu::Target::Rack(None), (0.0, 0.0), None);
+        let rows = pal::rows(&app.state);
+        let heads: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| match r {
+                Row::Head { label, major: true } => Some(label.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(heads, ["Effects"], "an audio track's sections\n{heads:?}");
+        assert!(!rows.iter().any(|r| matches!(r, Row::MidiFx { .. })), "no MIDI FX on an audio track");
+        assert!(
+            !rows.iter().any(|r| matches!(r, Row::Plugin { effect: false, .. })),
+            "no instruments on an audio track"
+        );
+    }
+
+    /// The rack browser's picks keep the chain's routing (§7): a MIDI FX pick goes to the MIDI FX slots, an
+    /// effect pick to the gap's mixer slot of the rack track's strip, an instrument pick onto the track's own
+    /// instrument channel (a replace, not a new channel).
+    #[test]
+    fn rack_browser_picks_route_by_the_chain() {
+        use crate::plugin_palette::{self as pal, Row};
+        use crate::playlist::Cmd;
+        let mut app = app();
+        crate::playlist::run(
+            &mut app,
+            crate::playlist::Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
+        );
+        app.plugins = crate::plugins::Plugins::builtins();
+        app.plugins.available.push(crate::plugin_db::fake("Test Synth", os_host::Kind::Instrument));
+        app.plugins.effects.push(crate::plugin_db::fake("Test FX", os_host::Kind::Effect));
+        app.state.plugdb.rebuild(&app.plugins);
+        app.open_plugin_palette(crate::plugin_menu::Target::Rack(Some(3)), (0.0, 0.0), None);
+        let rows = pal::rows(&app.state);
+        let tr = app.state.project.tracks.last().unwrap().clone();
+        let strip = tr.mixer_strip;
+        let chan = tr.channel.unwrap();
+        let chan_row = app.state.project.channels.iter().position(|c| c.index == chan).unwrap();
+        for (i, r) in rows.iter().enumerate() {
+            match *r {
+                Row::MidiFx { .. } => {
+                    assert!(
+                        matches!(pal::pick_cmd(&app.state, r), Some(Cmd::Plugin(crate::plugin_menu::PlugCmd::MidiFxAdd { .. }))),
+                        "a MIDI FX pick adds a MIDI FX"
+                    );
+                }
+                Row::Plugin { effect: true, at } => {
+                    let idx = pal::entry(&app.state, true, at).unwrap().index;
+                    assert_eq!(
+                        pal::pick_cmd(&app.state, r),
+                        Some(Cmd::SlotWin(strip, Box::new(Cmd::Mixer(crate::mixer::MCmd::AddEffect(3, idx))))),
+                        "an effect pick lands in the gap's slot of the rack track's strip"
+                    );
+                }
+                Row::Plugin { effect: false, at } => {
+                    let idx = pal::entry(&app.state, false, at).unwrap().index;
+                    assert_eq!(
+                        pal::pick_cmd(&app.state, r),
+                        Some(Cmd::Plugin(crate::plugin_menu::PlugCmd::Replace { index: idx, row: chan_row })),
+                        "an instrument pick replaces the track's instrument channel"
+                    );
+                }
+                _ => {}
+            }
+            let _ = i;
+        }
     }
 }

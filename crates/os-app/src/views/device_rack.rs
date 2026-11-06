@@ -11,9 +11,6 @@ use os_ui::{Color, Rect, kit};
 
 use crate::app::{Action, State};
 use crate::device_rack::{self, Device, DeviceKind, HEADER_H, RackAct, TILE_W};
-use crate::plugin_db::Entry;
-use crate::plugin_menu::{self, pick, Target};
-use crate::playlist::{Popup, PItem};
 use crate::views::{Ui, fnt};
 
 /// The rack's panel rect in the window: the full width, its height at the bottom edge (`device_rack::height`).
@@ -442,47 +439,3 @@ pub fn paint_menu(ui: &mut Ui, s: &State) {
     let _ = d;
 }
 
-/// The device rack's device browser popup (spec: ui/device-rack.md §3): the MIDI FX built-ins first (a pick
-/// lands in the rack track's MIDI FX slots — correct signal flow: a MIDI FX cannot sit after the instrument),
-/// then instruments and effects, built-in (native) plugins first, then installed ones. Effects go into mixer
-/// slot `slot` (the gap the ＋ was pressed at, else the first empty slot); the display-mode radios below the
-/// list are the filter option for the full plugin hierarchy.
-pub(crate) fn add_device_menu(s: &State, mfx: &[crate::plugins::Available], x: f32, y: f32, slot: Option<u8>) -> Popup {
-    let mut items = Vec::new();
-    items.push(PItem::head("MIDI FX"));
-    if mfx.is_empty() {
-        items.push(PItem::new("(no MIDI FX plugins compiled in)", crate::playlist::Cmd::Nothing).off());
-    }
-    for (index, e) in mfx.iter().enumerate() {
-        items.push(PItem::new(
-            e.desc.name.clone(),
-            crate::playlist::Cmd::Plugin(crate::plugin_menu::PlugCmd::MidiFxAdd { index }),
-        ));
-    }
-    items.push(PItem::head("Instruments"));
-    items.extend(add_device_section(s, false, slot));
-    items.push(PItem::head("Effects"));
-    items.extend(add_device_section(s, true, slot));
-    let mut p = Popup { x, y, items, sub: None, scroll: [0; 2] };
-    p.items.extend(plugin_menu::footer(s));
-    p
-}
-
-/// One device-rack browser section, native first (spec: ui/device-rack.md §3): a "Lemon" group holds every
-/// built-in at the very top, then the installed (third-party) ones in display order. Effects pick mixer slot
-/// `slot` (the gap's slot; `None` = the first empty slot of the selected track).
-fn add_device_section(s: &State, effect: bool, slot: Option<u8>) -> Vec<PItem> {
-    let target = if effect { Target::Fx(slot) } else { Target::Gen(None) };
-    let list = if effect { &s.plugdb.lists.fx } else { &s.plugdb.lists.gens };
-    let mut v = Vec::new();
-    let builtins: Vec<&Entry> = list.iter().filter(|e| e.builtin).collect();
-    if !builtins.is_empty() {
-        v.push(PItem::head("Lemon"));
-        v.extend(builtins.iter().map(|e| PItem::new(e.label.clone(), pick(target, effect, e.index))));
-        v.push(PItem::sep());
-    }
-    for e in list.iter().filter(|e| !e.builtin) {
-        v.push(PItem::new(e.label.clone(), pick(target, effect, e.index)));
-    }
-    v
-}

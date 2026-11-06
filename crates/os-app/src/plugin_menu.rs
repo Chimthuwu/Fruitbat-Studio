@@ -55,6 +55,9 @@ pub enum Target {
     /// Generators for playlist track `.0`'s Track mode ▸ Instrument track ▸: a new channel, the track's instrument track
     /// (spec: ui/playlist.md §6c).
     Track(u16),
+    /// The device rack's browser: MIDI FX, instruments and effects for the rack track; an effect pick lands in mixer
+    /// slot `.0` (the gap's slot; `None` = the first empty slot of the rack track's strip).
+    Rack(Option<u8>),
 }
 
 /// What picking plugin `index` (a generator, or an effect with `effect`) runs for `target`.
@@ -70,10 +73,13 @@ pub(crate) fn pick(target: Target, effect: bool, index: usize) -> Cmd {
     }
     Cmd::Plugin(match (target, effect) {
         (Target::Fx(slot), _) => PlugCmd::Effect { index, slot },
+        (Target::Rack(slot), true) => PlugCmd::Effect { index, slot },
         (_, true) => PlugCmd::Effect { index, slot: None },
         (Target::Gen(after), false) => PlugCmd::Generator { index, after },
         (Target::Replace(row), false) => PlugCmd::Replace { index, row },
-        (Target::All | Target::Container(_) | Target::Member(..) | Target::MemberInst(..) | Target::Track(_), false) => PlugCmd::Generator { index, after: None },
+        // A rack instrument pick is refined by `plugin_palette::pick_cmd` (the track's own channel); a new channel is
+        // the fallback when the rack track has none.
+        (Target::All | Target::Rack(_) | Target::Container(_) | Target::Member(..) | Target::MemberInst(..) | Target::Track(_), false) => PlugCmd::Generator { index, after: None },
     })
 }
 
@@ -145,13 +151,6 @@ pub(crate) fn footer(s: &State) -> Vec<PItem> {
 pub fn items(s: &State, target: Target, nested: bool) -> Vec<PItem> {
     let mut v = Vec::new();
     match target {
-        Target::All => {
-            v.push(PItem::head("Generators"));
-            v.extend(section(s, false, target, nested));
-            v.push(PItem::col());
-            v.push(PItem::head("Effects"));
-            v.extend(section(s, true, target, nested));
-        }
         // A channel's container takes instruments and effects (spec: plugins/patcher/README.md §4.4).
         Target::Container(crate::container::CHANNEL) => {
             v.push(PItem::head("Instruments"));
@@ -161,6 +160,15 @@ pub fn items(s: &State, target: Target, nested: bool) -> Vec<PItem> {
             v.extend(section(s, true, target, nested));
         }
         Target::Gen(_) | Target::Replace(_) | Target::MemberInst(..) | Target::Track(_) => v.extend(section(s, false, target, nested)),
+        // The rack browser lists its rows in the palette itself (`plugin_palette::rows`); a menu asking for it (none
+        // does today) falls back to the all-plugins listing.
+        Target::Rack(_) | Target::All => {
+            v.push(PItem::head("Generators"));
+            v.extend(section(s, false, target, nested));
+            v.push(PItem::col());
+            v.push(PItem::head("Effects"));
+            v.extend(section(s, true, target, nested));
+        }
         Target::Fx(_) | Target::Container(_) | Target::Member(..) => v.extend(section(s, true, target, nested)),
     }
     v.extend(footer(s));

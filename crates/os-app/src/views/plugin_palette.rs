@@ -216,6 +216,26 @@ fn list(ui: &mut Ui, s: &State) {
                 }
             }
             Row::Note(text) => super::strum::label(ui, Font::new(14), r.x + 12.0, r.cy(), -1, t.text_faint, text),
+            &Row::MidiFx { at } => {
+                let Some((label, _)) = p.midi_fx.get(at) else { continue };
+                let hint = format!("Add the MIDI FX {label} (Shift+click: keep the palette open)");
+                let hov = ui.hit(r, Action::Palette(PalAct::Row(i)), hint);
+                let sel = i == p.sel;
+                let bar = Rect::new(r.x + 3.0, r.y + 1.0, r.w - 6.0, r.h - 2.0);
+                if sel {
+                    let bg = if lemon { t.brand_sel(brand::COLORED_DARK) } else { t.menu_drop_hi };
+                    ui.c.fill_rrect(bar, 4.0, if hov { bg.mix(t.button_hi, 0.25) } else { bg });
+                    ui.c.fill_rrect(Rect::new(bar.x, bar.y + 4.0, 3.0, bar.h - 8.0), 1.5, t.accent);
+                } else if hov {
+                    kit::row_highlight(ui.c, t, Rect::new(r.x, r.y + 1.0, r.w, r.h - 2.0));
+                }
+                let ink = if sel && lemon { t.brand_sel(brand::HIGHLIGHT) } else if sel || hov { t.glyph } else { t.text };
+                let nx = r.x + 27.0;
+                ui.c.text_clip(name_f, nx, (r.cy() - lh / 2.0).round(), r.right() - 10.0 - nx, ink, label);
+                let tag = "MIDI FX";
+                let dw = ui.c.text_width(small, tag);
+                ui.c.text_clip(small, r.right() - 10.0 - dw, (r.cy() - slh / 2.0).round(), dw, t.text_dim, tag);
+            }
             &Row::Plugin { effect, at } => {
                 let Some(e) = pal::entry(s, effect, at) else { continue };
                 let hint = format!("Add {} (Shift+click: keep the palette open)", e.label);

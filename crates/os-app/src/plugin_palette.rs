@@ -72,6 +72,9 @@ pub struct PaletteUi {
     pub track: Option<u16>,
     pub query: String,
     pub kind: Kind,
+    /// The MIDI FX plugins (label, index into `Plugins::midi_fx`) captured when the rack browser opened: its
+    /// first section's rows.
+    pub midi_fx: Vec<(String, usize)>,
     /// The highlighted row (an index into `rows`).
     pub sel: usize,
     /// The list's scroll, in px.
@@ -80,7 +83,7 @@ pub struct PaletteUi {
 
 impl Default for PaletteUi {
     fn default() -> Self {
-        PaletteUi { pos: (0.0, 0.0), target: Target::All, track: None, query: String::new(), kind: Kind::All, sel: 0, scroll: 0.0 }
+        PaletteUi { pos: (0.0, 0.0), target: Target::All, track: None, query: String::new(), kind: Kind::All, midi_fx: Vec::new(), sel: 0, scroll: 0.0 }
     }
 }
 
@@ -91,6 +94,8 @@ pub enum Row {
     Head { label: String, major: bool },
     /// Plugin `at` of the generator list (`effect` false) or the effect list (`plugdb.lists`).
     Plugin { effect: bool, at: usize },
+    /// MIDI FX `at` of the palette's captured MIDI FX list (`PaletteUi::midi_fx`): the rack browser's first section.
+    MidiFx { at: usize },
     /// A line of faint text: an empty kind, no match.
     Note(&'static str),
 }
@@ -100,15 +105,20 @@ impl Row {
         match self {
             Row::Head { major: true, .. } => MAJOR_H,
             Row::Head { .. } => HEAD_H,
-            Row::Plugin { .. } | Row::Note(_) => ROW_H,
+            Row::Plugin { .. } | Row::MidiFx { .. } | Row::Note(_) => ROW_H,
         }
     }
+}
+
+/// Whether the row is a pick (a plugin or a MIDI FX): the highlight's stepping lands on it.
+fn pickable(r: &Row) -> bool {
+    matches!(r, Row::Plugin { .. } | Row::MidiFx { .. })
 }
 
 /// Whether the palette's target lists generators and effects (`.0`, `.1`).
 fn kinds_of(target: Target) -> (bool, bool) {
     match target {
-        Target::All | Target::Container(crate::container::CHANNEL) => (true, true),
+        Target::All | Target::Rack(_) | Target::Container(crate::container::CHANNEL) => (true, true),
         Target::Gen(_) | Target::Replace(_) | Target::MemberInst(..) | Target::Track(_) => (true, false),
         Target::Fx(_) | Target::Container(_) | Target::Member(..) => (false, true),
     }
@@ -131,6 +141,9 @@ fn shown_kinds(p: &PaletteUi) -> (bool, bool) {
 
 /// The title (§6.1).
 pub fn title(p: &PaletteUi) -> &'static str {
+    if matches!(p.target, Target::Rack(_)) {
+        return "Add device";
+    }
     match kinds_of(p.target) {
         (true, true) => "Add plugin",
         (true, false) => "Add instrument",
@@ -190,6 +203,9 @@ fn rank(e: &Entry, effect: bool, q: &str, words: &[&str]) -> Option<u8> {
 /// The list's rows (§6.2, §6.3).
 pub fn rows(s: &State) -> Vec<Row> {
     let p = &s.palette;
+    if matches!(p.target, Target::Rack(_)) {
+        return rack_rows(s);
+    }
     let (gens, fx) = shown_kinds(p);
     let lists = &s.plugdb.lists;
     let q = p.query.trim().to_lowercase();
@@ -265,9 +281,112 @@ pub fn rows(s: &State) -> Vec<Row> {
     v
 }
 
-/// The plugins among `rows` (what a count counts).
+/// The device rack browser's rows: MIDI FX first (all-native), then Instruments and Effects, each led by a
+/// "Lemon" group of the built-ins before the installed ones. Which sections show follows the rack track's kind
+/// (§7's chain: MIDI FX → instrument → audio FX): a MIDI track takes all three, an audio track only the effects.
+fn rack_rows(s: &State) -> Vec<Row> {
+    let p = &s.palette;
+    let q = p.query.trim().to_lowercase();
+    let midi = crate::device_rack::rack_track(s).map_or(true, |tr| tr.kind == os_model::TrackKind::Midi);
+    if !q.is_empty() {
+        let words: Vec<&str> = q.split_whitespace().collect();
+        let mut hits: Vec<(u8, bool, String, Row)> = Vec::new();
+        if midi {
+            for (at, (label, _)) in p.midi_fx.iter().enumerate() {
+                let l = label.to_lowercase();
+                if words.iter().all(|w| l.contains(w)) {
+                    hits.push((1, false, l, Row::MidiFx { at }));
+                }
+            }
+        }
+        for (effect, list, on) in [(false, &s.plugdb.lists.gens, midi), (true, &s.plugdb.lists.fx, true)] {
+            if !on {
+                continue;
+            }
+            for (at, e) in list.iter().enumerate() {
+                if let Some(r) = rank(e, effect, &q, &words) {
+                    hits.push((r, !e.favorite, e.label.to_lowercase(), Row::Plugin { effect, at }));
+                }
+            }
+        }
+        hits.sort_by(|a, b| (a.0, a.1, &a.2).cmp(&(b.0, b.1, &b.2)));
+        if hits.is_empty() {
+            return vec![Row::Note("No plugin matches")];
+        }
+        return hits.into_iter().map(|h| h.3).collect();
+    }
+    let mut v = Vec::new();
+    if midi {
+        v.push(Row::Head { label: "MIDI FX".into(), major: true });
+        if p.midi_fx.is_empty() {
+            v.push(Row::Note("(no MIDI FX plugins compiled in)"));
+        } else {
+            v.extend((0..p.midi_fx.len()).map(|at| Row::MidiFx { at }));
+        }
+        v.push(Row::Head { label: "Instruments".into(), major: true });
+        v.extend(rack_section(s, false));
+    }
+    v.push(Row::Head { label: "Effects".into(), major: true });
+    v.extend(rack_section(s, true));
+    v
+}
+
+/// One rack browser section, native first: a "Lemon" group holds every built-in at the top, then the installed
+/// ones in the display arrangement the palette's own list uses (favourites, then the view's order).
+fn rack_section(s: &State, effect: bool) -> Vec<Row> {
+    let list = if effect { &s.plugdb.lists.fx } else { &s.plugdb.lists.gens };
+    if list.is_empty() {
+        return vec![Row::Note(if effect { "(no effect plugins found)" } else { "(no instruments found)" })];
+    }
+    let mut v = Vec::new();
+    let builtins: Vec<usize> = (0..list.len()).filter(|&i| list[i].builtin).collect();
+    if !builtins.is_empty() {
+        v.push(Row::Head { label: "Lemon".into(), major: false });
+        v.extend(builtins.iter().map(|&i| Row::Plugin { effect, at: i }));
+    }
+    let rest: Vec<usize> = (0..list.len()).filter(|&i| !list[i].builtin).collect();
+    if rest.is_empty() {
+        return v;
+    }
+    let row = |at: usize| Row::Plugin { effect, at };
+    let head = |label: &str| Row::Head { label: label.into(), major: false };
+    let favs: Vec<usize> = rest.iter().copied().filter(|&i| list[i].favorite).collect();
+    if !favs.is_empty() {
+        v.push(head("Favourites"));
+        v.extend(favs.iter().copied().map(row));
+    }
+    match s.plugdb.prefs.menu_view {
+        MenuView::Simple => {
+            if !favs.is_empty() {
+                v.push(head("Others"));
+            }
+            v.extend(rest.iter().copied().map(row));
+        }
+        MenuView::Categories => {
+            for cat in db::categories(effect) {
+                let in_cat: Vec<usize> = rest.iter().copied().filter(|&i| list[i].category == cat).collect();
+                if !in_cat.is_empty() {
+                    v.push(head(category_text(&list[in_cat[0]], effect)));
+                    v.extend(in_cat.into_iter().map(row));
+                }
+            }
+        }
+        MenuView::Vendor => {
+            let mut by: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+            for &i in &rest {
+                by.entry(list[i].vendor.to_lowercase()).or_default().push(i);
+            }
+            for (_, is) in by {
+                v.push(head(&list[is[0]].vendor));
+                v.extend(is.into_iter().map(row));
+            }
+        }
+    }
+    v
+}
+
 fn plugins(rows: &[Row]) -> usize {
-    rows.iter().filter(|r| matches!(r, Row::Plugin { .. })).count()
+    rows.iter().filter(|r| pickable(r)).count()
 }
 
 /// The count at the footer's left (§6.2): "12 plugins", while searching "3 of 12".
@@ -314,14 +433,14 @@ fn step(rows: &[Row], from: usize, dir: isize) -> usize {
         if i < 0 || i as usize >= rows.len() {
             return from;
         }
-        if matches!(rows[i as usize], Row::Plugin { .. }) {
+        if pickable(&rows[i as usize]) {
             return i as usize;
         }
     }
 }
 
 fn first(rows: &[Row]) -> usize {
-    rows.iter().position(|r| matches!(r, Row::Plugin { .. })).unwrap_or(0)
+    rows.iter().position(pickable).unwrap_or(0)
 }
 
 /// Each row's top in the list's content (px), and the content's height.
@@ -366,10 +485,40 @@ fn reveal(s: &mut State, rows: &[Row]) {
 
 /// What picking plugin row `row` runs: the plugin menu's pick for the target, on the container's track for a container.
 pub fn pick_cmd(s: &State, row: &Row) -> Option<Cmd> {
+    let p = &s.palette;
+    if let Row::MidiFx { at } = *row {
+        let index = p.midi_fx.get(at)?.1;
+        return Some(Cmd::Plugin(crate::plugin_menu::PlugCmd::MidiFxAdd { index }));
+    }
     let Row::Plugin { effect, at } = *row else { return None };
     let e = entry(s, effect, at)?;
-    let cmd = crate::plugin_menu::pick(s.palette.target, effect, e.index);
-    Some(match (s.palette.track, cmd) {
+    // The rack browser routes by the chain (§7): an effect into the rack track's strip (the gap's slot, else its
+    // first empty one), an instrument onto the track's own instrument channel.
+    if let Target::Rack(slot) = p.target {
+        if effect {
+            let slot = slot.or_else(|| {
+                crate::device_rack::rack_track(s).and_then(|tr| {
+                    s.project.mixer.iter().find(|m| m.index == tr.mixer_strip).and_then(|m| m.slots.iter().position(Option::is_none).map(|k| k as u8))
+                })
+            });
+            let cmd = match slot {
+                Some(k) => Cmd::Mixer(crate::mixer::MCmd::AddEffect(k, e.index)),
+                // No free slot: the plugin menu's path says so.
+                None => crate::plugin_menu::pick(p.target, effect, e.index),
+            };
+            return Some(match p.track {
+                Some(t) => Cmd::SlotWin(t, Box::new(cmd)),
+                None => cmd,
+            });
+        }
+        let cmd = match crate::device_rack::rack_track(s).and_then(|tr| tr.channel).and_then(|ch| s.project.channels.iter().position(|c| c.index == ch)) {
+            Some(row) => crate::plugin_menu::pick(Target::Replace(row), effect, e.index),
+            None => crate::plugin_menu::pick(Target::Gen(None), effect, e.index),
+        };
+        return Some(cmd);
+    }
+    let cmd = crate::plugin_menu::pick(p.target, effect, e.index);
+    Some(match (p.track, cmd) {
         (Some(t), c @ Cmd::Mixer(_)) => Cmd::SlotWin(t, Box::new(c)),
         (_, c) => c,
     })
@@ -381,6 +530,7 @@ fn after_pick(t: Target) -> Option<Target> {
         Target::All | Target::Gen(None) => Some(t),
         // The slot is taken now: the next one goes into the first empty slot.
         Target::Fx(_) => Some(Target::Fx(None)),
+        Target::Rack(_) => Some(Target::Rack(None)),
         _ => None,
     }
 }
@@ -396,11 +546,20 @@ impl App {
         let h = height(work.h);
         let x = at.0.min(work.right() - W).max(work.x);
         let y = at.1.min(work.bottom() - h).max(work.y);
+        // The rack browser captures the MIDI FX list (its first section) and pins the picks to the rack track's
+        // strip: the rack may show a pinned track's chain while another is selected (§7).
+        let rack = matches!(target, Target::Rack(_));
+        let strip = if rack { crate::device_rack::rack_track(s).map(|tr| tr.mixer_strip) } else { None };
         let p = &mut s.palette;
         p.pos = (x.round(), y.round());
         p.target = target;
-        p.track = track;
+        p.track = track.or(strip);
         p.query.clear();
+        if rack {
+            p.midi_fx = self.plugins.midi_fx.iter().enumerate().map(|(i, e)| (e.desc.name.clone(), i)).collect();
+        } else {
+            p.midi_fx.clear();
+        }
         reset(s);
         s.raise(Win::PluginPalette);
         self.invalidate();
@@ -517,7 +676,7 @@ impl App {
             Key::Named(NamedKey::PageDown) => p.sel = (0..page).fold(p.sel, |i, _| step(&rows, i, 1)),
             Key::Named(NamedKey::PageUp) => p.sel = (0..page).fold(p.sel, |i, _| step(&rows, i, -1)),
             Key::Named(NamedKey::Home) if !ctrl => p.sel = first(&rows),
-            Key::Named(NamedKey::End) if !ctrl => p.sel = rows.iter().rposition(|r| matches!(r, Row::Plugin { .. })).unwrap_or(p.sel),
+            Key::Named(NamedKey::End) if !ctrl => p.sel = rows.iter().rposition(pickable).unwrap_or(p.sel),
             // Tab: the next kind, with both kinds listed.
             Key::Named(NamedKey::Tab) if mixed(p) => {
                 let at = KINDS.iter().position(|k| k.0 == p.kind).unwrap_or(0);
