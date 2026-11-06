@@ -435,8 +435,18 @@ impl App {
         let w = right.min(s.screen.0 / 2.0).max(crate::views::BROWSER_W).round();
         if w != s.browser_w {
             s.browser_w = w;
+            save_value("width", &w.to_string());
             self.invalidate();
         }
+    }
+
+    /// The browser hidden or shown again (the VIEW menu's Browser entry, Alt+F8): the state persists in
+    /// `browser.txt` so the next start keeps it.
+    pub(crate) fn toggle_browser(&mut self) {
+        let s = &mut self.state;
+        s.show_browser = !s.show_browser;
+        save_value("hidden", if s.show_browser { "0" } else { "1" });
+        self.invalidate();
     }
 
     /// A hovered row's scrolling label (spec §9): repainted whenever its offset moves; the scroll ends with the hover.
@@ -723,7 +733,8 @@ fn open_folder(dir: &std::path::Path) {
     let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
 }
 
-/// `browser.txt` in the user folder: `width=` the browser's width in px (anything else, or missing, = the default).
+/// `browser.txt` in the user folder: `width=` the browser's width in px, `hidden=` 1 when the browser is hidden
+/// (anything else, or missing, = shown).
 fn width_file() -> Option<std::path::PathBuf> {
     if cfg!(test) {
         return None;
@@ -784,6 +795,16 @@ pub(crate) fn load_width() -> f32 {
 /// Keeps the browser's width for the next run.
 pub(crate) fn save_width(w: f32) {
     save_value("width", &w.to_string());
+}
+
+/// Whether the browser was hidden at the last run (`hidden=1`): the hide state persists like the width.
+pub(crate) fn load_hidden() -> bool {
+    parse_hidden(&width_file().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default())
+}
+
+/// The hidden flag in `browser.txt`'s text (anything but `1` = shown).
+fn parse_hidden(text: &str) -> bool {
+    value(text, "hidden").map_or(false, |v| v == "1")
 }
 
 /// A favorite file (spec §10): its path (or a factory preset's) and the label its row had when it was starred.
@@ -1400,6 +1421,27 @@ mod tests {
         assert_eq!(parse_width("width=wide\n"), crate::views::BROWSER_W);
         assert_eq!(parse_width(""), crate::views::BROWSER_W);
         assert_eq!(parse_width("options=top\nwidth=300\n"), 300.0);
+    }
+
+    /// The browser's hide state is kept in `browser.txt` beside the width (`hidden=1` = hidden at the last run;
+    /// missing = shown), and the VIEW menu / Alt+F8 toggle flips it (`toggle_browser`).
+    #[test]
+    fn kept_hidden_and_toggle() {
+        assert!(!parse_hidden("width=300\n"), "missing = shown");
+        assert!(!parse_hidden("hidden=0\n"));
+        assert!(parse_hidden("hidden=1\n"));
+        assert!(parse_hidden("options=top\nhidden=1\n"));
+        assert!(!parse_hidden("hidden=yes\n"));
+        // The toggle action flips the state each time, and a jump shows it again from a jump.
+        let mut a = crate::app::App::new(None);
+        let shown = a.state.show_browser;
+        a.act(crate::app::Action::ToggleWin(crate::app::Win::Browser));
+        assert_eq!(a.state.show_browser, !shown);
+        a.act(crate::app::Action::ToggleWin(crate::app::Win::Browser));
+        assert_eq!(a.state.show_browser, shown);
+        a.act(crate::app::Action::ToggleWin(crate::app::Win::Browser));
+        a.browser_jump(Jump::Section("Plug database"));
+        assert!(a.state.show_browser, "a jump shows the hidden browser");
     }
 
     /// The options are kept in `browser.txt` beside the width (spec §4): missing = the defaults, unknown names dropped.

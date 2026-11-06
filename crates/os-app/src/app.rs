@@ -1519,7 +1519,7 @@ impl App {
                 path: None,
                 z: vec![Win::Playlist, Win::ChannelRack],
                 no_focus: false,
-                show_browser: true,
+                show_browser: !crate::browser::load_hidden(),
                 rack_pos: crate::arrange::RACK_POS,
                 rack_size: views::rack::DEFAULT_SIZE,
                 rack_scroll_x: 0.0,
@@ -8786,7 +8786,7 @@ impl App {
             Action::MenuSub(m, i) => self.open_menu_sub(m, i),
             // Show a hidden window, bring a covered one to the front, hide one already in front
             // (spec: ui/channel-rack.md §5).
-            Action::ToggleWin(Win::Browser) => s.show_browser = !s.show_browser,
+            Action::ToggleWin(Win::Browser) => self.toggle_browser(),
             Action::ToggleWin(Win::Perf) => self.toggle_perf(),
             Action::ToggleWin(Win::Tapper) => self.toggle_tapper(),
             Action::ToggleWin(Win::Touch) => self.toggle_touch(),
