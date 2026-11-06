@@ -2,149 +2,31 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Audio Selector editor stub.
+//! Lemon Audio Selector editor: the shared `os-plugkit::simple` editor over its parameters.
 
-use std::any::Any;
-use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
-use std::sync::Arc;
+use os_plugkit::simple::{Info, Setting};
 
-use nih_plug::prelude::*;
-
-use crate::params::SelectorParams;
-use crate::Shared;
-
-pub struct LemonAudioSelectorEditor {
-    params: Arc<SelectorParams>,
-    shared: Arc<Shared>,
-    scale: AtomicU32,
-    hwnd: Arc<AtomicIsize>,
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    slot: os_plugkit::gui::Slot,
-}
-
-impl LemonAudioSelectorEditor {
-    pub fn new(params: Arc<SelectorParams>, shared: Arc<Shared>) -> Self {
-        LemonAudioSelectorEditor {
-            params,
-            shared,
-            scale: AtomicU32::new(1f32.to_bits()),
-            hwnd: Arc::new(AtomicIsize::new(0)),
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
-            slot: Default::default(),
-        }
-    }
-
-    fn notify(&self) {
-        #[cfg(windows)]
-        win32::post_changed(self.hwnd.load(Ordering::Acquire));
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        os_plugkit::gui::notify(&self.slot);
-    }
-}
-
-impl Editor for LemonAudioSelectorEditor {
-    fn spawn(&self, parent: ParentWindowHandle, context: Arc<dyn GuiContext>) -> Box<dyn Any + Send> {
-        let scale = f32::from_bits(self.scale.load(Ordering::Relaxed));
-        match parent {
-            #[cfg(windows)]
-            ParentWindowHandle::Win32Hwnd(hwnd) => {
-                Box::new(win32::open(hwnd, scale, self.params.clone(), self.shared.clone(), context, self.hwnd.clone()))
-            }
-            #[cfg(target_os = "linux")]
-            ParentWindowHandle::X11Window(window) => Box::new(gui::open(window, scale, self.params.clone(), self.shared.clone(), context, &self.slot)),
-            #[cfg(target_os = "macos")]
-            ParentWindowHandle::AppKitNsView(view) => {
-                let scale = os_plugkit::gui::backing_scale(view as usize);
-                Box::new(gui::open(view as usize, scale, self.params.clone(), self.shared.clone(), context, &self.slot))
-            }
-            _ => {
-                let _ = (context, scale);
-                Box::new(())
-            }
-        }
-    }
-
-    fn size(&self) -> (u32, u32) {
-        (360, 220)
-    }
-
-    fn set_scale_factor(&self, factor: f32) -> bool {
-        self.scale.store(factor.to_bits(), Ordering::Relaxed);
-        true
-    }
-
-    fn param_value_changed(&self, _id: &str, _normalized_value: f32) {
-        self.notify();
-    }
-    fn param_modulation_changed(&self, _id: &str, _modulation_offset: f32) {
-        self.notify();
-    }
-    fn param_values_changed(&self) {
-        self.notify();
-    }
-}
-
-#[cfg(windows)]
-mod win32 {
-    use std::any::Any;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicIsize;
-    use nih_plug::prelude::*;
-    use crate::params::SelectorParams;
-    use crate::Shared;
-
-    pub fn open(
-        _hwnd: *mut std::ffi::c_void,
-        _scale: f32,
-        _params: Arc<SelectorParams>,
-        _shared: Arc<Shared>,
-        _context: Arc<dyn GuiContext>,
-        _hwnd_atomic: Arc<AtomicIsize>,
-    ) -> Box<dyn Any + Send> {
-        Box::new(())
-    }
-
-    pub fn post_changed(_hwnd: isize) {}
-}
-
-#[cfg(target_os = "linux")]
-mod gui {
-    use std::any::Any;
-    use std::sync::Arc;
-    use nih_plug::prelude::*;
-    use crate::params::SelectorParams;
-    use crate::Shared;
-    use os_plugkit::gui::Slot;
-
-    pub fn open(
-        _window: u64,
-        _scale: f32,
-        _params: Arc<SelectorParams>,
-        _shared: Arc<Shared>,
-        _context: Arc<dyn GuiContext>,
-        _slot: &Slot,
-    ) -> Box<dyn Any + Send> {
-        Box::new(())
-    }
-}
-
-#[cfg(target_os = "macos")]
-mod gui {
-    use std::any::Any;
-    use std::sync::Arc;
-    use nih_plug::prelude::*;
-    use crate::params::SelectorParams;
-    use crate::Shared;
-    use os_plugkit::gui::Slot;
-
-    pub fn open(
-        _view: usize,
-        _scale: f32,
-        _params: Arc<SelectorParams>,
-        _shared: Arc<Shared>,
-        _context: Arc<dyn GuiContext>,
-        _slot: &Slot,
-    ) -> Box<dyn Any + Send> {
-        Box::new(())
-    }
-}
+/// The editor's static layout: one dial (or toggle, for an on / off setting) per parameter, in display order.
+pub static INFO: Info = Info {
+    name: "Lemon Audio Selector",
+    mark: "SELECTOR",
+    class: "LemonAudioSelectorView",
+    w: 508,
+    h: 380,
+    settings: &[
+        Setting { id: "mode", name: "Selection mode", min: 0, max: 1 },
+        Setting { id: "manual", name: "Manual slot", min: 0, max: 4 },
+        Setting { id: "s1_active", name: "Slot 1 Filter active", min: 0, max: 1 },
+        Setting { id: "s1_level", name: "Slot 1 Filter level", min: 0, max: 6000 },
+        Setting { id: "s1_param", name: "Slot 1 Filter param", min: 0, max: 6000 },
+        Setting { id: "s2_active", name: "Slot 2 Delay active", min: 0, max: 1 },
+        Setting { id: "s2_level", name: "Slot 2 Delay level", min: 0, max: 6000 },
+        Setting { id: "s2_param", name: "Slot 2 Delay param", min: 0, max: 6000 },
+        Setting { id: "s3_active", name: "Slot 3 Chorus active", min: 0, max: 1 },
+        Setting { id: "s3_level", name: "Slot 3 Chorus level", min: 0, max: 6000 },
+        Setting { id: "s3_param", name: "Slot 3 Chorus param", min: 0, max: 6000 },
+        Setting { id: "s4_active", name: "Slot 4 Drive active", min: 0, max: 1 },
+        Setting { id: "s4_level", name: "Slot 4 Drive level", min: 0, max: 6000 },
+        Setting { id: "s4_param", name: "Slot 4 Drive param", min: 0, max: 6000 },
+    ],
+};

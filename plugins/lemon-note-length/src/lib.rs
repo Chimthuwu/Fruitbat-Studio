@@ -68,7 +68,7 @@ impl Plugin for LemonNoteLength {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        Some(Box::new(editor::NoteLengthEditor::new(self.params.clone(), self.shared.clone())))
+        Some(Box::new(os_plugkit::simple::Editor::new(&editor::INFO, self.params.clone(), self.params.live.clone())))
     }
 
     fn initialize(&mut self, _layout: &AudioIOLayout, config: &BufferConfig, _ctx: &mut impl InitContext<Self>) -> bool {

@@ -13,9 +13,12 @@
 
 #![cfg_attr(not(windows), allow(dead_code))] // Linux / macOS keep the plugins' stub spawn until their editors land.
 
+use std::any::Any;
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use nih_plug::prelude::GuiContext;
+use nih_plug::prelude::ParentWindowHandle;
 use crate::vals::Vals;
 use crate::MenuDef;
 use os_theme::design::lemon as brand;
@@ -348,6 +351,77 @@ impl Logic {
             let lh = c.line_height(HINT);
             c.text_clip(HINT, well.x + 8.0, (well.cy() - lh / 2.0).round(), well.w - 16.0, brand::TEXT, hint);
         }
+    }
+}
+
+/// A ready [`Editor`](nih_plug::prelude::Editor) for a `simple` plugin: holds its [`Info`] and the params + live
+/// edits the window edits. Plugins adopt the shared editor by returning
+/// `Some(Box::new(os_plugkit::simple::Editor::new(&editor::INFO, self.params.clone(), self.params.live.clone())))`
+/// from `Plugin::editor`. Spawning opens the editor window (`win32::open`) whose content `Logic` paints; parameter
+/// changes from the host repaint it at once.
+pub struct Editor {
+    info: &'static Info,
+    params: Arc<dyn nih_plug::prelude::Params>,
+    live: Arc<crate::live::LiveEdits>,
+    scale: AtomicU32,
+    hwnd: Arc<AtomicIsize>,
+    open: Arc<AtomicBool>,
+}
+
+impl Editor {
+    pub fn new(info: &'static Info, params: Arc<dyn nih_plug::prelude::Params>, live: Arc<crate::live::LiveEdits>) -> Self {
+        Editor {
+            info,
+            params,
+            live,
+            scale: AtomicU32::new(1.0f32.to_bits()),
+            hwnd: Arc::new(AtomicIsize::new(0)),
+            open: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn notify(&self) {
+        #[cfg(windows)]
+        win32::post_changed(self.hwnd.load(Ordering::Acquire));
+    }
+}
+
+impl nih_plug::prelude::Editor for Editor {
+    fn spawn(&self, parent: ParentWindowHandle, context: Arc<dyn GuiContext>) -> Box<dyn Any + Send> {
+        let scale = f32::from_bits(self.scale.load(Ordering::Relaxed));
+        match parent {
+            #[cfg(windows)]
+            ParentWindowHandle::Win32Hwnd(hwnd) => Box::new(win32::open(
+                hwnd,
+                scale,
+                self.info,
+                self.params.clone(),
+                self.live.clone(),
+                context,
+                self.hwnd.clone(),
+                self.open.clone(),
+            )),
+            _ => Box::new(()),
+        }
+    }
+
+    fn size(&self) -> (u32, u32) {
+        (self.info.w, self.info.h)
+    }
+
+    fn set_scale_factor(&self, factor: f32) -> bool {
+        self.scale.store(factor.to_bits(), Ordering::Relaxed);
+        true
+    }
+
+    fn param_value_changed(&self, _id: &str, _norm: f32) {
+        self.notify();
+    }
+    fn param_modulation_changed(&self, _id: &str, _off: f32) {
+        self.notify();
+    }
+    fn param_values_changed(&self) {
+        self.notify();
     }
 }
 
