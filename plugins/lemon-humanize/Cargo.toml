@@ -1,6 +1,6 @@
 [package]
 name = "lemon-humanize"
-description = "Lemon Humanize: Lemon Studio's note echo as a VST3 / CLAP MIDI plugin"
+description = "Lemon Humanize: Lemon Studio's humanizer as a VST3 / CLAP MIDI plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

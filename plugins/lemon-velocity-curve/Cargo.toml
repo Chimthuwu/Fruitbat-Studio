@@ -1,6 +1,6 @@
 [package]
 name = "lemon-velocity-curve"
-description = "Lemon Velocity Curve: Lemon Studio's note echo as a VST3 / CLAP MIDI plugin"
+description = "Lemon Velocity Curve: Lemon Studio's velocity curve as a VST3 / CLAP MIDI plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

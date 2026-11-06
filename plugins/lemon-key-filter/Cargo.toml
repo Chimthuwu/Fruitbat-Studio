@@ -1,6 +1,6 @@
 [package]
 name = "lemon-key-filter"
-description = "Lemon Key Filter: Lemon Studio's note echo as a VST3 / CLAP MIDI plugin"
+description = "Lemon Key Filter: Lemon Studio's key filter as a VST3 / CLAP MIDI plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
