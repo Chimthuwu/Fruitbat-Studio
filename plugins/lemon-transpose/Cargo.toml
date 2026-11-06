@@ -1,6 +1,6 @@
 [package]
 name = "lemon-transpose"
-description = "Lemon Transpose: Lemon Studio's note echo as a VST3 / CLAP MIDI plugin"
+description = "Lemon Transpose: Lemon Studio's note transposer as a VST3 / CLAP MIDI plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

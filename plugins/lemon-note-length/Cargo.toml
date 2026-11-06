@@ -1,6 +1,6 @@
 [package]
 name = "lemon-note-length"
-description = "Lemon Note Length: Lemon Studio's note echo as a VST3 / CLAP MIDI plugin"
+description = "Lemon Note Length: Lemon Studio's note length scaler as a VST3 / CLAP MIDI plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
