@@ -279,6 +279,20 @@ pub const FX_KEY: usize = 1 << 24;
 /// housekeeping. Automation and links name them by their container's slot and their id instead (`params::target_of`).
 pub const MEMBER_KEY: usize = 1 << 26;
 
+/// Keys from here up are MIDI FX slots of the track model (`crate::midi_fx`), in memory only for now:
+/// `MIDI_FX_KEY + track id * 16 + slot` (`midi_fx_key`).
+pub const MIDI_FX_KEY: usize = 1 << 27;
+
+/// The `hosted` key of track `track`'s MIDI FX slot `slot` (`crate::midi_fx`).
+pub fn midi_fx_key(track: u32, slot: usize) -> usize {
+    MIDI_FX_KEY + track as usize * 16 + slot
+}
+
+/// The track id and slot of a `hosted` MIDI FX key, `None` for the other keys.
+pub fn midi_fx_of(key: usize) -> Option<(u32, usize)> {
+    (key >= MIDI_FX_KEY).then(|| (((key - MIDI_FX_KEY) / 16) as u32, (key - MIDI_FX_KEY) % 16))
+}
+
 /// Plugin editor windows open at once under "Limit the number of open plugin editors" (FL's hint: 25; spec:
 /// ui/settings-choices.md "Miscellaneous: naming, detached plugins and startup").
 pub const MAX_EDITORS: usize = 25;
@@ -306,6 +320,8 @@ pub struct Plugins {
     pub available: Vec<Available>,
     /// Effect plugins found (offered for mixer slots).
     pub effects: Vec<Available>,
+    /// MIDI FX plugins compiled in (offered for a MIDI track's MIDI FX slots, `crate::midi_fx`).
+    pub midi_fx: Vec<Available>,
     /// By rack row, or by `fx_key` for mixer slots.
     pub hosted: BTreeMap<usize, Hosted>,
     /// Main window handle (owner of plugin windows).
@@ -396,6 +412,23 @@ pub fn builtin_effects() -> Vec<Available> {
     LIBS.iter().zip(entries).zip(names).flat_map(|((lib, entry), name)| linked(lib, entry, name)).collect()
 }
 
+/// The Lemon MIDI FX compiled in the same way (`LINKED_MIDI_FX`): offered for a MIDI track's MIDI FX slots in the
+/// device rack (`crate::midi_fx`, spec: plugins/lemon-arp.md). They process notes on the track model's note path
+/// (the engine's MIDI FX milestone wires the audio through; hosting shows and loads them today).
+pub fn builtin_midi_fx() -> Vec<Available> {
+    const N: usize = LINKED_MIDI_FX.len();
+    static LIBS: [OnceLock<Option<Arc<os_clap::Library>>>; N] = [const { OnceLock::new() }; N];
+    let entries: [*const std::ffi::c_void; N] = [
+        &lemon_arp::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
+        &lemon_chord::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
+        &lemon_echo::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
+    ];
+    LIBS.iter().zip(entries).zip(LINKED_MIDI_FX).flat_map(|((lib, entry), name)| linked(lib, entry, name)).collect()
+}
+
+/// The Lemon MIDI FX compiled in (`builtin_midi_fx`, in this order).
+pub const LINKED_MIDI_FX: [&str; 3] = ["Lemon Arp", "Lemon Chord", "Lemon Echo"];
+
 /// The plugins of a CLAP entry table linked into this program.
 fn linked(cell: &OnceLock<Option<Arc<os_clap::Library>>>, entry: *const std::ffi::c_void, name: &str) -> Vec<Available> {
     let lib = cell.get_or_init(|| {
@@ -474,7 +507,7 @@ impl Plugins {
     /// The built-in plugins only (what the app knows before the scan cache is read).
     pub fn builtins() -> Plugins {
         let native_checks = (!cfg!(test)).then(|| os_native::check::Checks::load(os_paths::user_file(NATIVE_CHECKS)));
-        Plugins { available: builtin(), effects: builtin_effects(), scale: 1.0, native_checks, ..Plugins::default() }
+        Plugins { available: builtin(), effects: builtin_effects(), midi_fx: builtin_midi_fx(), scale: 1.0, native_checks, ..Plugins::default() }
     }
 
     /// Takes a scan's results (spec: ui/plugin-manager.md §4, "Results"): plugins new to this run are appended, so the
@@ -627,6 +660,32 @@ impl Plugins {
         let (plugin, name) = self.instantiate_effect(index, state)?;
         self.hosted.insert(fx_key(track, slot), Hosted::new(plugin));
         Ok(name)
+    }
+
+    /// Creates MIDI FX `index` (of `midi_fx`) in track `track`'s slot `slot`, replacing what was there.
+    pub fn create_midi_fx(&mut self, track: u32, slot: usize, index: usize, state: Option<&[u8]>) -> Result<String, String> {
+        self.drop_key(midi_fx_key(track, slot));
+        let (plugin, name) = self.instantiate_midi_fx(index, state)?;
+        self.hosted.insert(midi_fx_key(track, slot), Hosted::new(plugin));
+        Ok(name)
+    }
+
+    /// An instance of MIDI FX `index` (of `midi_fx`) started from `state`, activated at the device rate.
+    pub fn instantiate_midi_fx(&mut self, index: usize, state: Option<&[u8]>) -> Result<(SharedPlugin, String), String> {
+        let a = self.midi_fx.get(index).ok_or("no such plugin")?.clone();
+        let plugin = a.lib.clone().create(&a.desc.id)?;
+        let mut p = plugin.lock().map_err(|_| "plugin busy")?;
+        if let Some(st) = state {
+            p.load_state(st);
+        }
+        if self.rate == 0 {
+            self.rate = crate::transport::Transport::device_rate().unwrap_or(48000);
+        }
+        if !p.activate(self.rate) {
+            return Err(format!("{} could not start", a.desc.name));
+        }
+        drop(p);
+        Ok((plugin, a.desc.name))
     }
 
     /// An instance of effect `index` (of `effects`) started from `state`, activated at the device rate, not hosted under

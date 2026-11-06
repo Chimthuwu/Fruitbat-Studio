@@ -25,6 +25,8 @@ pub enum PlugCmd {
     Replace { index: usize, row: usize },
     /// Effect `index` (into `Plugins::effects`) into the selected mixer track: slot `slot`, else its first empty slot.
     Effect { index: usize, slot: Option<u8> },
+    /// MIDI FX `index` (into `Plugins::midi_fx`) into the rack track's first empty MIDI FX slot (`crate::midi_fx`).
+    MidiFxAdd { index: usize },
     /// Find new plugins (a background scan).
     Find,
     /// Settings > Plugins.
@@ -177,6 +179,14 @@ pub fn run(app: &mut App, c: PlugCmd) -> Option<String> {
         PlugCmd::Generator { index, after } => add_generator(app, index, after),
         PlugCmd::Replace { index, row } => replace_generator(app, index, row),
         PlugCmd::Effect { index, slot } => add_effect(app, index, slot),
+        PlugCmd::MidiFxAdd { index } => {
+            let id = crate::device_rack::rack_track(&app.state).map(|tr| tr.id.0);
+            id.and_then(|id| crate::midi_fx::add(app, id, None, index))
+        }
+        PlugCmd::MidiFxAdd { index } => {
+            let id = crate::device_rack::rack_track(&app.state).map(|tr| tr.id.0);
+            id.and_then(|id| crate::midi_fx::add(app, id, None, index))
+        }
         PlugCmd::Find => {
             app.start_scan(Mode::Changed);
             None
