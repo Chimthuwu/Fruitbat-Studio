@@ -2130,6 +2130,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "lemon-note-delay"
+version = "0.0.1"
+dependencies = [
+ "nih_plug",
+ "os-hostlink",
+ "os-plugkit",
+ "os-theme",
+ "os-ui",
+ "rand 0.8.8",
+ "serde_json",
+ "tiny-skia",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "lemon-note-filter"
+version = "0.0.1"
+dependencies = [
+ "nih_plug",
+ "os-hostlink",
+ "os-plugkit",
+ "os-theme",
+ "os-ui",
+ "rand 0.8.8",
+ "serde_json",
+ "tiny-skia",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "lemon-note-layer"
 version = "0.0.1"
 dependencies = [
@@ -2138,6 +2168,21 @@ dependencies = [
  "os-plugkit",
  "os-theme",
  "os-ui",
+ "serde_json",
+ "tiny-skia",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "lemon-note-repeats"
+version = "0.0.1"
+dependencies = [
+ "nih_plug",
+ "os-hostlink",
+ "os-plugkit",
+ "os-theme",
+ "os-ui",
+ "rand 0.8.8",
  "serde_json",
  "tiny-skia",
  "windows-sys 0.61.2",
@@ -2189,6 +2234,21 @@ dependencies = [
  "lemon-small-fx",
  "nih_plug",
  "os-plugkit",
+]
+
+[[package]]
+name = "lemon-random"
+version = "0.0.1"
+dependencies = [
+ "nih_plug",
+ "os-hostlink",
+ "os-plugkit",
+ "os-theme",
+ "os-ui",
+ "rand 0.8.8",
+ "serde_json",
+ "tiny-skia",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2282,6 +2342,21 @@ dependencies = [
  "lemon-small-fx",
  "nih_plug",
  "os-plugkit",
+]
+
+[[package]]
+name = "lemon-strum"
+version = "0.0.1"
+dependencies = [
+ "nih_plug",
+ "os-hostlink",
+ "os-plugkit",
+ "os-theme",
+ "os-ui",
+ "rand 0.8.8",
+ "serde_json",
+ "tiny-skia",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3129,9 +3204,13 @@ dependencies = [
  "lemon-humanize",
  "lemon-key-filter",
  "lemon-limiter",
+ "lemon-note-delay",
+ "lemon-note-filter",
+ "lemon-note-repeats",
  "lemon-parametric-eq-2",
  "lemon-peak-controller",
  "lemon-phaser",
+ "lemon-random",
  "lemon-reverb",
  "lemon-sampler",
  "lemon-slicer",
@@ -3139,6 +3218,7 @@ dependencies = [
  "lemon-soft-clipper",
  "lemon-stereo-enhancer",
  "lemon-stereo-shaper",
+ "lemon-strum",
  "lemon-transient-processor",
  "lemon-velocity-curve",
  "lemon-vocoder",
