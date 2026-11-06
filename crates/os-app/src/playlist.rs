@@ -2757,7 +2757,7 @@ pub fn options_menu(s: &State, x: f32, y: f32) -> Popup {
 }
 
 /// The ▸ menu's Time markers submenu (§7a), in FL's order. FL's Ctrl+T for Add auto is not bound: in Lemon Studio
-/// Ctrl+T switches the typing keyboard. Add two... is greyed without a time selection, as in FL. Add one every and
+/// Ctrl+T / Ctrl+Shift+T make an Audio / MIDI track. Add two... is greyed without a time selection, as in FL. Add one every and
 /// Add key marker open their lists as menus of their own (a submenu holds no submenus here).
 fn time_marker_items(s: &State) -> Vec<PItem> {
     let two = PItem::new("Add two...", Cmd::AddTwoMarkers);

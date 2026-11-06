@@ -783,7 +783,7 @@ fn song_pos(ui: &mut Ui, c: &Ctx) {
 fn modes(ui: &mut Ui, c: &Ctx) -> bool {
     let (a, s) = (c.a, c.s);
     for (i, (icon, hint)) in [
-        (Icon::TypingKeyboard, "Typing keyboard to piano keyboard (Ctrl+T)"),
+        (Icon::TypingKeyboard, "Typing keyboard to piano keyboard"),
         (Icon::AutoScroll, "Auto scrolling - right-click for continuous scrolling"),
         (Icon::StepEdit, "Step editing (Ctrl+E)"),
         (Icon::Link, "Enable groups (Shift+Alt+G)"),

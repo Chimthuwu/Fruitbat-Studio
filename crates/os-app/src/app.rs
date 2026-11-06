@@ -140,7 +140,7 @@ pub enum Action {
     Settings(views::settings::SAct),
     /// A control that is drawn but not functional yet (`Ui::off`): hovering and clicking only say so.
     Placeholder(&'static str),
-    /// Typing keyboard to piano switch (toolbar, OPTIONS menu, Ctrl+T).
+    /// Typing keyboard to piano switch (toolbar, OPTIONS menu).
     Typing,
     /// Metronome switch (toolbar, OPTIONS menu, Ctrl+M); right-click on the button picks the sound.
     Metronome,
@@ -7900,12 +7900,15 @@ impl App {
             && self.state.menu_open.is_none()
             && crate::device_rack::visible(&self.state)
         {
-            match key {
+            // The rack's keys; anything else falls through to the global shortcuts (Ctrl+T, F-keys, ...).
+            let handled = match key {
                 Key::Named(NamedKey::ArrowLeft) => {
                     if let Some(i) = self.state.device_rack_sel {
                         let i = i.saturating_sub(1);
                         *crate::device_rack::rack_sel_mut(&mut self.state) = Some(i);
-                        self.invalidate();
+                        true
+                    } else {
+                        false
                     }
                 }
                 Key::Named(NamedKey::ArrowRight) => {
@@ -7913,17 +7916,22 @@ impl App {
                         let chain = crate::device_rack::rack_chain(&self.state);
                         let i = (i + 1).min(chain.len().saturating_sub(1));
                         *crate::device_rack::rack_sel_mut(&mut self.state) = Some(i);
-                        self.invalidate();
+                        true
+                    } else {
+                        false
                     }
                 }
                 Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace) => {
                     // The instrument tile deletes its channel (the confirmation applies); the empty slot's
                     // placeholder has nothing to delete.
                     crate::device_rack::delete_selected(self);
+                    true
                 }
-                _ => {}
+                _ => false,
+            };
+            if handled {
+                return self.invalidate();
             }
-            return self.invalidate();
         }
         // The mixer's keys while it is in front (spec: ui/mixer.md §2).
         let s = &self.state;
@@ -7945,6 +7953,7 @@ impl App {
         if s.shown(Win::PianoRoll) && s.menu_open.is_none() && !s.settings.open && s.playlist.edit.is_none() && crate::piano_tools::key(self, key, ctrl, alt) {
             return;
         }
+        
         match key {
             // Space starts and stops (rewinding); Ctrl+Space starts and pauses, like the Play button (FL's manual,
             // keyboard shortcuts: "Start/Stop Playback", "Start/Pause Playback").
@@ -7995,7 +8004,18 @@ impl App {
                     s.piano.range = Some((0, piano::pattern_end(s)));
                 }
             }
-            Key::Character(c) if ctrl && c.eq_ignore_ascii_case("t") => self.toggle_typing(),
+            Key::Character(c) if ctrl && !alt && !self.shift && c.eq_ignore_ascii_case("t") => {
+                // Ctrl+T: a new Audio track (the typing keyboard switch stays on the toolbar and the OPTIONS
+                // menu). Ctrl+Shift+T below makes a MIDI track.
+                if let Some(m) = crate::track_links::insert_linear(&mut self.state, crate::track_links::Mode::LinearAudio) {
+                    self.state.message = Some(m);
+                }
+            }
+            Key::Character(c) if ctrl && !alt && self.shift && c.eq_ignore_ascii_case("t") => {
+                if let Some(m) = crate::track_links::insert_linear(&mut self.state, crate::track_links::Mode::LinearMidi) {
+                    self.state.message = Some(m);
+                }
+            }
             Key::Character(c) if ctrl && !alt && !self.shift && c.eq_ignore_ascii_case("m") => self.toggle_metronome(),
             Key::Character(c) if ctrl && !alt && self.shift && c.eq_ignore_ascii_case("m") => self.act(Action::MenuItem(0, views::menus::FILE_EXPORT_MIDI)),
             // The record options (spec: ui/recording.md §3); a focused playlist or the piano roll took Ctrl+B / Ctrl+P
@@ -8133,7 +8153,7 @@ impl App {
     }
 
     /// Play one note of channel `channel` (Note::channel) once (also while playing or paused).
-    /// Typing keyboard switch (toolbar, Options menu, Ctrl+T); turning it off releases held notes.
+    /// Typing keyboard switch (toolbar, OPTIONS menu); turning it off releases held notes.
     pub fn toggle_typing(&mut self) {
         let s = &mut self.state;
         if let Some(i) = s.toggles.iter().position(|t| *t == "typing") {
@@ -19128,6 +19148,28 @@ mod tests {
         // F6 does not bring it back.
         app.key(&Key::Named(NamedKey::F6), false, false);
         assert!(!app.state.shown(Win::ChannelRack), "F6 shows nothing");
+    }
+
+    /// Ctrl+T makes an Audio track, Ctrl+Shift+T a MIDI track (the typing keyboard switch lost Ctrl+T and
+    /// stays on the toolbar / OPTIONS menu): each goes through track_create, so the lane, the insert and a
+    /// MIDI track's channel land as one undo step.
+    #[test]
+    fn ctrl_t_and_ctrl_shift_t_make_tracks() {
+        use winit::keyboard::{Key, NamedKey, PhysicalKey};
+        let Ok(mut c) = Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = App::new(None);
+        app.linear_project();
+        let before = app.state.project.tracks.len();
+        app.key(&Key::Character("T".into()), true, false);
+        assert_eq!(app.state.project.tracks.len(), before + 1, "Ctrl+T made a track");
+        assert_eq!(app.state.project.tracks.last().unwrap().kind, os_model::TrackKind::Audio, "an Audio track");
+        app.shift = true;
+        app.key(&Key::Character("T".into()), true, false);
+        app.shift = false;
+        assert_eq!(app.state.project.tracks.len(), before + 2, "Ctrl+Shift+T made a track");
+        let t = app.state.project.tracks.last().unwrap().clone();
+        assert_eq!(t.kind, os_model::TrackKind::Midi, "a MIDI track");
+        assert!(t.channel.is_some(), "its instrument channel is linked");
     }
 
     /// VIEW > Close all windows / unfocused / plugin windows and F12, Ctrl+F12, Alt+F12 (spec: ui/close-windows.md):

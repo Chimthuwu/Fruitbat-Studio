@@ -375,7 +375,7 @@ const OPTIONS: &[Item] = &[
     it("Enable MIDI output", "").on().tick().cmd(MenuCmd::Midi(crate::midi_cfg::Switch::Output)),
     it("Enable MIDI master sync", "").on().tick().cmd(MenuCmd::Midi(crate::midi_cfg::Switch::MasterSync)),
     head("Switches"),
-    it("Computer MIDI keyboard", "Ctrl+T").on().tick().cmd(MenuCmd::Typing),
+    it("Computer MIDI keyboard", "").on().tick().cmd(MenuCmd::Typing),
     it(METRONOME_LABEL, "Ctrl+M").on().tick().cmd(MenuCmd::Metronome),
     it(PRECOUNT_LABEL, "Ctrl+P").on().tick().cmd(MenuCmd::Record(crate::record::Opt::Precount)),
     it(WAIT_LABEL, "Ctrl+I").on().tick().cmd(MenuCmd::Record(crate::record::Opt::Wait)),
