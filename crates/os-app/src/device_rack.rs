@@ -52,6 +52,8 @@ pub fn height(s: &State) -> f32 {
 /// A device of the track the rack shows.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DeviceKind {
+    /// The MIDI FX slots' region: no slots exist yet (§8 is a later milestone) — a placeholder tile.
+    MidiFx,
     /// The instrument: the channel (its rack row) a MIDI track plays.
     Instrument(usize),
     /// A mixer strip's effect slot: the strip's insert and the slot's index.
@@ -77,10 +79,19 @@ pub fn rack_track(s: &State) -> Option<&os_model::Track> {
     crate::track_links::lane_track(s, row)
 }
 
-/// The devices of `tr` in signal-flow order (§7): instrument → the mixer strip's effect slots. Audio tracks
-/// and buses hold only the strip's slots.
+/// The devices of `tr` in signal-flow order (§7): MIDI FX → instrument → the mixer strip's effect slots. Audio
+/// tracks and buses hold only the strip's slots.
 pub fn chain(s: &State, tr: &os_model::Track) -> Vec<Device> {
     let mut v = Vec::new();
+    if tr.kind == os_model::TrackKind::Midi {
+        v.push(Device {
+            kind: DeviceKind::MidiFx,
+            key: None,
+            name: "MIDI FX".into(),
+            on: false,
+            builtin: false,
+        });
+    }
     if let Some(row) = tr
         .channel
         .and_then(|ch| s.project.channels.iter().position(|c| c.index == ch))
@@ -198,6 +209,7 @@ pub enum RackAct {
     /// A device's enable light: switch the device on / off.
     ToggleOn(DeviceKind),
     /// The header's "+ Add": the plugin palette (instruments and effects).
+    #[allow(dead_code)] // The merged rack header uses `AddDevice`'s browser; the palette stays available.
     Add,
     /// A "+" gap button at a chain position: the FX palette for mixer slot `slot`
     /// (the next device's slot, or the first empty slot when `None`).
@@ -337,6 +349,7 @@ fn toggle_on(app: &mut App, kind: DeviceKind) {
                 m.slot_on[usize::from(slot)] = !m.slot_on[usize::from(slot)];
             }
         }
+        DeviceKind::MidiFx => {}
     }
     app.invalidate();
 }

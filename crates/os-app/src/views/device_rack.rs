@@ -10,7 +10,7 @@
 use os_ui::{Color, Rect, kit};
 
 use crate::app::{Action, State};
-use crate::device_rack::{self, Device, HEADER_H, RackAct, TILE_W};
+use crate::device_rack::{self, Device, DeviceKind, HEADER_H, RackAct, TILE_W};
 use crate::plugin_menu::{self, pick, Target};
 use crate::playlist::{Popup, PItem};
 use crate::views::{Ui, fnt};
