@@ -341,8 +341,9 @@ pub fn run(app: &mut App, act: RackAct) {
         RackAct::Dock(key) => dock(app, key),
         RackAct::ToggleOn(kind) => toggle_on(app, kind),
         RackAct::Add => {
-            let at = app.mouse;
-            app.open_plugin_palette(crate::plugin_menu::Target::All, at, None);
+            // The header ＋ opens the same track-kind-gated device browser the gaps do (Target::All's generator
+            // picks would add an orphan channel to the channel rack, not this track's instrument).
+            app.open_plugin_palette(crate::plugin_menu::Target::Rack(None), app.mouse, None);
         }
         RackAct::AddAt(slot) => {
             // Every ＋ opens the palette-style device browser (the rack's Target::Rack): MIDI FX first, then

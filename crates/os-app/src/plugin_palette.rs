@@ -513,7 +513,12 @@ pub fn pick_cmd(s: &State, row: &Row) -> Option<Cmd> {
         }
         let cmd = match crate::device_rack::rack_track(s).and_then(|tr| tr.channel).and_then(|ch| s.project.channels.iter().position(|c| c.index == ch)) {
             Some(row) => crate::plugin_menu::pick(Target::Replace(row), effect, e.index),
-            None => crate::plugin_menu::pick(Target::Gen(None), effect, e.index),
+            // No instrument channel yet: the pick makes one on the rack track (linked lane + strip), never an
+            // orphan channel in the channel rack.
+            None => match crate::device_rack::rack_track(s).and_then(|tr| tr.playlist_lane.checked_sub(1)) {
+                Some(lane) => Cmd::TrackMode(lane as u16, crate::track_links::Mode::NewInstrument(e.index)),
+                None => crate::plugin_menu::pick(Target::Gen(None), effect, e.index),
+            },
         };
         return Some(cmd);
     }

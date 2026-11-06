@@ -205,6 +205,17 @@ Cross-cutting standing notes:
 - All six items touch code the 2026-11-04 quality audit flagged; re-run that audit
   after each feature lands.
 
+## 🎯 Session (2026-11-06) — Device-rack routing fixes
+- [x] Rack ＋ (header, gaps, browser) routes by the rack track's chain: an instrument pick replaces the
+      track's channel or (when the slot is empty) makes a channel ON the track — lane linked, channel routed
+      to the track's strip (`track_links::new_instrument` now mirrors `Track.channel` + `mixer_track`, like
+      track_create does).
+- [ ] LARGER MODEL CHANGE (not half-fixed here): an instrument should be a first-class device of the track
+      model — `Track.channel` is a mirror of `TrackLink::instrument` kept in sync by hand (track_create,
+      new_instrument); every new route must remember both. Next step: a single `control` command
+      (`TrackSetInstrument { track, index | none }`) that owns lane link + channel routing + mirror +
+      hosting, and make the ADD-tab / classic paths delegate to it.
+
 ## Standing rules
 - Clean-room only: no decompiled code or pseudocode derived from decompilation (see README contributing).
 - Keep `THIRD-PARTY-NOTICES.txt` in sync with Cargo.lock (`cargo run -p notices`) — cargo test enforces it.

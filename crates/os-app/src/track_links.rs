@@ -229,6 +229,26 @@ pub fn new_instrument(app: &mut crate::app::App, t: u16, index: usize) -> Option
         }
         let row = app.state.selected_channel;
         link_instrument(&mut app.state, t, row);
+        // Linear mode: the new channel plays the track's own strip (its FX chain, its fader) and the track
+        // model's channel mirror follows, like the control plane's track_create keeps them — never an orphan
+        // channel in the channel rack.
+        if app.state.project.linear_mode {
+            let lane1 = u32::from(t) + 1;
+            let index = app.state.project.channels.get(row).map(|c| c.index);
+            let nm = crate::rack::channel_name(&app.state, row);
+            if let Some(tr) = app.state.project.tracks.iter_mut().find(|tr| tr.playlist_lane == lane1) {
+                let strip = tr.mixer_strip;
+                tr.channel = index;
+                if let Some(m) = crate::mixer::track_mut(&mut app.state, strip) {
+                    m.name = Some(nm.clone());
+                }
+                if let Some(ix) = index {
+                    if let Some(ch) = app.state.project.channels.iter_mut().find(|c| c.index == ix) {
+                        ch.mixer_track = strip;
+                    }
+                }
+            }
+        }
         app.state.playlist.track = t;
         app.state.piano.dirty = true;
         Some(format!("Added {} on {}", crate::rack::channel_name(&app.state, row), crate::playlist::track_name(&app.state, t)))

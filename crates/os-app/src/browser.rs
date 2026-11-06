@@ -1024,7 +1024,26 @@ pub fn row_menu(s: &crate::app::State, row: &view::Row) -> Vec<PItem> {
             let sampler = s.project.channels.get(s.selected_channel).is_some_and(|c| c.kind.is_sampler());
             items.extend([r("Preview", RowCmd::Preview), if sampler { send } else { send.off() }, r("Add to instrument rack", RowCmd::NewChannel)]);
         }
-        Item::Generator(index) => items.push(PItem::new("Add to instrument rack", Cmd::Plugin(crate::plugin_menu::PlugCmd::Generator { index, after: None }))),
+        Item::Generator(index) => {
+            // Linear mode: a generator goes onto the selected MIDI track (its instrument — replace when the
+            // track has one, a new linked channel when not), not an orphan channel in the channel rack.
+            // Classic mode keeps the channel-rack add.
+            let cmd = match crate::track_links::lane_track(s, s.playlist.track)
+                .filter(|tr| tr.kind == os_model::TrackKind::Midi && s.project.linear_mode)
+            {
+                Some(tr) => match tr.channel.and_then(|ch| s.project.channels.iter().position(|c| c.index == ch)) {
+                    Some(row) => Cmd::Plugin(crate::plugin_menu::PlugCmd::Replace { index: index, row }),
+                    None => tr
+                        .playlist_lane
+                        .checked_sub(1)
+                        .map_or_else(|| Cmd::Plugin(crate::plugin_menu::PlugCmd::Generator { index, after: None }), |lane| {
+                            Cmd::TrackMode(lane as u16, crate::track_links::Mode::NewInstrument(index))
+                        }),
+                },
+                None => Cmd::Plugin(crate::plugin_menu::PlugCmd::Generator { index, after: None }),
+            };
+            items.push(PItem::new("Add to instrument rack", cmd));
+        }
         Item::Effect(index) => items.push(PItem::new("Add to selected mixer track", Cmd::Plugin(crate::plugin_menu::PlugCmd::Effect { index, slot: None }))),
         Item::History(_) => items.push(r("Go to this step", RowCmd::Activate)),
         // Into the selected channel's plugin (spec: plugins/presets.md "Browser").
