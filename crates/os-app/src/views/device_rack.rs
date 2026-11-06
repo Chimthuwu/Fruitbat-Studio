@@ -243,6 +243,17 @@ fn tile_paint(ui: &mut Ui, s: &State, d: Device, tile: Rect) {
         // Hosted, not a built-in: embedding comes with CLAP/VST3 embed (§7 milestone b) — a placeholder and a
         // Pop out button, which the floating window machinery takes.
         Some(key) => placeholder(ui, s, &d, body, Some(Action::DeviceRack(RackAct::PopOut(key)))),
+        // The MIDI FX ＋ Add tile: the whole body opens the MIDI FX browser (`app.rs` shows `midi_fx_menu`,
+        // the pick lands in the track's first empty MIDI FX slot). The tile previously had no click handler,
+        // so clicks fell through to the neighbouring FX gap button.
+        None if matches!(d.kind, DeviceKind::MidiFxAdd) => {
+            ui.hit(
+                body,
+                Action::DeviceRack(RackAct::AddMidiFx),
+                "Add a MIDI FX: Lemon Arp, Lemon Chord, Lemon Echo",
+            );
+            placeholder(ui, s, &d, body, None);
+        }
         // The MIDI FX placeholder region (no data yet, §8).
         None => placeholder(ui, s, &d, body, None),
     }
@@ -254,7 +265,7 @@ fn placeholder(ui: &mut Ui, s: &State, d: &Device, body: Rect, button: Option<Ac
     ui.c.fill_rect(body, t.s(0x131718));
     ui.c.stroke_rrect(body.inset(1.0), 2.0, 1.0, t.splitter_dark);
     let label = match d.kind {
-        DeviceKind::MidiFxAdd => "MIDI FX: notes in, notes out (§8 wires the engine path)",
+        DeviceKind::MidiFxAdd => "MIDI FX — click to add: Lemon Arp, Lemon Chord, Lemon Echo",
         _ => "No embedded editor for this plugin yet",
     };
     ui.c.text(fnt(13.0), body.x + 10.0, body.y + 8.0, t.text_dim, label);
