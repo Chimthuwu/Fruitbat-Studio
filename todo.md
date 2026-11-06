@@ -1,5 +1,15 @@
 # Lemon Studio — todo.md
 
+## 🎯 Current Session (2026-11-07) — MIDI FX / container editors LIVE
+- ✅ All 18 "simple" plugins (14 MIDI FX + 4 layer/selector containers) now render real parameter UI: added a
+  reusable `os-plugkit::simple::Editor` (opens `simple::win32::open` on spawn, repaints on param changes) and
+  replaced every stub `editor.rs` (whose `spawn()` returned `Box::new(())`, leaving the embedded rack frame
+  empty) with its static `Info` layout. Net −2.6k lines of dead stub code.
+- ✅ `cargo test -p os-app` 1081 passed / 0 failed / 62 ignored; all 18 plugin crates' suites green (166 tests).
+- ✅ Commit `fc17c4ec` pushed to `main`.
+- 📋 **Next: full MIDI processing in note containers** (arp timing, chord router) and the engine's note-path
+  wiring.
+
 ## 🎯 Current Session (2026-11-05) — M9 MIDI + Audio Layer/Selector complete
 - ✅ `lemon-arp`, `lemon-chord`, `lemon-echo` — 23 tests pass (GNU toolchain, `RUSTUP_HOME=/z/rustup`)
 - ✅ `lemon-note-layer` (9 tests), `lemon-note-selector` (9 tests) — parallel/slot routing, channel/note/CC modes
@@ -9,8 +19,6 @@
   the device rack's MIDI FX region shows per-slot tiles + a "＋ Add" tile opening the MIDI FX browser
   (`midi_fx::add` hosts an instance under `MIDI_FX_KEY`); slots are in memory per track id (the `.flp` records
   them with the engine's MIDI FX milestone); `os-app` 1062 tests pass.
-- 📋 **Next: real editor UIs** (stubs; shared `os-plugkit::simple` editor drafted for the Windows embed) +
-  full MIDI processing in note containers (arp timing, chord router) and the engine's note-path wiring.
 ## 🎯 Engine Split (2026-11-06) — COMPLETE
 - ✅ `os-engine/src/engine.rs` split into per-concern modules under `engine/` (18 modules: channel, jobs,
   live_edit, mix, render, sched, transport, triggers, voice + pre-existing auto_bypass/controllers/layers/
