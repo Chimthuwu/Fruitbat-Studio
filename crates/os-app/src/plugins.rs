@@ -421,6 +421,7 @@ pub fn builtin_effects() -> Vec<Available> {
 /// (the engine's MIDI FX milestone wires the audio through; hosting shows and loads them today).
 pub fn builtin_midi_fx() -> Vec<Available> {
     const N: usize = LINKED_MIDI_FX.len();
+    static LIBS: [OnceLock<Option<Arc<os_clap::Library>>>; N] = [const { OnceLock::new() }; N];
     let entries: [*const std::ffi::c_void; N] = [
         &lemon_arp::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
         &lemon_chord::LINKED_CLAP_ENTRY as *const _ as *const std::ffi::c_void,
