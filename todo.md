@@ -7,8 +7,13 @@
   empty) with its static `Info` layout. Net −2.6k lines of dead stub code.
 - ✅ `cargo test -p os-app` 1081 passed / 0 failed / 62 ignored; all 18 plugin crates' suites green (166 tests).
 - ✅ Commit `fc17c4ec` pushed to `main`.
-- 📋 **Next: full MIDI processing in note containers** (arp timing, chord router) and the engine's note-path
-  wiring.
+- ✅ **Rack params are dials** (commit `37e9eca1`): horizontal sliders replaced with vertical-drag knobs
+  (`kit::knob`, `Drag::DeviceRackParam { y0, v0 }`); `param_bar` → `param_dial`; 1081 tests green.
+- 📋 **Signal routing audit (2026-11-07):** audio FX chain ALREADY WORKS — mixer insert effects process in
+  slot order (`engine/mix.rs:31`), so the rack's right-side FX tiles already drive the mixer. The remaining gap
+  is the **engine note-path**: MIDI FX / note-layer / note-selector plugins are hosted for UI only and their
+  `process()` is never called, so no MIDI reaches the instrument on the right. This is the staged
+  "note-path refactor" milestone (todo `M9` → note-path).
 
 ## 🎯 Current Session (2026-11-05) — M9 MIDI + Audio Layer/Selector complete
 - ✅ `lemon-arp`, `lemon-chord`, `lemon-echo` — 23 tests pass (GNU toolchain, `RUSTUP_HOME=/z/rustup`)
