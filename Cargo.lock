@@ -2209,6 +2209,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lemon-random"
+version = "0.0.1"
+dependencies = [
+ "nih_plug",
+ "os-hostlink",
+ "os-plugkit",
+ "os-theme",
+ "os-ui",
+ "rand 0.8.8",
+ "serde_json",
+ "tiny-skia",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "lemon-reverb"
 version = "0.0.1"
 dependencies = [
@@ -3136,6 +3151,7 @@ dependencies = [
  "lemon-parametric-eq-2",
  "lemon-peak-controller",
  "lemon-phaser",
+ "lemon-random",
  "lemon-reverb",
  "lemon-sampler",
  "lemon-slicer",
