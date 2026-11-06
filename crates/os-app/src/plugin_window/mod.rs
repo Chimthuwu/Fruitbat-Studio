@@ -247,6 +247,10 @@ pub enum FrameEvent {
     /// The frame's edges were dragged: the plugin's editor should take this content size (logical px). Only for a
     /// plugin that said it may be resized (host link `Resizable`; spec: plugins/host-link.md).
     Resize(u32, u32),
+    /// The wheel turned over an embedded (pinned) frame and its controls did not take it: the app scrolls what is
+    /// under the tile — the device rack's chain (up = left, as the mixer's). `notches` (up positive).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Wheel(f32),
 }
 
 /// A frame edge being dragged: which edges, the press (window coordinates, logical px) and the editor size then.
@@ -1140,6 +1144,13 @@ impl State {
             self.set_knob(k, self.knob_value(k) + notches.signum());
             self.box_hint = Some(k);
             return Reply::Repaint;
+        }
+        // Over the editor itself: the plugin's own UI keeps the wheel when the window floats; embedded in the
+        // rack (pinned), the editor's surface is the rack's body — pass the wheel on so the rack's chain scrolls
+        // instead of being swallowed by the editor's HWND.
+        if self.pinned {
+            self.events.push(FrameEvent::Wheel(notches));
+            os_clap::wake();
         }
         Reply::None
     }

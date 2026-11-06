@@ -269,6 +269,10 @@ pub enum Request {
     PluginMenu(usize, os_host::Menu, (i32, i32)),
     /// The instance stopped after a crash (its window is closed): what to tell the user.
     Stopped(usize, String),
+    /// The wheel turned over an embedded editor whose controls did not take it: the rack scrolls its chain
+    /// (up = left). Only for embedded (pinned) frames.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Wheel(usize, f32),
 }
 
 /// Keys from here up are mixer slots, not rack rows: `FX_KEY + track * 16 + slot` (spec: ui/mixer.md §7).
@@ -1511,6 +1515,7 @@ impl Plugins {
                             Request::KnobMenu(row, c, x, y)
                         }
                         FrameEvent::Note(k, v, on) => Request::Note(row, k, v, on),
+                        FrameEvent::Wheel(n) => Request::Wheel(row, n),
                         FrameEvent::NotAvailable(name) => Request::NotAvailable(name),
                         FrameEvent::Dpi(k) => {
                             // A Main GUI scaling percentage replaces the monitor's scale (spec: ui/ui-scaling.md §1).

@@ -3006,6 +3006,21 @@ impl App {
                         self.invalidate();
                         continue;
                     }
+                    // The wheel over an embedded editor scrolls the rack's chain (the editor's HWND swallowed
+                    // it otherwise; §6). Up = left, as the mixer's. Only a rack tile's key scrolls it.
+                    Request::Wheel(key, n) => {
+                        if crate::device_rack::visible(&self.state)
+                            && !self.state.device_rack_collapsed
+                            && crate::views::device_rack::device_keys(&self.state).contains(&key)
+                        {
+                            let s = &mut self.state;
+                            let w = s.screen.0;
+                            s.device_rack_scroll_x = (crate::views::device_rack::scroll_x(s, w) - n * 44.0)
+                                .clamp(0.0, (crate::views::device_rack::content_w(s) - w).max(0.0));
+                            self.invalidate();
+                        }
+                        continue;
+                    }
                 }
                 self.state.piano.dirty = true;
                 self.invalidate();

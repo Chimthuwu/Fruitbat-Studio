@@ -1254,4 +1254,41 @@ mod tests {
             let _ = i;
         }
     }
+
+    /// The wheel over the rack's body scrolls the chain through the real dispatch (`App::wheel` → `wheel_act`),
+    /// not just the helper: notches move the tiles, clamped to the content.
+    #[test]
+    fn wheel_scrolls_the_rack_through_the_dispatch() {
+        let mut app = app();
+        crate::playlist::run(
+            &mut app,
+            Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
+        );
+        let strip = app.state.project.tracks.last().unwrap().clone().mixer_strip;
+        let m = crate::mixer::track_mut(&mut app.state, strip).unwrap();
+        for k in 0..7 {
+            m.slots[k] = Some(os_model::SlotPlugin { id: os_model::Id::NONE, name: format!("Dev {k}"), state: Vec::new() });
+        }
+        let (w, h) = app.state.screen;
+        assert!(crate::views::device_rack::content_w(&app.state) > w, "the chain overflows the panel");
+        let r = crate::views::device_rack::panel_rect(&app.state, w, h);
+        app.mouse_move(r.x + 50.0, r.y + crate::device_rack::HEADER_H + 20.0);
+        // Wheel down (right) twice, then past the end: the dispatch moves and clamps the scroll.
+        app.wheel(0.0, -1.0, false, false);
+        let one = app.state.device_rack_scroll_x;
+        assert!(one > 0.0, "a wheel notch through wheel_act scrolls right");
+        for _ in 0..50 {
+            app.wheel(0.0, -1.0, false, false);
+        }
+        let max = crate::views::device_rack::scroll_x(&app.state, w);
+        assert!(app.state.device_rack_scroll_x <= max + 0.001, "clamped to the content");
+        // Wheel up past the start: clamped at 0.
+        for _ in 0..50 {
+            app.wheel(0.0, 1.0, false, false);
+        }
+        assert_eq!(app.state.device_rack_scroll_x, 0.0, "clamped at the start");
+        // A sideways wheel (dx) scrolls too: up = left.
+        app.wheel(-3.0, 0.0, false, false);
+        assert!(app.state.device_rack_scroll_x > 0.0, "a sideways wheel scrolls");
+    }
 }
