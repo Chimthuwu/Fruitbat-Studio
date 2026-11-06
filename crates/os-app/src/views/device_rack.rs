@@ -254,7 +254,7 @@ fn placeholder(ui: &mut Ui, s: &State, d: &Device, body: Rect, button: Option<Ac
     ui.c.fill_rect(body, t.s(0x131718));
     ui.c.stroke_rrect(body.inset(1.0), 2.0, 1.0, t.splitter_dark);
     let label = match d.kind {
-        DeviceKind::MidiFx => "MIDI FX slots arrive with a later milestone",
+        DeviceKind::MidiFxAdd => "MIDI FX: notes in, notes out (§8 wires the engine path)",
         _ => "No embedded editor for this plugin yet",
     };
     ui.c.text(fnt(13.0), body.x + 10.0, body.y + 8.0, t.text_dim, label);
@@ -360,6 +360,20 @@ pub(crate) fn add_device_menu(s: &State, x: f32, y: f32) -> Popup {
     let mut p = Popup { x, y, items, sub: None, scroll: [0; 2] };
     p.items.extend(plugin_menu::footer(s));
     p
+}
+
+/// The MIDI FX browser popup (the "＋ Add" tile of the MIDI FX region): the compiled-in MIDI FX plugins
+/// (`Plugins::midi_fx`, native only for now — spec: plugins/lemon-arp.md), each adding itself to the track's
+/// first empty MIDI FX slot.
+pub(crate) fn midi_fx_menu(mfx: &[crate::plugins::Available], x: f32, y: f32) -> Popup {
+    let mut items = vec![PItem::head("MIDI FX")];
+    if mfx.is_empty() {
+        items.push(PItem::new("(no MIDI FX plugins compiled in)", crate::playlist::Cmd::Nothing).off());
+    }
+    for (index, e) in mfx.iter().enumerate() {
+        items.push(PItem::new(e.desc.name.clone(), crate::playlist::Cmd::Plugin(crate::plugin_menu::PlugCmd::MidiFxAdd { index })));
+    }
+    Popup { x, y, items, sub: None, scroll: [0; 2] }
 }
 
 /// One device-rack browser section: built-in (native) plugins first, then the installed ones, in display order.

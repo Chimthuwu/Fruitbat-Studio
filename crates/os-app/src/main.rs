@@ -43,6 +43,7 @@ mod cpu;
 mod data_folder;
 mod device;
 mod device_rack;
+mod midi_fx;
 mod dialog;
 mod floating;
 mod filedlg;

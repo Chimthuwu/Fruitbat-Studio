@@ -5,7 +5,12 @@
 - ✅ `lemon-note-layer` (9 tests), `lemon-note-selector` (9 tests) — parallel/slot routing, channel/note/CC modes
 - ✅ `lemon-audio-layer` (10 tests), `lemon-audio-selector` (7 tests) — parallel/selected Bypass/Filter/Delay/Chorus/Drive slots
 - ✅ 58 tests pass across all 7 MIDI/Audio containers (`cargo test -p lemon-arp -p lemon-chord -p lemon-echo -p lemon-note-layer -p lemon-note-selector -p lemon-audio-layer -p lemon-audio-selector`)
-- 📋 **Next: real editor UIs** (currently stubs) + full MIDI processing in note containers (arp timing, chord router)
+- ✅ MIDI FX wired into the app (2026-11-06): `os-app` links `lemon-arp`/`lemon-chord`/`lemon-echo` (`builtin_midi_fx`),
+  the device rack's MIDI FX region shows per-slot tiles + a "＋ Add" tile opening the MIDI FX browser
+  (`midi_fx::add` hosts an instance under `MIDI_FX_KEY`); slots are in memory per track id (the `.flp` records
+  them with the engine's MIDI FX milestone); `os-app` 1062 tests pass.
+- 📋 **Next: real editor UIs** (stubs; shared `os-plugkit::simple` editor drafted for the Windows embed) +
+  full MIDI processing in note containers (arp timing, chord router) and the engine's note-path wiring.
 ## 🎯 Engine Split (2026-11-06) — COMPLETE
 - ✅ `os-engine/src/engine.rs` split into per-concern modules under `engine/` (18 modules: channel, jobs,
   live_edit, mix, render, sched, transport, triggers, voice + pre-existing auto_bypass/controllers/layers/

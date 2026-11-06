@@ -1124,6 +1124,9 @@ pub struct State {
     pub device_rack_params: std::collections::BTreeMap<usize, Vec<(String, f64)>>,
     /// The selected tile index in the device rack, if any.
     pub device_rack_sel: Option<usize>,
+    /// A MIDI track's MIDI FX slots (`crate::midi_fx`), by track id. In memory for now: the `.flp` records them
+    /// with the engine's MIDI FX milestone.
+    pub midi_fx: crate::midi_fx::Slots,
     /// The hovered row whose label is scrolling, as last painted (spec: ui/browser.md §9).
     pub browser_marquee: std::cell::RefCell<Option<views::browser::Marquee>>,
     /// Favorite files (spec: ui/browser.md §10) and the index of the browser's disk folders (§11).
@@ -1572,6 +1575,7 @@ impl App {
                 device_rack_split_click: None,
                 device_rack_params: Default::default(),
                 device_rack_sel: None,
+                midi_fx: Default::default(),
                 browser_marquee: Default::default(),
                 browser_favs: crate::browser::load_favs(),
                 browser_index: Default::default(),
@@ -9258,6 +9262,11 @@ impl App {
             Action::DeviceRack(crate::device_rack::RackAct::AddDevice) => {
                 // The device-rack plugin browser: built-in (native) plugins first, display-mode radios as the filter.
                 let p = crate::views::device_rack::add_device_menu(&self.state, self.mouse.0, self.mouse.1);
+                self.state.playlist.popup = Some(p);
+            }
+            Action::DeviceRack(crate::device_rack::RackAct::AddMidiFx) => {
+                // The MIDI FX browser: the compiled-in MIDI FX plugins (the rack track's first empty slot takes the pick).
+                let p = crate::views::device_rack::midi_fx_menu(&self.plugins.midi_fx, self.mouse.0, self.mouse.1);
                 self.state.playlist.popup = Some(p);
             }
             Action::RackFilter => {

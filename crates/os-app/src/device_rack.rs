@@ -52,8 +52,10 @@ pub fn height(s: &State) -> f32 {
 /// A device of the track the rack shows.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DeviceKind {
-    /// The MIDI FX slots' region: no slots exist yet (§8 is a later milestone) — a placeholder tile.
-    MidiFx,
+    /// A MIDI track's MIDI FX slot `usize` (`crate::midi_fx`): a loaded MIDI FX plugin.
+    MidiFx(usize),
+    /// The MIDI FX region's "＋ Add" tile (a free slot): opens the MIDI FX browser.
+    MidiFxAdd,
     /// The instrument: the channel (its rack row) a MIDI track plays.
     Instrument(usize),
     /// A mixer strip's effect slot: the strip's insert and the slot's index.
@@ -84,13 +86,19 @@ pub fn rack_track(s: &State) -> Option<&os_model::Track> {
 pub fn chain(s: &State, tr: &os_model::Track) -> Vec<Device> {
     let mut v = Vec::new();
     if tr.kind == os_model::TrackKind::Midi {
-        v.push(Device {
-            kind: DeviceKind::MidiFx,
-            key: None,
-            name: "MIDI FX".into(),
-            on: false,
-            builtin: false,
-        });
+        // The MIDI FX slots in signal-flow order (§7: they come first), then one "＋ Add" tile while slots are free.
+        for (i, sl) in crate::midi_fx::filled(s, tr.id.0) {
+            v.push(Device {
+                kind: DeviceKind::MidiFx(i),
+                key: Some(crate::plugins::midi_fx_key(tr.id.0, i)),
+                name: sl.name,
+                on: sl.on,
+                builtin: true,
+            });
+        }
+        if crate::midi_fx::slots(s, tr.id.0).iter().filter(|o| o.is_some()).count() < crate::midi_fx::SLOTS {
+            v.push(Device { kind: DeviceKind::MidiFxAdd, key: None, name: "MIDI FX".into(), on: false, builtin: false });
+        }
     }
     if let Some(row) = tr
         .channel
@@ -162,7 +170,9 @@ fn builtin_name(name: &str) -> bool {
                 .map(|a| a.desc.name.clone())
                 .collect();
             // The compiled-in names themselves (a CLAP descriptor may spell one differently).
+            v.extend(crate::plugins::builtin_midi_fx().iter().map(|a| a.desc.name.clone()));
             v.extend(crate::plugins::LINKED_EFFECTS.iter().map(|s| s.to_string()));
+            v.extend(crate::plugins::LINKED_MIDI_FX.iter().map(|s| s.to_string()));
             v.extend(crate::plugins::FILE_MAPPED.iter().map(|s| s.to_string()));
             v.extend(crate::plugins::OLD_NAMES.iter().map(|(_, n)| n.to_string()));
             v
@@ -216,6 +226,8 @@ pub enum RackAct {
     AddAt(Option<u8>),
     /// A tile header pressed: drag it left/right to reorder (FX tiles swap slots).
     TilePress(DeviceKind),
+    /// The MIDI FX region's "＋ Add" tile: open the MIDI FX browser (`crate::midi_fx`).
+    AddMidiFx,
     /// The device rack's "＋ Add" header button: open the device-rack plugin browser (native plugins first).
     #[allow(dead_code)] // Superseded by `Add`'s plugin palette; kept for the merged browser wiring.
     AddDevice,
@@ -326,6 +338,7 @@ pub fn run(app: &mut App, act: RackAct) {
             app.drag = Some(Drag::DeviceRackTile { kind, _x0: app.mouse.0 });
         }
         RackAct::AddDevice => {}
+        RackAct::AddMidiFx => {} // The popup opens on the action (app.rs), like AddDevice.
         RackAct::Reorder { from, to } => {
             let _ = reorder(&mut app.state, from, to);
             app.invalidate();
@@ -349,7 +362,13 @@ fn toggle_on(app: &mut App, kind: DeviceKind) {
                 m.slot_on[usize::from(slot)] = !m.slot_on[usize::from(slot)];
             }
         }
-        DeviceKind::MidiFx => {}
+        DeviceKind::MidiFx(slot) => {
+            let id = rack_track(s).map(|tr| tr.id.0);
+            if let Some(id) = id {
+                crate::midi_fx::toggle(s, id, slot);
+            }
+        }
+        DeviceKind::MidiFxAdd => {}
     }
     app.invalidate();
 }
@@ -360,6 +379,7 @@ fn toggle_on(app: &mut App, kind: DeviceKind) {
 fn open_editor(app: &mut App, key: usize) -> Option<Result<(), String>> {
     let info = crate::plugins::fx_of(key)
         .and_then(|(_, _)| crate::mixer::fx_info(&app.state.project, &app.state.mixer, key))
+        .or_else(|| crate::midi_fx::info(&app.state, key))
         .or_else(|| crate::app::channel_info(&app.state.project, key))?;
     Some(app.plugins.open_window(key, info))
 }
@@ -499,14 +519,16 @@ mod tests {
             "the insert selects the lane"
         );
         let got = rack_chain(&app.state);
-        assert_eq!(got.len(), 2);
+        // A MIDI track's chain leads with its (empty) MIDI FX region: one "＋ Add" tile while slots are free.
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0].kind, DeviceKind::MidiFxAdd);
         assert_eq!(
-            got[0].kind,
+            got[1].kind,
             DeviceKind::Instrument(app.state.project.channels.len() - 1)
         );
-        assert!(got[0].on, "the channel is on");
+        assert!(got[1].on, "the channel is on");
         assert_eq!(
-            got[1],
+            got[2],
             Device {
                 kind: DeviceKind::Fx(strip, 1),
                 key: Some(crate::plugins::fx_key(strip, 1)),
