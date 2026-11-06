@@ -1335,6 +1335,8 @@ mod tests {
         use os_model::ControlPoint;
         let Ok(mut c) = Canvas::new(1920, 1080, 1.0) else { return };
         let mut app = app();
+        // The channel rack is out of the default UI (the group-instrument rebuild); the test needs its knobs.
+        app.state.raise(crate::app::Win::ChannelRack);
         let ch = app.state.project.channels[1].index;
         crate::piano::set_control(&mut app.state, ch, ControlPoint::VOLUME, 70, 1000);
         crate::piano::set_control(&mut app.state, ch, ControlPoint::VOLUME, 200, 2000);

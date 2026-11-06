@@ -1517,7 +1517,9 @@ impl App {
                 retimed: false,
                 file: None,
                 path: None,
-                z: vec![Win::Playlist, Win::ChannelRack],
+                // The step sequencer / channel rack is out of the UI until it is rebuilt as a group instrument
+                // (todo.md): new projects show no channel rack — the channel model stays for FLP import.
+                z: vec![Win::Playlist],
                 no_focus: false,
                 show_browser: !crate::browser::load_hidden(),
                 rack_pos: crate::arrange::RACK_POS,
@@ -7954,7 +7956,8 @@ impl App {
             Key::Named(NamedKey::F5) if ctrl => self.act(Action::ToggleWin(Win::Tapper)),
             Key::Named(NamedKey::F7) if alt && !ctrl => self.act(Action::ToggleWin(Win::Touch)),
             Key::Named(NamedKey::F5) => self.act(Action::ToggleWin(Win::Playlist)),
-            Key::Named(NamedKey::F6) => self.act(Action::ToggleWin(Win::ChannelRack)),
+            // F6's channel rack is out of the UI until it is rebuilt as a group instrument (todo.md); the
+            // device rack is the instrument surface now.
             Key::Named(NamedKey::F7) => self.act(Action::ToggleWin(Win::PianoRoll)),
             // The browser and the pickers: General ▸ Input ▸ Manage shortcuts (spec: ui/settings-choices.md).
             Key::Named(NamedKey::F8) => self.f8_key(ctrl, alt),
@@ -14034,7 +14037,7 @@ mod tests {
         assert_eq!(row.mark, Mark::Check(false));
         // The toolbar's kick drum button (the 8th window button) opens and closes it too.
         let b = hit_rect(&app, &Action::ToggleWin(Win::Tapper));
-        assert_eq!((b.x, hint(&app, &Action::ToggleWin(Win::Tapper)).as_str()), (973.0 + 33.0 * 7.0, "Tap tempo (Ctrl+F5)"));
+        assert_eq!((b.x, hint(&app, &Action::ToggleWin(Win::Tapper)).as_str()), (973.0 + 33.0 * 6.0, "Tap tempo (Ctrl+F5)"));
         click(&mut app, &mut c, b);
         assert!(app.state.shown(Win::Tapper) && app.state.in_front(Win::Tapper));
         click(&mut app, &mut c, b);
@@ -15587,6 +15590,8 @@ mod tests {
     fn shift_wheel_moves_a_channel() {
         let Ok(mut c) = Canvas::new(1920, 1080, 1.0) else { return };
         let mut app = App::new(None);
+        // The channel rack is out of the default UI (the group-instrument rebuild); the test needs its rows.
+        app.state.raise(Win::ChannelRack);
         frame(&mut app, &mut c, None);
         let order = |app: &App| (0..app.state.project.channels.len()).map(|r| crate::rack::channel_name(&app.state, r)).collect::<Vec<_>>();
         let b = order(&app);
@@ -19095,6 +19100,34 @@ mod tests {
         drag(&mut app, &mut c, at(2 * bar, 2), at(3 * bar, 2));
         assert_eq!((pos(&app, 0).0, pos(&app, 2).0), (2 * bar, 3 * bar), "the group moved together");
         assert_eq!(app.state.playlist.sel.len(), 2);
+    }
+
+    /// The step sequencer / channel rack is out of the UI until its group-instrument rebuild (todo.md): a new
+    /// project shows no channel rack, and no toolbar button, VIEW entry or F6 brings it back. The model stays:
+    /// the channels and their step data are still there (FLP import keeps working).
+    #[test]
+    fn the_channel_rack_is_out_of_the_ui() {
+        use winit::keyboard::{Key, NamedKey};
+        let Ok(mut c) = Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = App::new(None);
+        frame(&mut app, &mut c, None);
+        assert!(
+            !app.state.shown(Win::ChannelRack),
+            "a new project shows no channel rack\nz: {:?}",
+            app.state.z
+        );
+        assert!(app.state.project.channels.len() > 1, "the channel model stays");
+        // No toolbar button and no VIEW entry: the hits and the menu model say so.
+        assert!(!app.hits.iter().any(|h| h.action == Action::ToggleWin(Win::ChannelRack)), "no toolbar button");
+        assert!(
+            !crate::views::menus::bar_model(&app.state)[crate::views::menus::VIEW].rows
+                .iter()
+                .any(|r| r.label == "Instrument rack"),
+            "no VIEW entry"
+        );
+        // F6 does not bring it back.
+        app.key(&Key::Named(NamedKey::F6), false, false);
+        assert!(!app.state.shown(Win::ChannelRack), "F6 shows nothing");
     }
 
     /// VIEW > Close all windows / unfocused / plugin windows and F12, Ctrl+F12, Alt+F12 (spec: ui/close-windows.md):

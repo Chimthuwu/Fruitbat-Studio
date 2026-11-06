@@ -205,6 +205,21 @@ Cross-cutting standing notes:
 - All six items touch code the 2026-11-04 quality audit flagged; re-run that audit
   after each feature lands.
 
+## 🎯 Rebuild spec — the step sequencer / channel rack as a group instrument
+The channel rack (and its step sequencer) is out of the app UI since 2026-11-06 (no default window, no
+toolbar/VIEW/F6 toggles, no ADD ▸ Channel). The channel model, FLP import/export and the channel-rack
+tests stay untouched. To bring it back, rebuild it as ONE self-contained group instrument, not a window:
+- It is an instrument plugin (`plugins/lemon_group.rs`-style CLAP-linked module) whose hosts live in a
+  track's instrument slot like any other device — the device rack, mixer and shortcuts all work on it.
+- Its editor embeds per-channel lanes: each FLP channel is a lane row with the step sequencer grid, mute
+  and mini-knobs, routed inside the plugin; the group's single channel output goes to the track's strip.
+- Its own mixer group: a "Channel group" entry in the project's mixer view, one fader + FX chain for the
+  whole rack, plus optional per-lane sends to other strips.
+- Import: FLP channels build lanes (channel → lane mapping kept in the plugin state); export maps lanes
+  back. The step-sequencer UI rules (mouse paint/drag, step prefs, high-visibility outlines) move into the
+  lane editor per ui/step-sequencer.md.
+- Remove `Win::ChannelRack`/`rack.rs` view code only after parity; until then it stays dormant but tested.
+
 ## 🎯 Session (2026-11-06) — Device-rack routing fixes
 - [x] Rack ＋ (header, gaps, browser) routes by the rack track's chain: an instrument pick replaces the
       track's channel or (when the slot is empty) makes a channel ON the track — lane linked, channel routed

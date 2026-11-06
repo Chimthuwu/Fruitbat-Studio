@@ -268,10 +268,9 @@ const EDIT: &[Item] = &[it("Undo", "Ctrl+Z").cmd(MenuCmd::Undo), it("Redo", "Ctr
 const ADD_PLUGINS: &[Item] = &[
     it("More plugins...", "").on().cmd(MenuCmd::MorePlugins),
     SEP,
-    head("Channel"),
-    it("Sampler", "").on().cmd(MenuCmd::Sampler),
-    it(crate::lemon_midi_out::LEMON_MIDI_OUT, "").on().cmd(MenuCmd::MidiOut),
     head("Misc"),
+    // ADD ▸ Channel (Sampler, MIDI Out — the channel rack's add path) is out of the UI until the channel rack
+    // is rebuilt as a group instrument (todo.md): channels are made as track instruments instead.
     it("Audio clip", "").on().cmd(MenuCmd::AudioClip),
     it("Automation clip", "").on().cmd(MenuCmd::AutomationClip),
     it("Layer", "").on().cmd(MenuCmd::Layer),
@@ -330,7 +329,8 @@ const VIEW_ITEMS: &[Item] = &[
     head("Windows"),
     it("Arranger", "F5").on().tick().cmd(MenuCmd::Window(Win::Playlist)),
     it("Piano roll", "F7").on().tick().cmd(MenuCmd::Window(Win::PianoRoll)),
-    it("Instrument rack", "F6").on().tick().cmd(MenuCmd::Window(Win::ChannelRack)),
+    // The step sequencer / channel rack ("Instrument rack", F6) is out of the UI until it is rebuilt as a
+    // group instrument (todo.md): no VIEW entry, no toolbar button, no ADD ▸ Channel.
     it("Mixer", "F9").on().tick().cmd(MenuCmd::Window(Win::Mixer)),
     it("Browser", "Alt+F8").on().tick().cmd(MenuCmd::Window(Win::Browser)),
     it("Clip palette", "Ctrl+F8").on().cmd(MenuCmd::ClipPalette),

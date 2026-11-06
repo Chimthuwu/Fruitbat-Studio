@@ -883,7 +883,8 @@ fn window_buttons(ui: &mut Ui, c: &Ctx, which: Range<usize>) -> bool {
     let wins = [
         (Icon::Playlist, Action::ToggleWin(Win::Playlist), "Arranger / Maximize arranger (F5)"),
         (Icon::PianoRoll, Action::ToggleWin(Win::PianoRoll), "Piano roll / Maximize Piano roll (F7)"),
-        (Icon::ChannelRack, Action::ToggleWin(Win::ChannelRack), "Instrument rack (F6)"),
+        // The step sequencer / channel rack button (F6) is out of the UI until it is rebuilt as a group
+        // instrument (todo.md).
         (Icon::Mixer, Action::ToggleWin(Win::Mixer), "Mixer (F9)"),
         (Icon::Browser, Action::ToggleWin(Win::Browser), "Browser / Plugin palette (Alt+F8)"),
         (Icon::Project, Action::ProjectPicker, "Clip palette / Plugin palette (Ctrl+F8)"),
