@@ -857,6 +857,15 @@ mod tests {
         assert!(at("Lemon Sampler") < at("Test Synth"), "native instruments first\nlabels={labels:?}");
         assert!(at("Lemon Reverb") < at("Test FX"), "native effects first\nlabels={labels:?}");
         assert!(at("Instruments") < at("Test Synth") && at("Test Synth") < at("Effects") && at("Effects") < at("Test FX"));
+        // Each section groups its built-ins under a "Lemon" header at the very top, before third-party.
+        let lemon_after = |head: &str| {
+            let h = labels.iter().position(|l| *l == head).unwrap();
+            labels[h..].iter().position(|l| *l == "Lemon").unwrap() + h
+        };
+        assert_eq!(labels[lemon_after("Instruments")], "Lemon", "the instruments' Lemon group");
+        assert!(lemon_after("Instruments") < at("Test Synth"), "the Lemon group precedes installed instruments");
+        assert_eq!(labels[lemon_after("Effects")], "Lemon", "the effects' Lemon group");
+        assert!(lemon_after("Effects") < at("Test FX"), "the Lemon group precedes installed effects");
         // Every built-in must be in the list, before the installed one of its section.
         for a in crate::plugins::builtin().iter() {
             assert!(at(&a.desc.name) < at("Test Synth"), "{} must precede installed instruments", a.desc.name);

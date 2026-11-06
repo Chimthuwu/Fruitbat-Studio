@@ -11,6 +11,7 @@ use os_ui::{Color, Rect, kit};
 
 use crate::app::{Action, State};
 use crate::device_rack::{self, Device, DeviceKind, HEADER_H, RackAct, TILE_W};
+use crate::plugin_db::Entry;
 use crate::plugin_menu::{self, pick, Target};
 use crate::playlist::{Popup, PItem};
 use crate::views::{Ui, fnt};
@@ -432,14 +433,18 @@ pub(crate) fn add_device_menu(s: &State, mfx: &[crate::plugins::Available], x: f
     p
 }
 
-/// One device-rack browser section: built-in (native) plugins first, then the installed ones, in display order.
-/// Effects pick mixer slot `slot` (the gap's slot; `None` = the first empty slot of the selected track).
+/// One device-rack browser section, native first (spec: ui/device-rack.md §3): a "Lemon" group holds every
+/// built-in at the very top, then the installed (third-party) ones in display order. Effects pick mixer slot
+/// `slot` (the gap's slot; `None` = the first empty slot of the selected track).
 fn add_device_section(s: &State, effect: bool, slot: Option<u8>) -> Vec<PItem> {
     let target = if effect { Target::Fx(slot) } else { Target::Gen(None) };
     let list = if effect { &s.plugdb.lists.fx } else { &s.plugdb.lists.gens };
     let mut v = Vec::new();
-    for e in list.iter().filter(|e| e.builtin) {
-        v.push(PItem::new(e.label.clone(), pick(target, effect, e.index)));
+    let builtins: Vec<&Entry> = list.iter().filter(|e| e.builtin).collect();
+    if !builtins.is_empty() {
+        v.push(PItem::head("Lemon"));
+        v.extend(builtins.iter().map(|e| PItem::new(e.label.clone(), pick(target, effect, e.index))));
+        v.push(PItem::sep());
     }
     for e in list.iter().filter(|e| !e.builtin) {
         v.push(PItem::new(e.label.clone(), pick(target, effect, e.index)));
