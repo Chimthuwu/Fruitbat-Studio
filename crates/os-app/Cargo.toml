@@ -53,6 +53,17 @@ lemon-peak-controller = { path = "../../plugins/lemon-peak-controller", features
 lemon-formula-controller = { path = "../../plugins/lemon-formula-controller", features = ["linked"] }
 lemon-slicer = { path = "../../plugins/lemon-slicer", features = ["linked"] }
 lemon-vocoder = { path = "../../plugins/lemon-vocoder", features = ["linked"] }
+lemon-transpose = { path = "../../plugins/lemon-transpose", features = ["linked"] }
+lemon-quantize = { path = "../../plugins/lemon-quantize", features = ["linked"] }
+lemon-note-length = { path = "../../plugins/lemon-note-length", features = ["linked"] }
+lemon-key-filter = { path = "../../plugins/lemon-key-filter", features = ["linked"] }
+lemon-humanize = { path = "../../plugins/lemon-humanize", features = ["linked"] }
+lemon-note-delay = { path = "../../plugins/lemon-note-delay", features = ["linked"] }
+lemon-velocity-curve = { path = "../../plugins/lemon-velocity-curve", features = ["linked"] }
+lemon-note-repeats = { path = "../../plugins/lemon-note-repeats", features = ["linked"] }
+lemon-note-filter = { path = "../../plugins/lemon-note-filter", features = ["linked"] }
+lemon-random = { path = "../../plugins/lemon-random", features = ["linked"] }
+lemon-strum = { path = "../../plugins/lemon-strum", features = ["linked"] }
 winit = "0.30"
 softbuffer = "0.4"
 cpal = "0.18"

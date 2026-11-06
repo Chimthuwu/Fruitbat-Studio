@@ -2087,11 +2087,67 @@ dependencies = [
 ]
 
 [[package]]
+name = "lemon-humanize"
+version = "0.0.1"
+dependencies = [
+ "nih_plug",
+ "os-hostlink",
+ "os-plugkit",
+ "os-theme",
+ "os-ui",
+ "serde_json",
+ "tiny-skia",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "lemon-key-filter"
+version = "0.0.1"
+dependencies = [
+ "nih_plug",
+ "os-hostlink",
+ "os-plugkit",
+ "os-theme",
+ "os-ui",
+ "serde_json",
+ "tiny-skia",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "lemon-limiter"
 version = "0.0.1"
 dependencies = [
  "nih_plug",
  "os-engine",
+ "os-hostlink",
+ "os-plugkit",
+ "os-theme",
+ "os-ui",
+ "serde_json",
+ "tiny-skia",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "lemon-note-delay"
+version = "0.0.1"
+dependencies = [
+ "nih_plug",
+ "os-hostlink",
+ "os-plugkit",
+ "os-theme",
+ "os-ui",
+ "serde_json",
+ "tiny-skia",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "lemon-note-filter"
+version = "0.0.1"
+dependencies = [
+ "nih_plug",
  "os-hostlink",
  "os-plugkit",
  "os-theme",
@@ -2116,7 +2172,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "lemon-note-selector"
+name = "lemon-note-length"
+version = "0.0.1"
+dependencies = [
+ "nih_plug",
+ "os-hostlink",
+ "os-plugkit",
+ "os-theme",
+ "os-ui",
+ "serde_json",
+ "tiny-skia",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "lemon-note-repeats"
 version = "0.0.1"
 dependencies = [
  "nih_plug",
@@ -2161,6 +2231,34 @@ dependencies = [
  "lemon-small-fx",
  "nih_plug",
  "os-plugkit",
+]
+
+[[package]]
+name = "lemon-quantize"
+version = "0.0.1"
+dependencies = [
+ "nih_plug",
+ "os-hostlink",
+ "os-plugkit",
+ "os-theme",
+ "os-ui",
+ "serde_json",
+ "tiny-skia",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "lemon-random"
+version = "0.0.1"
+dependencies = [
+ "nih_plug",
+ "os-hostlink",
+ "os-plugkit",
+ "os-theme",
+ "os-ui",
+ "serde_json",
+ "tiny-skia",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2257,12 +2355,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "lemon-strum"
+version = "0.0.1"
+dependencies = [
+ "nih_plug",
+ "os-hostlink",
+ "os-plugkit",
+ "os-theme",
+ "os-ui",
+ "serde_json",
+ "tiny-skia",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "lemon-transient-processor"
 version = "0.0.1"
 dependencies = [
  "lemon-small-fx",
  "nih_plug",
  "os-plugkit",
+]
+
+[[package]]
+name = "lemon-transpose"
+version = "0.0.1"
+dependencies = [
+ "nih_plug",
+ "os-hostlink",
+ "os-plugkit",
+ "os-theme",
+ "os-ui",
+ "serde_json",
+ "tiny-skia",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "lemon-velocity-curve"
+version = "0.0.1"
+dependencies = [
+ "nih_plug",
+ "os-hostlink",
+ "os-plugkit",
+ "os-theme",
+ "os-ui",
+ "serde_json",
+ "tiny-skia",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3084,10 +3224,18 @@ dependencies = [
  "lemon-filter",
  "lemon-flanger",
  "lemon-formula-controller",
+ "lemon-humanize",
+ "lemon-key-filter",
  "lemon-limiter",
+ "lemon-note-delay",
+ "lemon-note-filter",
+ "lemon-note-length",
+ "lemon-note-repeats",
  "lemon-parametric-eq-2",
  "lemon-peak-controller",
  "lemon-phaser",
+ "lemon-quantize",
+ "lemon-random",
  "lemon-reverb",
  "lemon-sampler",
  "lemon-slicer",
@@ -3095,7 +3243,10 @@ dependencies = [
  "lemon-soft-clipper",
  "lemon-stereo-enhancer",
  "lemon-stereo-shaper",
+ "lemon-strum",
  "lemon-transient-processor",
+ "lemon-transpose",
+ "lemon-velocity-curve",
  "lemon-vocoder",
  "libc",
  "midir",
