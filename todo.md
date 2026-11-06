@@ -111,7 +111,7 @@ Source: https://github.com/Dorfhaus/Lemon-Studio-Michael-Lane-Edition/tree/micha
 
 **Deep audits done 2026-11-04:**
 - Our side: `docs/feature-imports-audit.md` (architecture fit per feature)
-- Fork side: `Z:\github\Lemon-Studio-MLE-audit\1-master-assistant.md` … `6-community.md`
+- Fork side: `Z:\github\lemon-study\fork-audit\1-master-assistant.md` … `6-community.md`
   (spec-level only, clean-room rules respected)
 
 **Key audit facts driving the plan:**

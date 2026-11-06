@@ -14,7 +14,7 @@ One git repo, three working copies (git worktrees, all pointing at origin
 | `Z:\GITHUB\Lemon-Studio-midifx` | `orchestra/midi-fx-plugins` @ (M9 checkpoint) | M9 crates: lemon-arp/chord/echo/note-layer/note-selector/audio-layer/audio-selector (58 tests pass per todo) + rack hosting wiring, editors still stubs. Pushed. |
 
 Reference-only clones (import queue, do not delete casually):
-`Z:\GITHUB\Lemon-Studio-MLE`, `Z:\GITHUB\Lemon-Studio-MLE-audit`.
+`Z:\GITHUB\Lemon-Studio-MLE` (fork code), `Z:\GITHUB\lemon-study\fork-audit` (audit notes).
 
 ## C drive — clean
 

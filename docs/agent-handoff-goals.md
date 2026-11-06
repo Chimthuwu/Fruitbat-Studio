@@ -1,7 +1,7 @@
 # Goals & plan — handoff doc for review/study agents
 
 Read alongside: `todo.md` (checklist), `docs/track-model-plan.md` (full design),
-`docs/feature-imports-audit.md` (our architecture), `Z:\github\Lemon-Studio-MLE-audit\*.md`
+`docs/feature-imports-audit.md` (our architecture), `Z:\github\lemon-study\fork-audit\*.md`
 (Michael's fork, spec-level).
 
 ## Who we are
