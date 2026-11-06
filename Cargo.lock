@@ -2266,6 +2266,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lemon-transpose"
+version = "0.0.1"
+dependencies = [
+ "nih_plug",
+ "os-hostlink",
+ "os-plugkit",
+ "os-theme",
+ "os-ui",
+ "serde_json",
+ "tiny-skia",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "lemon-vocoder"
 version = "0.0.1"
 dependencies = [
@@ -3096,6 +3110,7 @@ dependencies = [
  "lemon-stereo-enhancer",
  "lemon-stereo-shaper",
  "lemon-transient-processor",
+ "lemon-transpose",
  "lemon-vocoder",
  "libc",
  "midir",
