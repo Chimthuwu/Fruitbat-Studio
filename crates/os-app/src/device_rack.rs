@@ -58,6 +58,9 @@ pub enum DeviceKind {
     Instrument(usize),
     /// A mixer strip's effect slot: the strip's insert and the slot's index.
     Fx(u16, u8),
+    /// A MIDI track's empty instrument slot: no channel plays the track yet — the "Add instrument"
+    /// placeholder tile (the track is silent until one is picked).
+    NoInstrument,
 }
 
 /// The tile header's gradient, top and bottom (0xRRGGBB), per device kind. Hard-coded until user theming grows
@@ -70,7 +73,7 @@ pub const HEADER_GRAD_FX: (u32, u32) = (0xf3f4f5, 0x9dc9ee); // white -> sky blu
 pub fn header_gradient(kind: DeviceKind) -> (u32, u32) {
     match kind {
         DeviceKind::MidiFx(_) => HEADER_GRAD_MIDI_FX,
-        DeviceKind::Instrument(_) => HEADER_GRAD_INSTRUMENT,
+        DeviceKind::Instrument(_) | DeviceKind::NoInstrument => HEADER_GRAD_INSTRUMENT,
         DeviceKind::Fx(..) => HEADER_GRAD_FX,
     }
 }
@@ -127,6 +130,16 @@ pub fn chain(s: &State, tr: &os_model::Track) -> Vec<Device> {
             name: crate::rack::channel_name(s, row),
             on: ch.enabled,
             builtin,
+        });
+    } else if tr.kind == os_model::TrackKind::Midi {
+        // The empty instrument slot: a placeholder tile whose click opens the device browser (§7 — a MIDI
+        // track may be silent until an instrument is picked, e.g. the default sampler was removed).
+        v.push(Device {
+            kind: DeviceKind::NoInstrument,
+            key: None,
+            name: "Add instrument".into(),
+            on: false,
+            builtin: false,
         });
     }
     if let Some(m) = s.project.mixer.iter().find(|m| m.index == tr.mixer_strip) {
@@ -391,6 +404,8 @@ fn toggle_on(app: &mut App, kind: DeviceKind) {
                 s.piano.dirty = true;
             }
         }
+        // The empty slot has nothing to switch.
+        DeviceKind::NoInstrument => {}
         DeviceKind::Fx(track, slot) => {
             if let Some(m) = crate::mixer::track_mut(s, track) {
                 m.slot_on[usize::from(slot)] = !m.slot_on[usize::from(slot)];
@@ -495,11 +510,41 @@ pub fn tile_drop(app: &mut App, kind: DeviceKind, x: f32) {
             app.state.selected_mixer = prev;
             app.invalidate();
         }
-        DeviceKind::Instrument(_) => {
-            // A track holds one instrument: nothing to reorder it with (its channel is the track's).
+        DeviceKind::Instrument(_) | DeviceKind::NoInstrument => {
+            // A track holds one instrument: nothing to reorder it with (its channel is the track's); the
+            // empty slot's placeholder is not draggable.
         }
     }
     app.invalidate();
+}
+
+/// Deletes the selected device: an effect tile drops its slot, a MIDI FX tile drops its slot, the instrument
+/// tile deletes its channel (with the delete confirmation, as the channel rack's Delete does — its notes go
+/// with it) leaving the empty instrument slot. The placeholder tile has nothing to delete.
+pub fn delete_selected(app: &mut App) {
+    let Some(i) = app.state.device_rack_sel else { return };
+    let chain = rack_chain(&app.state);
+    let Some(d) = chain.get(i) else { return };
+    match d.kind {
+        DeviceKind::Fx(track, slot) => {
+            let fxk = crate::plugins::fx_key(track, slot);
+            app.plugins.drop_key(fxk);
+            if let Some(m) = crate::mixer::track_mut(&mut app.state, track) {
+                m.slots[usize::from(slot)] = None;
+                m.slot_on[usize::from(slot)] = false;
+            }
+            app.invalidate();
+        }
+        DeviceKind::MidiFx(slot) => {
+            if let Some(tr) = rack_track(&app.state) {
+                crate::midi_fx::remove(app, tr.id.0, slot);
+            }
+        }
+        DeviceKind::Instrument(row) => {
+            crate::rack::ask_delete(&mut app.state, vec![row]);
+        }
+        DeviceKind::NoInstrument => {}
+    }
 }
 
 /// Keeps the rack's embedded editors on their tiles: opens the built-in devices' editors that are missing, closes
@@ -681,6 +726,7 @@ mod tests {
     fn pop_out_and_dock_change_the_window_state() {
         let mut app = app();
         app.plugins = crate::plugins::Plugins::builtins();
+        app.state.plugdb.rebuild(&app.plugins);
         crate::playlist::run(
             &mut app,
             Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
@@ -852,6 +898,7 @@ mod tests {
             crate::playlist::Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
         );
         app.plugins = crate::plugins::Plugins::builtins();
+        app.state.plugdb.rebuild(&app.plugins);
         // Three tiles are wider than a narrow panel.
         app.state.screen.0 = 600.0;
         let strip = {
@@ -995,6 +1042,7 @@ mod tests {
     fn tile_params_set_through_one_path() {
         let mut app = app();
         app.plugins = crate::plugins::Plugins::builtins();
+        app.state.plugdb.rebuild(&app.plugins);
         // Nothing hosted under key 0: the set is a no-op, the app stays up.
         run(&mut app, RackAct::ParamSet { key: 0, id: 0, v: 0.5 });
         #[cfg(plugin_windows)]
@@ -1117,6 +1165,7 @@ mod tests {
             crate::playlist::Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
         );
         app.plugins = crate::plugins::Plugins::builtins();
+        app.state.plugdb.rebuild(&app.plugins);
         app.plugins.available.push(crate::plugin_db::fake("Test Synth", os_host::Kind::Instrument));
         app.plugins.effects.push(crate::plugin_db::fake("Test FX", os_host::Kind::Effect));
         app.state.plugdb.rebuild(&app.plugins);
@@ -1168,6 +1217,7 @@ mod tests {
             crate::playlist::Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
         );
         app.plugins = crate::plugins::Plugins::builtins();
+        app.state.plugdb.rebuild(&app.plugins);
         app.plugins.available.push(crate::plugin_db::fake("Test Synth", os_host::Kind::Instrument));
         app.plugins.effects.push(crate::plugin_db::fake("Test FX", os_host::Kind::Effect));
         app.state.plugdb.rebuild(&app.plugins);
@@ -1217,6 +1267,7 @@ mod tests {
             crate::playlist::Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
         );
         app.plugins = crate::plugins::Plugins::builtins();
+        app.state.plugdb.rebuild(&app.plugins);
         app.plugins.available.push(crate::plugin_db::fake("Test Synth", os_host::Kind::Instrument));
         app.plugins.effects.push(crate::plugin_db::fake("Test FX", os_host::Kind::Effect));
         app.state.plugdb.rebuild(&app.plugins);
@@ -1254,6 +1305,134 @@ mod tests {
             }
             let _ = i;
         }
+    }
+
+    /// A rack track with no instrument channel (an emptied slot, the default sampler removed) picking an
+    /// instrument: the pick makes a channel ON the track — a TrackMode NewInstrument on the track's lane, whose
+    /// `new_instrument` links the lane and routes the channel to the track's strip — never an orphan channel in
+    /// the channel rack.
+    #[test]
+    fn rack_browser_instrument_pick_without_a_channel_links_the_track() {
+        use crate::plugin_palette::{self as pal, Row};
+        use crate::playlist::Cmd;
+        let mut app = app();
+        crate::playlist::run(&mut app, Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi));
+        app.plugins = crate::plugins::Plugins::builtins();
+        app.state.plugdb.rebuild(&app.plugins);
+        app.plugins.available.push(crate::plugin_db::fake("Test Synth", os_host::Kind::Instrument));
+        app.state.plugdb.rebuild(&app.plugins);
+        // Empty the instrument slot: the track keeps its lane and strip, no channel.
+        let strip = app.state.project.tracks.last().unwrap().clone().mixer_strip;
+        let lane = app.state.project.tracks.last().unwrap().clone().playlist_lane;
+        app.state.project.tracks.last_mut().unwrap().channel = None;
+        app.open_plugin_palette(crate::plugin_menu::Target::Rack(None), (0.0, 0.0), None);
+        let rows = pal::rows(&app.state);
+        let pick = rows
+            .iter()
+            .find_map(|r| match r {
+                Row::Plugin { effect: false, .. } => pal::pick_cmd(&app.state, r),
+                _ => None,
+            })
+            .expect("an instrument pick routes");
+        assert!(
+            matches!(pick, Cmd::TrackMode(_, crate::track_links::Mode::NewInstrument(_))),
+            "the pick makes the track's instrument, not an orphan channel\n{pick:?}"
+        );
+        // Running it: the new channel plays the track's strip and the lane is its instrument track.
+        crate::playlist::run(&mut app, pick);
+        let tr = app.state.project.tracks.last().unwrap().clone();
+        assert!(tr.channel.is_some(), "the pick linked a channel to the track");
+        let row = app.state.project.channels.iter().position(|c| Some(c.index) == tr.channel).unwrap();
+        assert_eq!(app.state.project.channels[row].mixer_track, strip, "the channel routes to the track's strip");
+        assert_eq!(lane, app.state.project.tracks.last().unwrap().playlist_lane, "the lane is unchanged");
+    }
+
+    /// The default sampler is removable: Delete on the instrument tile asks (the same confirmation the channel
+    /// rack's Delete uses), and once gone the track keeps its lane and strip with an empty instrument slot —
+    /// the chain shows the "Add instrument" placeholder, the project keeps its other channels.
+    #[test]
+    fn the_instrument_tile_is_removable_to_an_empty_slot() {
+        use crate::device_rack::{DeviceKind, delete_selected};
+        let mut app = app();
+        crate::playlist::run(&mut app, Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi));
+        let strip = app.state.project.tracks.last().unwrap().clone().mixer_strip;
+        let row = app
+            .state
+            .project
+            .channels
+            .iter()
+            .position(|c| Some(c.index) == app.state.project.tracks.last().unwrap().channel)
+            .unwrap();
+        // The instrument tile is in the chain; select it and Delete.
+        let chain = crate::device_rack::rack_chain(&app.state);
+        let i = chain.iter().position(|d| matches!(d.kind, DeviceKind::Instrument(_))).expect("the instrument tile");
+        app.state.device_rack_sel = Some(i);
+        crate::messages::set(&crate::messages::DELETE_CHANNEL, false);
+        delete_selected(&mut app);
+        assert_eq!(app.state.rack.delete_now, Some(vec![row]), "the tile's Delete asks the channel delete");
+        crate::rack::delete_step(&mut app, &[row]);
+        let tr = app.state.project.tracks.last().unwrap().clone();
+        assert!(tr.channel.is_none(), "the track keeps its lane and strip, channel gone");
+        assert!(crate::mixer::track(&app.state, strip).is_some(), "the strip stays");
+        let chain = crate::device_rack::rack_chain(&app.state);
+        assert!(
+            matches!(chain[0].kind, DeviceKind::NoInstrument) && chain[0].name == "Add instrument",
+            "the empty slot shows the Add instrument placeholder\n{chain:?}"
+        );
+        // And the slot is fillable again: an instrument pick makes the track's channel (Bug A's route).
+        app.plugins = crate::plugins::Plugins::builtins();
+        app.state.plugdb.rebuild(&app.plugins);
+        app.open_plugin_palette(crate::plugin_menu::Target::Rack(None), (0.0, 0.0), None);
+        let rows = crate::plugin_palette::rows(&app.state);
+        let pick = rows
+            .iter()
+            .find_map(|r| match r {
+                crate::plugin_palette::Row::Plugin { effect: false, .. } => crate::plugin_palette::pick_cmd(&app.state, r),
+                _ => None,
+            })
+            .expect("an instrument pick routes");
+        crate::playlist::run(&mut app, pick);
+        assert!(
+            app.state.project.tracks.last().unwrap().channel.is_some(),
+            "the pick refilled the slot"
+        );
+        assert!(crate::device_rack::rack_chain(&app.state).iter().any(|d| matches!(d.kind, DeviceKind::Instrument(_))));
+    }
+
+    /// MIDI FX → Instrument → Audio FX end to end on a track whose instrument slot is empty: all three ＋
+    /// paths land (the MIDI FX slots, the track's channel, the strip's first free slot).
+    #[test]
+    fn midi_fx_instrument_and_fx_add_end_to_end_on_an_empty_track() {
+        use crate::plugin_palette::{self as pal, Row};
+        use crate::playlist::Cmd;
+        let mut app = app();
+        crate::playlist::run(&mut app, Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi));
+        app.plugins = crate::plugins::Plugins::builtins();
+        app.state.plugdb.rebuild(&app.plugins);
+        let strip = app.state.project.tracks.last().unwrap().clone().mixer_strip;
+        let id = app.state.project.tracks.last().unwrap().clone().id.0;
+        // Empty the instrument slot (the default sampler deleted).
+        let row = app.state.project.channels.iter().position(|c| Some(c.index) == app.state.project.tracks.last().unwrap().channel).unwrap();
+        app.state.device_rack_sel = Some(crate::device_rack::rack_chain(&app.state).iter().position(|d| matches!(d.kind, DeviceKind::Instrument(_))).unwrap());
+        crate::messages::set(&crate::messages::DELETE_CHANNEL, false);
+        crate::device_rack::delete_selected(&mut app);
+        crate::rack::delete_step(&mut app, &[row]);
+        app.open_plugin_palette(crate::plugin_menu::Target::Rack(None), (0.0, 0.0), None);
+        let run_pick = |app: &mut App, want: &dyn Fn(&pal::Row) -> bool| {
+            let rows = pal::rows(&app.state);
+            let r = rows.iter().find(|r| want(r)).expect("the row");
+            let cmd = pal::pick_cmd(&app.state, r).expect("the pick");
+            crate::playlist::run(app, cmd);
+        };
+        run_pick(&mut app, &|r| matches!(r, Row::MidiFx { .. }));
+        assert_eq!(crate::midi_fx::filled(&app.state, id).len(), 1, "the MIDI FX landed");
+        run_pick(&mut app, &|r| matches!(r, Row::Plugin { effect: false, .. }));
+        assert!(app.state.project.tracks.last().unwrap().channel.is_some(), "the instrument landed");
+        run_pick(&mut app, &|r| matches!(r, Row::Plugin { effect: true, .. }));
+        assert!(
+            crate::mixer::track(&app.state, strip).is_some_and(|m| m.slots.iter().any(|s| s.is_some())),
+            "the audio FX landed on the track's strip"
+        );
     }
 
     /// The wheel over the rack's body scrolls the chain through the real dispatch (`App::wheel` → `wheel_act`),

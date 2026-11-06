@@ -7915,21 +7915,9 @@ impl App {
                     }
                 }
                 Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace) => {
-                    // The instrument tile (chain index 0) is never removable; the effect tiles follow it.
-                    if let Some(i) = self.state.device_rack_sel {
-                        let chain = crate::device_rack::rack_chain(&self.state);
-                        if i > 0 {
-                            if let crate::device_rack::DeviceKind::Fx(track, slot) = chain[i].kind {
-                                let fxk = crate::plugins::fx_key(track, slot);
-                                self.plugins.drop_key(fxk);
-                                if let Some(m) = crate::mixer::track_mut(&mut self.state, track) {
-                                    m.slots[usize::from(slot)] = None;
-                                    m.slot_on[usize::from(slot)] = false;
-                                }
-                                self.invalidate();
-                            }
-                        }
-                    }
+                    // The instrument tile deletes its channel (the confirmation applies); the empty slot's
+                    // placeholder has nothing to delete.
+                    crate::device_rack::delete_selected(self);
                 }
                 _ => {}
             }

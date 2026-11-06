@@ -301,6 +301,15 @@ fn tile_paint(ui: &mut Ui, s: &State, d: Device, tile: Rect) {
         ui.c.text(fnt(13.0), menu.x, menu.y, t.text, "v");
     }
     let body = body(tile);
+    // The empty instrument slot: the whole tile opens the device browser (the instrument section of it).
+    if d.kind == DeviceKind::NoInstrument {
+        ui.c.fill_rect(body, t.s(0x131718));
+        ui.c.stroke_rrect(body.inset(1.0), 2.0, 1.0, t.splitter_dark);
+        ui.c.text(fnt(14.0), tile.x + 24.0, body.y + 10.0, t.text_dim, "This track has no instrument yet.");
+        ui.c.text(fnt(13.0), tile.x + 24.0, body.y + 30.0, t.text_dim, "Click to choose one.");
+        let _ = ui.hit(body, Action::DeviceRack(RackAct::AddAt(None)), "Choose this track's instrument");
+        return;
+    }
     match d.key {
         // A built-in's editor renders into the tile (its native window is pinned there by the app each tick);
         // until it is, the empty surface shows.
