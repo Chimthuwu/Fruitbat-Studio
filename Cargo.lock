@@ -2102,6 +2102,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lemon-note-delay"
+version = "0.0.1"
+dependencies = [
+ "nih_plug",
+ "os-hostlink",
+ "os-plugkit",
+ "os-theme",
+ "os-ui",
+ "rand 0.8.8",
+ "serde_json",
+ "tiny-skia",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "lemon-note-layer"
 version = "0.0.1"
 dependencies = [
@@ -3085,6 +3100,7 @@ dependencies = [
  "lemon-flanger",
  "lemon-formula-controller",
  "lemon-limiter",
+ "lemon-note-delay",
  "lemon-parametric-eq-2",
  "lemon-peak-controller",
  "lemon-phaser",
