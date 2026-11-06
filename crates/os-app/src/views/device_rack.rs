@@ -246,6 +246,11 @@ fn tile_paint(ui: &mut Ui, s: &State, d: Device, tile: Rect) {
     ui.c.fill_rect(tile, t.s(0x222629));
     ui.c.stroke_rrect(tile, 0.0, 1.0, t.splitter_dark);
     let head = Rect::new(tile.x, tile.y, tile.w, HEADER_H);
+    // The kind's gradient behind the header's content, veiled so the LED and name stay readable (the pairs are
+    // constants in `device_rack` so user theming can rewire them later).
+    let (top, bottom) = device_rack::header_gradient(d.kind);
+    ui.c.fill_rect_gradient(head, t.s(top), t.s(bottom), 0.0);
+    ui.c.fill_rect(head, os_ui::Color::rgb(0).with_alpha(110));
     ui.c.fill_rect(
         Rect::new(tile.x, tile.bottom() - 1.0, tile.w, 1.0),
         t.splitter_dark,

@@ -60,6 +60,21 @@ pub enum DeviceKind {
     Fx(u16, u8),
 }
 
+/// The tile header's gradient, top and bottom (0xRRGGBB), per device kind. Hard-coded until user theming grows
+/// per-kind colors — change these pairs to rewire every tile header's look.
+pub const HEADER_GRAD_MIDI_FX: (u32, u32) = (0xb9a4ec, 0x8fc7f2); // lavender -> sky blue
+pub const HEADER_GRAD_INSTRUMENT: (u32, u32) = (0xb9e98b, 0xf6ec85); // lime -> yellow
+pub const HEADER_GRAD_FX: (u32, u32) = (0xf3f4f5, 0x9dc9ee); // white -> sky blue
+
+/// The header's gradient for `kind` (top, bottom).
+pub fn header_gradient(kind: DeviceKind) -> (u32, u32) {
+    match kind {
+        DeviceKind::MidiFx(_) => HEADER_GRAD_MIDI_FX,
+        DeviceKind::Instrument(_) => HEADER_GRAD_INSTRUMENT,
+        DeviceKind::Fx(..) => HEADER_GRAD_FX,
+    }
+}
+
 /// One device of a track's chain: what it is, its plugin-window key (a channel row or an `fx_key`), its name,
 /// whether it is on, and whether its editor can embed (a built-in Lemon plugin).
 #[derive(Debug, Clone, PartialEq)]
@@ -716,6 +731,25 @@ mod tests {
             assert!(!app.plugins.hosted[&row].detached, "docked back");
             assert!(!app.state.device_rack_float.contains(&row));
         }
+    }
+
+    /// Each tile header's gradient is keyed by its kind (MIDI FX lavender→sky, instrument lime→yellow, audio FX
+    /// white→sky), as named constants so user theming can rewire them later.
+    #[test]
+    fn tile_header_gradients_are_keyed_by_kind() {
+        let (mt, mb) = header_gradient(DeviceKind::MidiFx(0));
+        let (it, ib) = header_gradient(DeviceKind::Instrument(0));
+        let (ft, fb) = header_gradient(DeviceKind::Fx(1, 0));
+        assert_eq!((mt, mb), (HEADER_GRAD_MIDI_FX.0, HEADER_GRAD_MIDI_FX.1));
+        assert_eq!((it, ib), (HEADER_GRAD_INSTRUMENT.0, HEADER_GRAD_INSTRUMENT.1));
+        assert_eq!((ft, fb), (HEADER_GRAD_FX.0, HEADER_GRAD_FX.1));
+        assert_ne!(mt, mb, "each pair is a gradient, not a flat fill");
+        assert_ne!(it, ib);
+        assert_ne!(ft, fb);
+        // The three kinds are visually distinct from each other.
+        assert_ne!((mt, mb), (it, ib));
+        assert_ne!((mt, mb), (ft, fb));
+        assert_ne!((it, ib), (ft, fb));
     }
 
     /// Built-in detection for stored names: a sampler channel (plugin None, kind Sampler) is a built-in, and
