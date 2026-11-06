@@ -9228,16 +9228,6 @@ impl App {
                 let p = rk::options_menu(&self.state, self.state.rack_pos.0, self.state.rack_pos.1 + 28.0);
                 self.state.playlist.popup = Some(p);
             }
-            Action::DeviceRack(crate::device_rack::RackAct::AddDevice) => {
-                // The device-rack plugin browser: built-in (native) plugins first, display-mode radios as the filter.
-                let p = crate::views::device_rack::add_device_menu(&self.state, self.mouse.0, self.mouse.1);
-                self.state.playlist.popup = Some(p);
-            }
-            Action::DeviceRack(crate::device_rack::RackAct::AddMidiFx) => {
-                // The MIDI FX browser: the compiled-in MIDI FX plugins (the rack track's first empty slot takes the pick).
-                let p = crate::views::device_rack::midi_fx_menu(&self.plugins.midi_fx, self.mouse.0, self.mouse.1);
-                self.state.playlist.popup = Some(p);
-            }
             Action::RackFilter => {
                 let p = rk::filter_menu(&self.state, mouse.0, mouse.1 + 8.0);
                 self.state.playlist.popup = Some(p);
@@ -11691,7 +11681,7 @@ mod tests {
     }
 
     #[test]
-    fn the_midi_fx_add_tile_opens_the_midi_fx_browser() {
+    fn the_gap_plus_opens_the_device_browser_with_midi_fx() {
         let Ok(mut c) = Canvas::new(1920, 1080, 1.0) else { return };
         let mut app = App::new(None);
         app.linear_project();
@@ -11700,20 +11690,19 @@ mod tests {
             crate::playlist::Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
         );
         frame(&mut app, &mut c, None);
-        // The ＋ Add tile registers its whole body as the hit: clicking it opens the MIDI FX browser.
-        let r = hit_rect(&app, &Action::DeviceRack(crate::device_rack::RackAct::AddMidiFx));
-        assert!(r.w > 0.0 && r.h > 0.0, "the MIDI FX +Add tile has a click target");
+        // A gap ＋ (AddAt) registers its hit: clicking it opens the one device browser.
+        let r = hit_rect(&app, &Action::DeviceRack(crate::device_rack::RackAct::AddAt(None)));
+        assert!(r.w > 0.0 && r.h > 0.0, "the gap + button has a click target");
         app.mouse_move(r.cx(), r.cy());
         frame(&mut app, &mut c, None);
         let top = app.top_hit(r.cx(), r.cy()).map(|h| format!("{:?}", h.action)).unwrap_or_default();
         assert!(
-            top.contains("AddMidiFx"),
-            "the topmost hit at the tile body should be AddMidiFx, got {top}"
+            top.contains("AddAt"),
+            "the topmost hit at the gap should be AddAt, got {top}"
         );
         app.mouse_down();
-        let p = app.state.playlist.popup.as_ref().expect("the click opens the MIDI FX browser");
-        // The test exe cannot load the linked CLAP entries (`linked` needs the running app binary), so the
-        // browser shows its empty fallback here; the head row proves the right menu opened.
+        let p = app.state.playlist.popup.as_ref().expect("the click opens the device browser");
+        // The MIDI FX section leads the browser (the pick lands in the track's MIDI FX slots).
         assert_eq!(p.items.first().map(|i| i.label.as_ref()), Some("MIDI FX"));
         assert!(
             p.items.iter().any(|i| !i.enabled),

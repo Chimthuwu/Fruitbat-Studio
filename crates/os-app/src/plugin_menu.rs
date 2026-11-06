@@ -183,10 +183,6 @@ pub fn run(app: &mut App, c: PlugCmd) -> Option<String> {
             let id = crate::device_rack::rack_track(&app.state).map(|tr| tr.id.0);
             id.and_then(|id| crate::midi_fx::add(app, id, None, index))
         }
-        PlugCmd::MidiFxAdd { index } => {
-            let id = crate::device_rack::rack_track(&app.state).map(|tr| tr.id.0);
-            id.and_then(|id| crate::midi_fx::add(app, id, None, index))
-        }
         PlugCmd::Find => {
             app.start_scan(Mode::Changed);
             None

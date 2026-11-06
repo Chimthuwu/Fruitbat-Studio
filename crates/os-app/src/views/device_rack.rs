@@ -212,7 +212,7 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
 fn gap_button(ui: &mut Ui, x: f32, y: f32, slot: Option<u8>, h: f32) {
     let t = ui.t;
     let b = Rect::new(x + 2.0, y + h / 2.0 - 9.0, GAP - 4.0, 18.0);
-    let hov = ui.hit(b, Action::DeviceRack(RackAct::AddAt(slot)), "Add an effect here");
+    let hov = ui.hit(b, Action::DeviceRack(RackAct::AddAt(slot)), "Add a device here");
     ui.c.fill_rrect(b, 2.0, if hov { t.s(0x2b3134) } else { t.s(0x222629) });
     ui.c.text(fnt(14.0), b.x + 4.0, b.y + 1.0, t.text, "+");
 }
@@ -293,18 +293,7 @@ fn tile_paint(ui: &mut Ui, s: &State, d: Device, tile: Rect) {
         // Hosted, not a built-in: embedding comes with CLAP/VST3 embed (§7 milestone b) — a placeholder and a
         // Pop out button, which the floating window machinery takes.
         Some(key) => placeholder(ui, s, &d, body, Some(Action::DeviceRack(RackAct::PopOut(key)))),
-        // The MIDI FX ＋ Add tile: the whole body opens the MIDI FX browser (`app.rs` shows `midi_fx_menu`,
-        // the pick lands in the track's first empty MIDI FX slot). The tile previously had no click handler,
-        // so clicks fell through to the neighbouring FX gap button.
-        None if matches!(d.kind, DeviceKind::MidiFxAdd) => {
-            ui.hit(
-                body,
-                Action::DeviceRack(RackAct::AddMidiFx),
-                "Add a MIDI FX: Lemon Arp, Lemon Chord, Lemon Echo",
-            );
-            placeholder(ui, s, &d, body, None);
-        }
-        // The MIDI FX placeholder region (no data yet, §8).
+        // No hosted key (nothing hosted yet): the plain placeholder.
         None => placeholder(ui, s, &d, body, None),
     }
 }
@@ -315,7 +304,6 @@ fn placeholder(ui: &mut Ui, s: &State, d: &Device, body: Rect, button: Option<Ac
     ui.c.fill_rect(body, t.s(0x131718));
     ui.c.stroke_rrect(body.inset(1.0), 2.0, 1.0, t.splitter_dark);
     let label = match d.kind {
-        DeviceKind::MidiFxAdd => "MIDI FX — click to add: Lemon Arp, Lemon Chord, Lemon Echo",
         _ => "No embedded editor for this plugin yet",
     };
     ui.c.text(fnt(13.0), body.x + 10.0, body.y + 8.0, t.text_dim, label);
@@ -418,44 +406,43 @@ pub fn paint_menu(ui: &mut Ui, s: &State) {
     let _ = d;
 }
 
-/// The device rack's "＋ Add" browser popup (spec: ui/device-rack.md §3): one section per kind of plugin, built-in
-/// (native) plugins first, then installed plugins; the display-mode radios below the list are the filter option
-/// for the full plugin hierarchy. Clicking an entry adds the device to the rack (generators become a new channel
-/// whose plugin hosts the browser's pick; effects go into the selected mixer track's first empty slot).
-pub(crate) fn add_device_menu(s: &State, x: f32, y: f32) -> Popup {
+/// The device rack's device browser popup (spec: ui/device-rack.md §3): the MIDI FX built-ins first (a pick
+/// lands in the rack track's MIDI FX slots — correct signal flow: a MIDI FX cannot sit after the instrument),
+/// then instruments and effects, built-in (native) plugins first, then installed ones. Effects go into mixer
+/// slot `slot` (the gap the ＋ was pressed at, else the first empty slot); the display-mode radios below the
+/// list are the filter option for the full plugin hierarchy.
+pub(crate) fn add_device_menu(s: &State, mfx: &[crate::plugins::Available], x: f32, y: f32, slot: Option<u8>) -> Popup {
     let mut items = Vec::new();
+    items.push(PItem::head("MIDI FX"));
+    if mfx.is_empty() {
+        items.push(PItem::new("(no MIDI FX plugins compiled in)", crate::playlist::Cmd::Nothing).off());
+    }
+    for (index, e) in mfx.iter().enumerate() {
+        items.push(PItem::new(
+            e.desc.name.clone(),
+            crate::playlist::Cmd::Plugin(crate::plugin_menu::PlugCmd::MidiFxAdd { index }),
+        ));
+    }
     items.push(PItem::head("Instruments"));
-    items.extend(add_device_section(s, false));
+    items.extend(add_device_section(s, false, slot));
     items.push(PItem::head("Effects"));
-    items.extend(add_device_section(s, true));
+    items.extend(add_device_section(s, true, slot));
     let mut p = Popup { x, y, items, sub: None, scroll: [0; 2] };
     p.items.extend(plugin_menu::footer(s));
     p
 }
 
-/// The MIDI FX browser popup (the "＋ Add" tile of the MIDI FX region): the compiled-in MIDI FX plugins
-/// (`Plugins::midi_fx`, native only for now — spec: plugins/lemon-arp.md), each adding itself to the track's
-/// first empty MIDI FX slot.
-pub(crate) fn midi_fx_menu(mfx: &[crate::plugins::Available], x: f32, y: f32) -> Popup {
-    let mut items = vec![PItem::head("MIDI FX")];
-    if mfx.is_empty() {
-        items.push(PItem::new("(no MIDI FX plugins compiled in)", crate::playlist::Cmd::Nothing).off());
-    }
-    for (index, e) in mfx.iter().enumerate() {
-        items.push(PItem::new(e.desc.name.clone(), crate::playlist::Cmd::Plugin(crate::plugin_menu::PlugCmd::MidiFxAdd { index })));
-    }
-    Popup { x, y, items, sub: None, scroll: [0; 2] }
-}
-
 /// One device-rack browser section: built-in (native) plugins first, then the installed ones, in display order.
-fn add_device_section(s: &State, effect: bool) -> Vec<PItem> {
+/// Effects pick mixer slot `slot` (the gap's slot; `None` = the first empty slot of the selected track).
+fn add_device_section(s: &State, effect: bool, slot: Option<u8>) -> Vec<PItem> {
+    let target = if effect { Target::Fx(slot) } else { Target::Gen(None) };
     let list = if effect { &s.plugdb.lists.fx } else { &s.plugdb.lists.gens };
     let mut v = Vec::new();
     for e in list.iter().filter(|e| e.builtin) {
-        v.push(PItem::new(e.label.clone(), pick(Target::Gen(None), effect, e.index)));
+        v.push(PItem::new(e.label.clone(), pick(target, effect, e.index)));
     }
     for e in list.iter().filter(|e| !e.builtin) {
-        v.push(PItem::new(e.label.clone(), pick(Target::Gen(None), effect, e.index)));
+        v.push(PItem::new(e.label.clone(), pick(target, effect, e.index)));
     }
     v
 }
