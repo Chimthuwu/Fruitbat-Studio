@@ -176,11 +176,73 @@ pub fn rack_sel_mut(s: &mut State) -> &mut Option<usize> {
     &mut s.device_rack_sel
 }
 
-/// Reorders the device at index `from` to index `to` in the rack's chain. Returns `Ok` on success, or `Err`
-/// if the control plane command is not yet implemented (the caller handles the error gracefully).
-pub fn reorder(_s: &mut State, _from: usize, _to: usize) -> Result<(), String> {
-    // TODO §7: wire up the control plane ReorderDevices command
-    Err("ReorderDevices command not yet implemented".into())
+/// Reorders the device at chain index `from` to chain index `to` in the rack's chain. The move stays within the
+/// device's segment: a MIDI FX reorders among the MIDI FX slots (never past the instrument), an effect reorders
+/// among its strip's slots with adjacent `SlotMove`s (the same path the drag uses, so the plugin instances,
+/// automation and session UI all follow), and the instrument stays — a track holds one. Returns `Ok` on a completed
+/// move or a no-op (a target the device cannot land on), and `Err` when there is no device at `from`.
+pub fn reorder(app: &mut App, from: usize, to: usize) -> Result<(), String> {
+    let chain = rack_chain(&app.state);
+    let Some(src) = chain.get(from) else {
+        return Err(format!("no device at chain index {from}"));
+    };
+    match src.kind {
+        DeviceKind::MidiFx(_) => {
+            let Some(tr) = rack_track(&app.state).map(|t| t.id.0) else {
+                return Err("no rack track".into());
+            };
+            let n = crate::midi_fx::filled(&app.state, tr).len();
+            // The MIDI FX lead the chain, so `from` is their slot index. A target at or past the last slot
+            // (the instrument's position or beyond) is not a slot a MIDI FX can land in.
+            if from >= n || to >= n || from == to {
+                return Ok(());
+            }
+            crate::midi_fx::reorder(app, tr, from, to);
+            Ok(())
+        }
+        DeviceKind::Fx(track, slot) => {
+            let fx: Vec<u8> = chain
+                .iter()
+                .filter_map(|d| match d.kind {
+                    DeviceKind::Fx(t, k) if t == track => Some(k),
+                    _ => None,
+                })
+                .collect();
+            let Some(src_i) = fx.iter().position(|&k| k == slot) else {
+                return Err("effect slot not in the rack chain".into());
+            };
+            // The drop position among this strip's FX: how many of its slots sit before chain index `to`.
+            let mut to_i = chain[..to.min(chain.len())]
+                .iter()
+                .filter(|d| matches!(d.kind, DeviceKind::Fx(t, _) if t == track))
+                .count();
+            if to_i > src_i {
+                to_i -= 1; // removing the source shifts the later slots left by one
+            }
+            if to_i == src_i {
+                return Ok(());
+            }
+            let target = fx.get(to_i).copied().unwrap_or_else(|| *fx.last().unwrap_or(&slot));
+            if target == slot {
+                return Ok(());
+            }
+            // Adjacent SlotMoves (the same path the drag uses) so the plugin instances, automation and session
+            // UI all follow the reorder.
+            let prev = app.state.selected_mixer;
+            app.state.selected_mixer = track;
+            let mut cur = i32::from(slot);
+            let target = i32::from(target);
+            while cur != target {
+                let step = (target - cur).clamp(-1, 1) as i8;
+                crate::mixer::run(app, crate::mixer::MCmd::SlotMove(cur as u8, step));
+                cur += i32::from(step);
+            }
+            app.state.selected_mixer = prev;
+            app.invalidate();
+            Ok(())
+        }
+        DeviceKind::Instrument(_) | DeviceKind::NoInstrument => Ok(()),
+    }
 }
 
 /// The built-in Lemon plugins' names (what `Plugins` ships with, before any scan).
@@ -377,7 +439,7 @@ pub fn run(app: &mut App, act: RackAct) {
             app.open_plugin_palette(crate::plugin_menu::Target::Rack(None), app.mouse, None);
         }
         RackAct::Reorder { from, to } => {
-            let _ = reorder(&mut app.state, from, to);
+            let _ = reorder(app, from, to);
             app.invalidate();
         }
         RackAct::ParamSet { key, id, v } => {
@@ -1165,18 +1227,43 @@ mod tests {
         assert_eq!(sl[1].as_ref().unwrap().name, "A");
     }
 
-    /// Reorder action: the stub returns Err until the control plane command is wired up.
+    /// Reorder action: an effect moves via the control plane's `MoveEffect` (one undo step), a MIDI FX among its
+    /// slots, and the instrument stays put.
     #[test]
-    fn reorder_command_is_stubbed() {
+    fn reorder_moves_effects_and_midi_fx() {
         let mut app = app();
-        // Reorder returns Err (not yet implemented).
-        let result = reorder(&mut app.state, 0, 1);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "ReorderDevices command not yet implemented");
-
-        // Running the action through run() does not panic (the error is swallowed).
-        run(&mut app, RackAct::Reorder { from: 0, to: 1 });
-        // The selection is untouched by a failed reorder.
+        crate::playlist::run(
+            &mut app,
+            crate::playlist::Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
+        );
+        let tr = app.state.project.tracks.last().unwrap().clone();
+        let strip = tr.mixer_strip;
+        let m = crate::mixer::track_mut(&mut app.state, strip).unwrap();
+        m.slots[0] = Some(os_model::SlotPlugin { id: os_model::Id::NONE, name: "Lemon EQ2".into(), state: Vec::new() });
+        m.slots[1] = Some(os_model::SlotPlugin { id: os_model::Id::NONE, name: "Lemon Reverb".into(), state: Vec::new() });
+        m.slots[2] = Some(os_model::SlotPlugin { id: os_model::Id::NONE, name: "Lemon Chorus".into(), state: Vec::new() });
+        app.state.midi_fx.entry(tr.id.0).or_default().resize(crate::midi_fx::SLOTS, None);
+        app.state.midi_fx.get_mut(&tr.id.0).unwrap()[0] = Some(crate::midi_fx::Slot { name: "A".into(), index: 0, on: true });
+        app.state.midi_fx.get_mut(&tr.id.0).unwrap()[1] = Some(crate::midi_fx::Slot { name: "B".into(), index: 0, on: true });
+        // Chain: [A, B, instrument, EQ2, Reverb, Chorus]. The last FX (slot 2, Chorus) is at index 5.
+        let tiles = crate::views::device_rack::tiles(&app.state);
+        let chorus = tiles.iter().position(|(d, _)| matches!(d.kind, DeviceKind::Fx(strip, 2))).unwrap();
+        assert_eq!(chorus, 5, "the last FX is at chain index 5");
+        // Move Chorus (index 5) to the first FX slot's chain position (index 3): it takes slot 0.
+        reorder(&mut app, 5, 3).unwrap();
+        let m = crate::mixer::track(&app.state, strip).unwrap();
+        assert_eq!(m.slots[0].as_ref().unwrap().name, "Lemon Chorus", "the moved FX took slot 0");
+        assert_eq!(m.slots[1].as_ref().unwrap().name, "Lemon EQ2");
+        assert_eq!(m.slots[2].as_ref().unwrap().name, "Lemon Reverb");
+        // A MIDI FX reorder among its slots: move B (index 1) to the front (index 0).
+        reorder(&mut app, 1, 0).unwrap();
+        let sl = crate::midi_fx::slots(&app.state, tr.id.0);
+        assert_eq!(sl[0].as_ref().unwrap().name, "B", "the second MIDI FX moved to the front");
+        assert_eq!(sl[1].as_ref().unwrap().name, "A");
+        // The instrument (index 2) does not move: a no-op that still returns Ok.
+        reorder(&mut app, 2, 0).unwrap();
+        // A bogus index errors instead of panicking.
+        assert!(reorder(&mut app, 99, 0).is_err());
     }
 
     /// The device rack's ＋ browser is the plugin palette in its rack form: a MIDI FX section first, then the
