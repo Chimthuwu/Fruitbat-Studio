@@ -912,6 +912,8 @@ pub enum Drag {
     DeviceRackSplit { dy: f32 },
     /// A device rack tile header held: drag left/right to reorder (`x0` = press x; FX tiles swap mixer slots).
     DeviceRackTile { kind: crate::device_rack::DeviceKind, _x0: f32 },
+    /// A device tile's parameter row dragged: the value follows the pointer along its bar.
+    DeviceRackParam { key: usize, id: u32 },
     /// Monitor debug panel slider.
     MonParam(usize),
     /// Cable physics debug panel slider.
@@ -6117,6 +6119,12 @@ impl App {
                 }
                 Drag::BrowserSplit { dx } => self.browser_split_drag(x - dx),
                 Drag::DeviceRackSplit { dy } => crate::device_rack::split_drag(self, y, dy),
+                Drag::DeviceRackParam { key, id } => {
+                    if let Some(bar) = crate::views::device_rack::param_bar(&self.state, key, id) {
+                        let v = (((x - bar.x) / bar.w).clamp(0.0, 1.0)) as f64;
+                        crate::device_rack::set_param_value(self, key, id, v);
+                    }
+                }
                 Drag::DeviceRackTile { .. } => self.invalidate(),
                 Drag::SongPosHold { .. } => {}
                 Drag::PrefSlider { label, x: x0, w } => self.pref_slider_drag(label, x0, w),
@@ -7015,6 +7023,7 @@ impl App {
             Some(Drag::BrowserSplit { .. }) => crate::browser::save_width(self.state.browser_w),
             // The rack's height is session state so far (the project state lands with M8); nothing to save.
             Some(Drag::DeviceRackSplit { .. }) => {}
+            Some(Drag::DeviceRackParam { .. }) => {}
             Some(Drag::DeviceRackTile { kind, .. }) => {
                 let x = self.mouse.0;
                 crate::device_rack::tile_drop(self, kind, x);

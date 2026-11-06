@@ -299,6 +299,17 @@ fn tile_paint(ui: &mut Ui, s: &State, d: Device, tile: Rect) {
     }
 }
 
+/// A tile body's parameter row bar, by hosted key and param id: what a drag maps the pointer's x onto
+/// (the same geometry the placeholder paints — first 8 cached params, 26 px a row, from the tile's body).
+pub(crate) fn param_bar(s: &State, key: usize, id: u32) -> Option<Rect> {
+    let (_, w, h) = ((), s.screen.0, s.screen.1);
+    let (_, tile) = layout(s, panel_rect(s, w, h)).into_iter().find(|(d, _)| d.key == Some(key))?;
+    let row = s.device_rack_params.get(&key)?.iter().position(|(i, ..)| *i == id)?;
+    let body = body(tile);
+    let bar = Rect::new(body.x + 10.0, body.y + 56.0 + 15.0 + 26.0 * row as f32, (body.w - 20.0).min(180.0), 4.0);
+    (bar.y <= body.bottom() - 20.0).then_some(bar)
+}
+
 /// A placeholder body: what the device is, and a `button` when there is one to press.
 fn placeholder(ui: &mut Ui, s: &State, d: &Device, body: Rect, button: Option<Action>) {
     let t = ui.t;

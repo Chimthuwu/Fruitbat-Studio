@@ -358,7 +358,12 @@ pub fn run(app: &mut App, act: RackAct) {
             let _ = reorder(&mut app.state, from, to);
             app.invalidate();
         }
-        RackAct::ParamSet { key, id, v } => set_param_value(app, key, id, v),
+        RackAct::ParamSet { key, id, v } => {
+            // The click sets the value at once and keeps dragging it: the row's bar follows the pointer
+            // (the drag's move maps x onto the same bar via `views::device_rack::param_bar`).
+            set_param_value(app, key, id, v);
+            app.drag = Some(Drag::DeviceRackParam { key, id });
+        }
         RackAct::ScrollBy(d) => {
             let s = &mut app.state;
             let w = s.screen.0;
@@ -817,6 +822,52 @@ mod tests {
         assert!(stepped >= one - 0.001, "the › stepper scrolled right");
         run(&mut app, RackAct::ScrollBy(-10.0));
         assert_eq!(app.state.device_rack_scroll_x, 0.0, "the ‹ stepper stops at the start");
+    }
+
+    /// The tile's parameter rows set through the one path (`set_param_value` → `Plugins::set_param`): with an
+    /// instance hosted, a ParamSet (click or drag move) moves the plugin's parameter; with none, it is a no-op.
+    #[test]
+    fn tile_params_set_through_one_path() {
+        let mut app = app();
+        app.plugins = crate::plugins::Plugins::builtins();
+        // Nothing hosted under key 0: the set is a no-op, the app stays up.
+        run(&mut app, RackAct::ParamSet { key: 0, id: 0, v: 0.5 });
+        #[cfg(plugin_windows)]
+        {
+            crate::playlist::run(
+                &mut app,
+                crate::playlist::Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
+            );
+            let tr = app.state.project.tracks.last().unwrap().clone();
+            let row = app
+                .state
+                .project
+                .channels
+                .iter()
+                .position(|c| Some(c.index) == tr.channel)
+                .expect("the track's channel");
+            app.state.project.channels[row].plugin = Some(crate::plugins::builtin()[0].desc.name.clone());
+            let index = app
+                .plugins
+                .index_of(&crate::plugins::builtin()[0].desc.name)
+                .expect("the built-in is available");
+            app.plugins.create_with(row, index, None).expect("hosted");
+            let Some(info) = app.plugins.param_infos(row).first().cloned() else {
+                panic!("the hosted instance has parameters");
+            };
+            run(&mut app, RackAct::ParamSet { key: row, id: info.id, v: 1.0 });
+            assert_eq!(
+                app.plugins.param_value(row, info.id),
+                Some(1.0),
+                "the parameter moved to the set value"
+            );
+            run(&mut app, RackAct::ParamSet { key: row, id: info.id, v: 2.0 });
+            assert_eq!(
+                app.plugins.param_value(row, info.id),
+                Some(1.0),
+                "out-of-range values clamp to 1.0"
+            );
+        }
     }
 
     /// Reorder action: the stub returns Err until the control plane command is wired up.
