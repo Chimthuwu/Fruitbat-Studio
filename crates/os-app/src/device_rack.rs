@@ -30,8 +30,8 @@ pub const MIN_H: f32 = 96.0;
 pub const DEFAULT_H: f32 = 224.0;
 /// Header row (title, pin, collapse), and the collapsed rack's whole height.
 pub const HEADER_H: f32 = 23.0;
-/// Width of a device tile.
-pub const TILE_W: f32 = 340.0;
+/// Width of a device tile (rows stack name above bar, so it stays narrow): 4 tiles fit a 1229 px window.
+pub const TILE_W: f32 = 280.0;
 
 /// Whether the rack shows at all: Linear mode only (Classic mode = zero visual change).
 pub fn visible(s: &State) -> bool {
@@ -261,6 +261,10 @@ pub enum RackAct {
     /// A tile body's parameter row: set the parameter `id` of the instance under `key` to normalized `v`
     /// (a click, or a drag's move, on a value bar).
     ParamSet { key: usize, id: u32, v: f64 },
+    /// The device menu's Remove: delete the device from its chain.
+    Remove(DeviceKind),
+    /// The device menu's Replace (the instrument): the device browser, whose instrument pick replaces it.
+    Replace,
 }
 
 /// The splitter pressed: a double click (within the browser's double-click window) gives back the default height,
@@ -381,6 +385,14 @@ pub fn run(app: &mut App, act: RackAct) {
             // (the drag's move maps x onto the same bar via `views::device_rack::param_bar`).
             set_param_value(app, key, id, v);
             app.drag = Some(Drag::DeviceRackParam { key, id });
+        }
+        RackAct::Remove(kind) => {
+            app.state.device_rack_menu = None;
+            remove_device(app, kind);
+        }
+        RackAct::Replace => {
+            app.state.device_rack_menu = None;
+            app.open_plugin_palette(crate::plugin_menu::Target::Rack(None), app.mouse, None);
         }
         RackAct::ScrollBy(d) => {
             let s = &mut app.state;
@@ -518,33 +530,39 @@ pub fn tile_drop(app: &mut App, kind: DeviceKind, x: f32) {
     app.invalidate();
 }
 
-/// Deletes the selected device: an effect tile drops its slot, a MIDI FX tile drops its slot, the instrument
-/// tile deletes its channel (with the delete confirmation, as the channel rack's Delete does — its notes go
-/// with it) leaving the empty instrument slot. The placeholder tile has nothing to delete.
+/// Deletes the selected device (Delete key): see [`remove_device`].
 pub fn delete_selected(app: &mut App) {
     let Some(i) = app.state.device_rack_sel else { return };
-    let chain = rack_chain(&app.state);
-    let Some(d) = chain.get(i) else { return };
-    match d.kind {
-        DeviceKind::Fx(track, slot) => {
-            let fxk = crate::plugins::fx_key(track, slot);
-            app.plugins.drop_key(fxk);
-            if let Some(m) = crate::mixer::track_mut(&mut app.state, track) {
-                m.slots[usize::from(slot)] = None;
-                m.slot_on[usize::from(slot)] = false;
+    let Some(d) = rack_chain(&app.state).get(i).cloned() else { return };
+    remove_device(app, d.kind);
+}
+
+/// Removes a device from its chain by the paths the rest of the app uses: an effect goes through the control
+/// plane's `RemoveEffect` (undoable), a MIDI FX through `midi_fx::remove`, the instrument deletes its channel (with
+/// the delete confirmation; its notes go with it) leaving the empty "Add instrument" slot.
+pub fn remove_device(app: &mut App, kind: DeviceKind) {
+    match kind {
+        DeviceKind::Fx(strip, slot) => {
+            let Some(id) = crate::mixer::track(&app.state, strip).map(|m| m.id.0) else { return };
+            let key = crate::plugins::fx_key(strip, slot);
+            app.plugins.drop_key(key);
+            app.state.device_rack_params.remove(&key);
+            let cmd = crate::control::command::Command::RemoveEffect { track: id, slot };
+            if let Err(e) = crate::control::apply(&mut app.state, &crate::control::By::User, None, vec![cmd]) {
+                app.state.message = Some(format!("Remove: {e}"));
             }
-            app.invalidate();
         }
         DeviceKind::MidiFx(slot) => {
-            if let Some(tr) = rack_track(&app.state) {
-                crate::midi_fx::remove(app, tr.id.0, slot);
+            if let Some(id) = rack_track(&app.state).map(|tr| tr.id.0) {
+                app.state.device_rack_params.remove(&crate::plugins::midi_fx_key(id, slot));
+                crate::midi_fx::remove(app, id, slot);
             }
         }
-        DeviceKind::Instrument(row) => {
-            crate::rack::ask_delete(&mut app.state, vec![row]);
-        }
+        DeviceKind::Instrument(row) => crate::rack::ask_delete(&mut app.state, vec![row]),
         DeviceKind::NoInstrument => {}
     }
+    app.state.device_rack_sel = None;
+    app.invalidate();
 }
 
 /// Keeps the rack's embedded editors on their tiles: opens the built-in devices' editors that are missing, closes
@@ -559,6 +577,7 @@ pub fn sync_embed(app: &mut App) {
             app.plugins.close_if_open(key);
         }
         app.state.device_rack_embed.clear();
+        app.state.device_rack_editor.clear();
         return;
     }
     // The tiles the rack embeds: every built-in device the user has not popped out.
@@ -615,13 +634,19 @@ pub fn sync_embed(app: &mut App) {
             ];
             app.plugins.pin_window(*key, rect);
         }
+        // The tiles whose editor is really open in them: only those show it instead of parameter rows.
+        app.state.device_rack_editor = tiles
+            .iter()
+            .map(|&(k, _)| k)
+            .filter(|k| app.plugins.window_of(*k).is_some() && !app.state.device_rack_failed.contains(k))
+            .collect();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::App;
+    use crate::app::{Action, App};
     use crate::playlist::Cmd;
 
     fn app() -> App {
@@ -1470,5 +1495,112 @@ mod tests {
         // A sideways wheel (dx) scrolls too: up = left.
         app.wheel(-3.0, 0.0, false, false);
         assert!(app.state.device_rack_scroll_x > 0.0, "a sideways wheel scrolls");
+    }
+
+    /// Builds a MIDI track with one MIDI FX per slot (all 8 filled), the default instrument and one effect, hosted.
+    fn full_chain_app() -> App {
+        use crate::plugin_palette::{self as pal, Row};
+        let mut app = app();
+        crate::playlist::run(&mut app, Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi));
+        app.plugins = crate::plugins::Plugins::builtins();
+        app.state.plugdb.rebuild(&app.plugins);
+        let id = app.state.project.tracks.last().unwrap().id.0;
+        for i in 0..app.plugins.midi_fx.len().min(crate::midi_fx::SLOTS) {
+            crate::midi_fx::add(&mut app, id, None, i);
+        }
+        app.open_plugin_palette(crate::plugin_menu::Target::Rack(None), (0.0, 0.0), None);
+        let rows = pal::rows(&app.state);
+        let r = rows.iter().find(|r| matches!(r, Row::Plugin { effect: true, .. })).expect("an effect");
+        let cmd = pal::pick_cmd(&app.state, r).unwrap();
+        crate::playlist::run(&mut app, cmd);
+        app.mixer_tick();
+        app.sync_samplers(None);
+        sync_embed(&mut app);
+        app
+    }
+
+    /// The render path: every tile that is not showing an embedded editor has >= 1 parameter row that is really
+    /// on screen (inside the body, with height), and paints a ParamSet hit for it.
+    #[test]
+    fn every_tile_without_an_editor_renders_visible_param_rows() {
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = full_chain_app();
+        app.paint(&mut c, None);
+        let r = crate::views::device_rack::panel_rect(&app.state, app.state.screen.0, app.state.screen.1);
+        let tiles = crate::views::device_rack::layout(&app.state, r);
+        assert!(tiles.len() >= 4, "{tiles:?}");
+        let mut midi_fx = 0;
+        for (d, tile) in &tiles {
+            let Some(key) = d.key else { continue };
+            midi_fx += usize::from(matches!(d.kind, DeviceKind::MidiFx(_)));
+            if crate::views::device_rack::body_mode(&app.state, d) == crate::views::device_rack::BodyMode::Embedded {
+                continue;
+            }
+            let ps = app.state.device_rack_params.get(&key).unwrap_or_else(|| panic!("{} has no params cached", d.name));
+            assert!(!ps.is_empty(), "{}", d.name);
+            let bar = crate::views::device_rack::param_bar(&app.state, key, ps[0].0)
+                .unwrap_or_else(|| panic!("{}: first param row is not on screen", d.name));
+            assert!(bar.w > 20.0 && bar.h > 0.0 && tile.contains(bar.x + 1.0, bar.y + 1.0), "{}: {bar:?}", d.name);
+            let hit = app.hits.iter().any(|h| matches!(h.action, Action::DeviceRack(RackAct::ParamSet { key: k, .. }) if k == key));
+            assert!(hit, "{}: no painted param row hit", d.name);
+        }
+        assert!(midi_fx >= crate::midi_fx::SLOTS, "every MIDI FX slot is a tile ({midi_fx})");
+    }
+
+    /// The chain fits ~4 tiles with their ＋ gaps in the default panel width without scrolling.
+    #[test]
+    fn four_devices_fit_the_default_panel_width() {
+        let mut app = app();
+        crate::playlist::run(&mut app, Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi));
+        let w = app.state.screen.0;
+        assert!(4.0 * (TILE_W + 22.0) <= w * 0.7, "tile {TILE_W} px");
+        assert!(4.0 * (TILE_W + 22.0) <= 1229.0, "four tiles fit the narrowest usual window");
+        assert!(TILE_W >= 240.0 && TILE_W < 340.0);
+    }
+
+    /// Remove from the tile menu: a MIDI FX leaves its slot, an FX leaves its mixer slot (through RemoveEffect, one
+    /// undo step), the instrument asks the channel delete and leaves the Add instrument placeholder.
+    #[test]
+    fn the_tile_menu_removes_each_device_kind() {
+        let mut app = full_chain_app();
+        let tr = app.state.project.tracks.last().unwrap().clone();
+        let n_fx = crate::midi_fx::filled(&app.state, tr.id.0).len();
+        assert!(n_fx >= 2);
+        let first = rack_chain(&app.state).into_iter().find(|d| matches!(d.kind, DeviceKind::MidiFx(_))).unwrap();
+        run(&mut app, RackAct::Remove(first.kind));
+        assert_eq!(crate::midi_fx::filled(&app.state, tr.id.0).len(), n_fx - 1, "the MIDI FX is gone");
+        assert!(!rack_chain(&app.state).iter().any(|d| d.kind == first.kind));
+
+        let fx = rack_chain(&app.state).into_iter().find(|d| matches!(d.kind, DeviceKind::Fx(..))).expect("an FX tile");
+        let DeviceKind::Fx(strip, slot) = fx.kind else { unreachable!() };
+        let undo_before = app.state.history.done();
+        run(&mut app, RackAct::Remove(fx.kind));
+        assert!(crate::mixer::track(&app.state, strip).unwrap().slots[usize::from(slot)].is_none(), "the slot is empty");
+        assert!(!rack_chain(&app.state).iter().any(|d| d.kind == fx.kind));
+        assert!(app.state.history.done() > undo_before, "RemoveEffect recorded an undo step");
+
+        crate::messages::set(&crate::messages::DELETE_CHANNEL, false);
+        let inst = rack_chain(&app.state).into_iter().find(|d| matches!(d.kind, DeviceKind::Instrument(_))).unwrap();
+        let DeviceKind::Instrument(row) = inst.kind else { unreachable!() };
+        run(&mut app, RackAct::Remove(inst.kind));
+        crate::rack::delete_step(&mut app, &[row]);
+        let chain = rack_chain(&app.state);
+        assert!(chain.iter().any(|d| d.kind == DeviceKind::NoInstrument && d.name == "Add instrument"), "{chain:?}");
+    }
+
+    /// A right-click on a tile opens its device menu, which lists Remove.
+    #[test]
+    fn right_click_on_a_tile_opens_the_menu_with_remove() {
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = full_chain_app();
+        app.paint(&mut c, None);
+        let tiles = crate::views::device_rack::tiles(&app.state);
+        let (d, t) = tiles.iter().find(|(d, _)| matches!(d.kind, DeviceKind::MidiFx(_))).unwrap().clone();
+        app.mouse_move(t.cx(), t.y + HEADER_H + 4.0);
+        app.mouse_down_right();
+        assert_eq!(app.state.device_rack_menu, d.key);
+        app.paint(&mut c, None);
+        let remove = app.hits.iter().find(|h| h.action == Action::DeviceRack(RackAct::Remove(d.kind)));
+        assert!(remove.is_some(), "the menu offers Remove");
     }
 }

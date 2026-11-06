@@ -1112,6 +1112,8 @@ pub struct State {
     pub device_rack_float: std::collections::BTreeSet<usize>,
     pub device_rack_embed: std::collections::BTreeSet<usize>,
     pub device_rack_failed: std::collections::BTreeSet<usize>,
+    /// The tiles whose built-in editor is really open (docked) in them; every other tile shows parameter rows.
+    pub device_rack_editor: std::collections::BTreeSet<usize>,
     pub device_rack_menu: Option<usize>,
     pub device_rack_split_click: Option<std::time::Instant>,
     /// Live parameters of the rack's devices, by plugin-window key (refreshed by
@@ -1574,6 +1576,7 @@ impl App {
                 device_rack_float: Default::default(),
                 device_rack_embed: Default::default(),
                 device_rack_failed: Default::default(),
+                device_rack_editor: Default::default(),
                 device_rack_menu: None,
                 device_rack_split_click: None,
                 device_rack_params: Default::default(),
@@ -2512,7 +2515,7 @@ impl App {
     /// a channel without an instance gets one, started from the channel's sample and envelopes. Without Lemon Sampler
     /// (plugin not found) sampler channels keep the engine's own sample playback.
     /// With a `deadline` it stops after the instance that passes it; returns whether every sampler row is done.
-    fn sync_samplers(&mut self, deadline: Option<std::time::Instant>) -> bool {
+    pub(crate) fn sync_samplers(&mut self, deadline: Option<std::time::Instant>) -> bool {
         let Some(index) = self.plugins.index_of(crate::plugins::LEMON_SAMPLER) else { return true };
         let mut added = false;
         let mut done = true;
@@ -6773,6 +6776,11 @@ impl App {
 
     /// Right button: delete notes in the piano roll (spec: ui/piano-roll.md §8); right-drag on
     /// a scroll bar scrolls.
+    /// The key of the device tile under (x, y), if any (the NoInstrument placeholder has none).
+    fn tile_key_at(&self, x: f32, y: f32) -> Option<usize> {
+        crate::views::device_rack::tiles(&self.state).into_iter().find(|(_, r)| r.contains(x, y)).and_then(|(d, _)| d.key)
+    }
+
     pub fn mouse_down_right(&mut self) {
         // The popups and boxes this press opens go on the surface it was made on (a detached window's, `on_surface`).
         self.state.overlay_on = self.state.surface;
@@ -6815,6 +6823,11 @@ impl App {
             Some(Action::PatternAdd) => {
                 let at = views::band_rect(&self.state, Rect::new(crate::patterns::PLUS_BOX_AT.0, crate::patterns::PLUS_BOX_AT.1, 0.0, 0.0));
                 crate::patterns::run(&mut self.state, crate::patterns::Cmd::FindNext, (at.x, at.y));
+                return self.invalidate();
+            }
+            // Right-click on a device tile (header, body or a row): its device menu (Pop out / Remove / ...).
+            _ if crate::device_rack::visible(&self.state) && self.tile_key_at(x, y).is_some() => {
+                self.state.device_rack_menu = self.tile_key_at(x, y);
                 return self.invalidate();
             }
             Some(Action::CpuPanel) => {

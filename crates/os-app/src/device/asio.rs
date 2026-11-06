@@ -240,8 +240,9 @@ fn sizes(r: &sys::BufferSizeRange) -> Vec<u32> {
 pub(crate) fn control_panel() -> Result<(), String> {
     unsafe extern "C" {
         // `ASIOError ASIOControlPanel(void)` in the SDK's common/asio.cpp, which asio-sys builds and links; it has C++
-        // linkage, hence the MSVC name.
-        #[link_name = "\u{1}?ASIOControlPanel@@YAJXZ"]
+        // linkage, so the symbol is compiler-mangled — MSVC and GNU/Itanium names differ.
+        #[cfg_attr(target_env = "msvc", link_name = "\u{1}?ASIOControlPanel@@YAJXZ")]
+        #[cfg_attr(target_env = "gnu", link_name = "_Z16ASIOControlPanelv")]
         fn asio_control_panel() -> i32;
     }
     if asio().loaded_driver().is_none() {
@@ -268,7 +269,8 @@ fn channel_name(channel: i32, input: bool) -> Option<String> {
     }
     unsafe extern "C" {
         // `ASIOError ASIOGetChannelInfo(ASIOChannelInfo *info)` in the SDK's common/asio.cpp, as `control_panel`'s.
-        #[link_name = "\u{1}?ASIOGetChannelInfo@@YAJPEAUASIOChannelInfo@@@Z"]
+        #[cfg_attr(target_env = "msvc", link_name = "\u{1}?ASIOGetChannelInfo@@YAJPEAUASIOChannelInfo@@@Z")]
+        #[cfg_attr(target_env = "gnu", link_name = "_Z18ASIOGetChannelInfoP15ASIOChannelInfo")]
         fn asio_get_channel_info(info: *mut ChannelInfo) -> std::ffi::c_long;
     }
     asio().loaded_driver()?;

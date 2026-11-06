@@ -95,3 +95,10 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# asio-sys 0.4.0 is MSVC-only in practice: its C++ bindings rely on MSVC's ABI for the
+# ASIO SDK's single-inheritance classes. Under the GNU toolchain the layout assertions
+# fail (tail-padding reuse), so we vendor a patched copy that disables those assertions
+# (the affected fields are never read from Rust). See vendor/asio-sys/build.rs.
+[patch.crates-io]
+asio-sys = { path = "vendor/asio-sys" }

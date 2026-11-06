@@ -310,83 +310,107 @@ fn tile_paint(ui: &mut Ui, s: &State, d: Device, tile: Rect) {
         let _ = ui.hit(body, Action::DeviceRack(RackAct::AddAt(None)), "Choose this track's instrument");
         return;
     }
-    match d.key {
-        // A built-in's editor renders into the tile (its native window is pinned there by the app each tick);
-        // until it is, the empty surface shows.
-        Some(key) if d.builtin => {
+    match (d.key, body_mode(s, &d)) {
+        // A built-in's editor renders into the tile (its native window is pinned there by the app each tick).
+        (Some(key), BodyMode::Embedded) => {
             ui.c.fill_rect(body, t.s(0x131718));
-            if s.device_rack_float.contains(&key) {
-                ui.c.text(
-                    fnt(13.0),
-                    body.x + 10.0,
-                    body.y + 8.0,
-                    t.text_dim,
-                    "Editor popped out",
-                );
-            } else if s.device_rack_failed.contains(&key) {
-                ui.c.text(
-                    fnt(13.0),
-                    body.x + 10.0,
-                    body.y + 8.0,
-                    t.text_dim,
-                    "Editor unavailable",
-                );
+            if s.device_rack_failed.contains(&key) {
+                ui.c.text(fnt(13.0), body.x + 10.0, body.y + 8.0, t.text_dim, "Editor unavailable");
             }
         }
-        // Hosted, not a built-in: embedding comes with CLAP/VST3 embed (§7 milestone b) — a placeholder and a
-        // Pop out button, which the floating window machinery takes.
-        Some(key) => placeholder(ui, s, &d, body, Some(Action::DeviceRack(RackAct::PopOut(key)))),
+        // Everything else (hosted third-party, built-ins whose editor is popped out, failed, not open yet or
+        // absent -- e.g. the linked MIDI FX): the parameter rows, and a Pop out button when there is an editor.
+        (Some(key), BodyMode::Rows) => {
+            let button = (!s.device_rack_float.contains(&key)).then_some(Action::DeviceRack(RackAct::PopOut(key)));
+            placeholder(ui, s, &d, body, button)
+        }
         // No hosted key (nothing hosted yet): the plain placeholder.
-        None => placeholder(ui, s, &d, body, None),
+        (None, _) => placeholder(ui, s, &d, body, None),
     }
 }
 
-/// A tile body's parameter row bar, by hosted key and param id: what a drag maps the pointer's x onto
-/// (the same geometry the placeholder paints — first 8 cached params, 26 px a row, from the tile's body).
-pub(crate) fn param_bar(s: &State, key: usize, id: u32) -> Option<Rect> {
-    let (_, w, h) = ((), s.screen.0, s.screen.1);
-    let (_, tile) = layout(s, panel_rect(s, w, h)).into_iter().find(|(d, _)| d.key == Some(key))?;
-    let row = s.device_rack_params.get(&key)?.iter().position(|(i, ..)| *i == id)?;
-    let body = body(tile);
-    let bar = Rect::new(body.x + 10.0, body.y + 56.0 + 15.0 + 26.0 * row as f32, (body.w - 20.0).min(180.0), 4.0);
-    (bar.y <= body.bottom() - 20.0).then_some(bar)
+/// How a device tile's body is filled: by the editor of a built-in docked into it, or by parameter rows.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum BodyMode {
+    Embedded,
+    Rows,
 }
 
-/// A placeholder body: what the device is, and a `button` when there is one to press.
+/// A tile's body mode: `Embedded` only while a built-in's editor is really open in the tile (popped-out, failed,
+/// not-yet-open and editor-less devices get parameter rows instead of a blank body).
+pub(crate) fn body_mode(s: &State, d: &Device) -> BodyMode {
+    match d.key {
+        Some(key) if d.builtin && !s.device_rack_float.contains(&key) && s.device_rack_editor.contains(&key) => BodyMode::Embedded,
+        _ => BodyMode::Rows,
+    }
+}
+
+/// Height of one parameter row (label line + bar).
+const ROW_H: f32 = 26.0;
+
+/// The top of the first parameter row: below the Pop out button strip when the tile has one.
+fn rows_top(body: Rect, button: bool) -> f32 {
+    body.y + if button { 32.0 } else { 8.0 }
+}
+
+/// A tile body's parameter row bar, by hosted key and param id: what a drag maps the pointer's x onto
+/// (the same geometry the placeholder paints: cached params, `ROW_H` px a row, from the tile's body).
+pub(crate) fn param_bar(s: &State, key: usize, id: u32) -> Option<Rect> {
+    let (_, w, h) = ((), s.screen.0, s.screen.1);
+    let (d, tile) = layout(s, panel_rect(s, w, h)).into_iter().find(|(d, _)| d.key == Some(key))?;
+    let row = s.device_rack_params.get(&key)?.iter().position(|(i, ..)| *i == id)?;
+    let body = body(tile);
+    let button = !s.device_rack_float.contains(&key) && d.key.is_some();
+    let bar = row_bar(body, rows_top(body, button), row);
+    (bar.bottom() <= body.bottom() - 2.0).then_some(bar)
+}
+
+/// Row `i`'s bar: the body width less its margins, under the label line.
+fn row_bar(body: Rect, top: f32, i: usize) -> Rect {
+    Rect::new(body.x + 10.0, top + 15.0 + ROW_H * i as f32, (body.w - 20.0).max(20.0), 4.0)
+}
+
+/// How many parameter rows fit in `body` below `top`.
+pub(crate) fn rows_fit(body: Rect, top: f32) -> usize {
+    ((body.bottom() - top - 2.0) / ROW_H).floor().max(0.0) as usize
+}
+
+/// A placeholder body: parameter rows (when the device has any), and a `button` when there is one to press.
 fn placeholder(ui: &mut Ui, s: &State, d: &Device, body: Rect, button: Option<Action>) {
     let t = ui.t;
     ui.c.fill_rect(body, t.s(0x131718));
     ui.c.stroke_rrect(body.inset(1.0), 2.0, 1.0, t.splitter_dark);
-    let label = match d.kind {
-        _ => "No embedded editor for this plugin yet",
-    };
-    ui.c.text(fnt(13.0), body.x + 10.0, body.y + 8.0, t.text_dim, label);
-    // Live parameters (cached by `sync_embed`): the tile's controls when its editor cannot embed. A row's bar
+    let params: &[(u32, String, f64)] = d.key.and_then(|k| s.device_rack_params.get(&k)).map_or(&[], |v| v);
+    let top = rows_top(body, button.is_some());
+    if params.is_empty() {
+        let label = if d.key.is_some() { "No parameters to show" } else { "No device" };
+        ui.c.text_clip(fnt(13.0), body.x + 10.0, top, body.w - 20.0, t.text_dim, label);
+    }
+    // Live parameters (cached by `sync_embed`): the tile's controls when its editor is not embedded. A row's bar
     // sets the parameter where it is clicked or dragged (through `device_rack::set_param_value`, the one set
-    // path — automation hooks it later).
+    // path). The name sits above the bar, truncated, with the value at its right end.
     if let Some(key) = d.key {
-        let mut py = body.y + 56.0;
-        for (id, name, val) in s.device_rack_params.get(&key).map_or(&Vec::new(), |v| v) {
-            ui.c.text_clip(fnt(12.0), body.x + 10.0, py, body.w - 20.0, t.text_dim, name);
-            let bar = Rect::new(body.x + 10.0, py + 15.0, (body.w - 20.0).min(180.0), 4.0);
+        let fit = rows_fit(body, top);
+        for (i, (id, name, val)) in params.iter().take(fit).enumerate() {
+            let bar = row_bar(body, top, i);
+            let py = bar.y - 15.0;
             let v = (*val as f32).clamp(0.0, 1.0);
-            let hit = Rect::new(bar.x - 4.0, py - 2.0, bar.w + 8.0, 23.0);
-            let hov = ui.hit(
+            let value = format!("{:.0}%", v * 100.0);
+            let vw = 36.0;
+            ui.c.text_clip(fnt(12.0), body.x + 10.0, py, body.w - 20.0 - vw, t.text_dim, name);
+            ui.c.text(fnt(12.0), body.right() - 10.0 - vw + 6.0, py, t.text_dim, &value);
+            let hit = Rect::new(bar.x - 4.0, py - 2.0, bar.w + 8.0, ROW_H - 3.0);
+            ui.hit(
                 hit,
                 Action::DeviceRack(RackAct::ParamSet { key, id: *id, v: (((ui.mouse.0 - bar.x) / bar.w).clamp(0.0, 1.0)) as f64 }),
-                "Drag to set this parameter",
+                "Click or drag to set this parameter",
             );
-            let _ = hov;
             ui.c.fill_rect(bar, t.s(0x2b3134));
             ui.c.fill_rect(Rect::new(bar.x, bar.y, bar.w * v, bar.h), t.glyph);
-            py += 26.0;
-            if py > body.bottom() - 20.0 {
-                break;
-            }
         }
     }
     if let Some(action) = button {
-        let b = Rect::new(body.x + 10.0, body.y + 30.0, 70.0, 20.0);
+        let b = Rect::new(body.x + 10.0, body.y + 5.0, 70.0, 20.0);
         let hov = ui.hit(b, action, "Pop the editor out to its own window");
         let st = kit::State::hover(hov);
         kit::button(ui.c, t, b, st);
@@ -428,12 +452,9 @@ pub fn paint_menu(ui: &mut Ui, s: &State) {
         return;
     };
     let t = ui.t;
-    let m = Rect::new(
-        tile.right() - 70.0,
-        tile.y + HEADER_H,
-        70.0,
-        2.0 * 22.0 + 4.0,
-    );
+    let kind = d.kind;
+    let n = 2 + usize::from(matches!(kind, DeviceKind::Instrument(_)));
+    let m = Rect::new(tile.right() - 80.0, tile.y + HEADER_H, 80.0, n as f32 * 22.0 + 4.0);
     ui.c.fill_rrect(m, 3.0, t.s(0x26292c));
     ui.c.stroke_rrect(m, 3.0, 1.0, t.splitter_dark);
     // A click anywhere else dismisses it.
@@ -451,12 +472,17 @@ pub fn paint_menu(ui: &mut Ui, s: &State) {
         }
         ui.c.text(fnt(14.0), r.x + 8.0, r.y + 3.0, t.text, label);
     };
-    let y = m.y + 2.0;
+    let mut y = m.y + 2.0;
     if popped {
         item(ui, y, "Dock", Action::DeviceRack(RackAct::Dock(key)));
     } else {
         item(ui, y, "Pop out", Action::DeviceRack(RackAct::PopOut(key)));
     }
-    let _ = d;
+    y += 22.0;
+    if matches!(kind, DeviceKind::Instrument(_)) {
+        item(ui, y, "Replace", Action::DeviceRack(RackAct::Replace));
+        y += 22.0;
+    }
+    item(ui, y, "Remove", Action::DeviceRack(RackAct::Remove(kind)));
 }
 
