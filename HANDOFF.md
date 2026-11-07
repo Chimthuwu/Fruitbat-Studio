@@ -161,6 +161,10 @@ Do it with tests, in the order above — the workspace suite is green (1083 in `
 
 ### Also open
 
+- **Clip launcher** — a first version ships (Tab in the Playlist window): scenes × tracks grid,
+  launch/stop, mixer-ordered columns, clips are project patterns. Tracks do not play
+  independently yet; the staged plan is `docs/clip-launcher.md`.
+
 - Audio FX chain already works (`crates/os-engine/src/engine/mix.rs:31`, insert effects in
   slot order before the fader).
 - Audio FX layer / selector containers not separately verified.

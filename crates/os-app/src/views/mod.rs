@@ -11,6 +11,7 @@ pub mod channel_win;
 pub mod container;
 pub mod data_folder;
 pub mod device_rack;
+pub mod launcher;
 pub mod factory_folder;
 pub mod dialog;
 pub mod menus;
@@ -217,6 +218,8 @@ pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo) -> usize {
         let a = paint_area(s, win);
         ui.c.push_clip(a);
         match win {
+            // Tab flips the window between the arrangement and the clip launcher (Bitwig's Tab).
+            Win::Playlist if s.launcher_open => ui.part(Seg::Win(win), a, |ui| launcher::paint(ui, s, r)),
             Win::Playlist => ui.part(Seg::Win(win), a, |ui| playlist::paint(ui, s, r, f)),
             Win::Mixer => ui.part(Seg::Win(win), a, |ui| {
                 // Timed while the cables swing: a mixer too slow to redraw them hangs them still. Not in tests: they

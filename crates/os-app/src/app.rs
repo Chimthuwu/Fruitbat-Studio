@@ -268,6 +268,10 @@ pub enum Action {
     BrowserSplitter,
     /// The device rack's controls (spec model/track-model.md §7).
     DeviceRack(crate::device_rack::RackAct),
+    /// A clip launcher cell, scene button or track header (`crate::launcher`).
+    Launcher(crate::launcher::Act),
+    /// Tab: the Playlist window shows the clip launcher instead of the arrangement (and back).
+    ToggleLauncher,
     PlaylistArea,
     MixerArea,
     RackArea,
@@ -1119,6 +1123,10 @@ pub struct State {
     pub device_rack_tile_scroll: std::collections::BTreeMap<usize, f32>,
     /// The device rack's horizontal scroll (content px): the chain is wider than the panel at times.
     pub device_rack_scroll_x: f32,
+    /// The clip launcher (Bitwig-style, `crate::launcher`): its grid and which scene each track plays.
+    pub launcher: crate::launcher::Launcher,
+    /// Whether the Playlist window shows the clip launcher instead of the arrangement (Tab).
+    pub launcher_open: bool,
     /// The device tile being dragged (its kind), and the gap it would drop at (a chain index).
     pub device_rack_drag: Option<crate::device_rack::DeviceKind>,
     pub device_rack_drop: Option<usize>,
@@ -1576,6 +1584,8 @@ impl App {
                 device_rack_params: Default::default(),
                 device_rack_tile_scroll: Default::default(),
                 device_rack_scroll_x: 0.0,
+                launcher: Default::default(),
+                launcher_open: false,
                 device_rack_drag: None,
                 device_rack_drop: None,
                 device_rack_sel: None,
@@ -6819,6 +6829,15 @@ impl App {
                 crate::patterns::run(&mut self.state, crate::patterns::Cmd::FindNext, (at.x, at.y));
                 return self.invalidate();
             }
+            // Right-click on a launcher slot: the current pattern goes in, or out when it is already there.
+            Some(Action::Launcher(a)) if self.state.launcher_open => {
+                let act = match *a {
+                    crate::launcher::Act::Launch(track, scene) => crate::launcher::Act::Set(track, scene),
+                    other => other,
+                };
+                crate::launcher::run(self, act);
+                return;
+            }
             // Right-click on a device tile (header, body or a row): its device menu (Pop out / Remove / ...).
             _ if crate::device_rack::visible(&self.state) && self.tile_key_at(x, y).is_some() => {
                 self.state.device_rack_menu = self.tile_key_at(x, y);
@@ -7964,6 +7983,9 @@ impl App {
         match key {
             // Space starts and stops (rewinding); Ctrl+Space starts and pauses, like the Play button (FL's manual,
             // keyboard shortcuts: "Start/Stop Playback", "Start/Pause Playback").
+            // Tab flips the Playlist between the arrangement and the clip launcher (Bitwig's Tab); Shift+Tab stays
+            // the playlist's snap cycle.
+            Key::Named(NamedKey::Tab) if !ctrl && !alt && !self.shift => self.act(Action::ToggleLauncher),
             Key::Named(NamedKey::Space) if ctrl => self.act(Action::Play),
             Key::Named(NamedKey::Space) => self.act(if self.transport.playing() { Action::Stop } else { Action::Play }),
             // L flips the PAT / SONG switch, as in FL (the typing keyboard, when on, takes L first).
@@ -8646,6 +8668,10 @@ impl App {
         if self.browser_act(&a) {
             return;
         }
+        if let Action::Launcher(a) = a {
+            crate::launcher::run(self, a);
+            return;
+        }
         if let Action::DeviceRack(ra) = a {
             return crate::device_rack::run(self, ra);
         }
@@ -8750,6 +8776,10 @@ impl App {
                     // spec: ui/recording.md §5: the piano roll's time selection, as in SONG mode.
                     s.piano.marker = a;
                 }
+                self.invalidate();
+            }
+            Action::ToggleLauncher => {
+                s.launcher_open = !s.launcher_open;
                 self.invalidate();
             }
             Action::PatSong(song) => {
@@ -9073,7 +9103,9 @@ impl App {
             | Action::PlStretch
             | Action::PlPopup(_)
             | Action::PlPopupSub(_)
-            | Action::DeviceRack(_) => {}
+            | Action::DeviceRack(_)
+            | Action::Launcher(_)
+            | Action::ToggleLauncher => {}
         }
     }
 
