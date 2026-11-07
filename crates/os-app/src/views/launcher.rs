@@ -136,6 +136,9 @@ fn slot_paint(ui: &mut Ui, s: &State, c: &launcher::Column, scene: usize, cell: 
         "Launch this clip (an empty slot stops the track)",
     );
     let playing = launcher::playing(s, c.id) == Some(scene);
+    // Queued for the next bar line (a launch made while the transport runs): the cell is picked out, so the wait is
+    // visible rather than the click seeming to have done nothing.
+    let queued = launcher::pending(s, c.id) == Some(scene);
     let color = c.color.map(rgb);
     match launcher::clip(s, c.id, scene) {
         Some(slot) => {
@@ -152,6 +155,9 @@ fn slot_paint(ui: &mut Ui, s: &State, c: &launcher::Column, scene: usize, cell: 
             }
             let (x, w) = if playing { (cell.x + 19.0, cell.w - 25.0) } else { (cell.x + 7.0, cell.w - 14.0) };
             ui.c.text_clip(fnt(13.0), x, cell.y + cell.h * 0.5 - 8.0, w, t.text, &name);
+            if queued {
+                ui.c.stroke_rrect(cell.inset(1.0), 2.0, 2.0, t.accent);
+            }
         }
         None => {
             ui.c.fill_rrect(cell, 2.0, if hov { t.s(0x242a2d) } else { t.s(0x1b1f21) });

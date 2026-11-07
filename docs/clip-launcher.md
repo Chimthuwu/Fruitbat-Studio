@@ -27,6 +27,9 @@ the window's own frame, so it sits exactly where the arrangement was.
   it is already there. **Double-click** a filled cell: that clip's pattern opens in the Piano
   Roll (the first click launched it; the second opens it, as a double-click on a playlist MIDI
   clip does).
+- **Launches are quantised to the bar** (S1): while the transport runs, a click queues the clip
+  for the next bar line (`Launcher::pending`) and the cell is outlined until it lands; a launch
+  while stopped starts at once, and a launch whose transport stops first starts at once too.
 - Launching switches the transport to PAT mode at the clip's pattern (song playback would
   ignore the launcher) and starts the transport when it is stopped.
 
@@ -51,17 +54,17 @@ Double-clicking a filled cell opens the clip's pattern in the Piano Roll (`launc
 clip is editable in place yet: a right-click holds only "the current pattern, or nothing". A
 real slot menu (rename, duplicate, colour, delete) belongs with S4/S5.
 
-### S1 — Quantised launch (S)
+### S1 — Quantised launch (done, bar only)
 
-Today a launch starts the pattern at once. Bitwig launches at the next **bar** (its default
-quantisation). Needs the transport's tick position where the launch is pressed, which
-`Transport`/`Engine` already track.
+A launch while the transport runs waits for the next **bar line**: `launch` / `launch_scene`
+record `Launcher::pending` (per track: scene, pattern, tick) and `App::tick` calls
+`launcher::advance`, which applies them at that tick, when the transport stops first, or when a
+looping pattern wraps past the line (a pattern's own end never reports a tick *at* it).
+`bar_ticks` is `Project::bar_ticks`, so the time signature is respected. The cell is outlined
+while it waits.
 
-- Add `LaunchQuantization { None, Beat, Bar, Scene }` to `launcher.rs`, with a per-clip setting
-  (`Slot.quantize`) and a grid-wide default.
-- A launch while stopped starts at once; a launch while running records
-  `Launcher::pending: BTreeMap<u32, (usize, u64 /* tick */)>` and applies at the boundary.
-- Draw pending cells with a pulsing border (the view already has `playing` state to copy).
+Still open: `LaunchQuantization { None, Beat, Bar, Scene }` as a setting (per clip and
+grid-wide — today bar is unconditional), and a pulsing rather than static outline.
 
 Suhina spells this out: `crates/model/src/lib.rs` (`LaunchQuantization`), and
 `crates/session/src/launch.rs` for the command surface.

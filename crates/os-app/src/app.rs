@@ -4227,6 +4227,8 @@ impl App {
         s.control.settle_tick(&mut s.project, s.piano.dirty);
         self.control_tick();
         self.plugin_tick();
+        // A launcher clip queued for the next bar line goes on the air at that line (`launcher::advance`).
+        crate::launcher::advance(self);
         // Playback loops over the time selection, as it is now (spec: ui/recording.md §5).
         self.sync_loop_range();
         #[cfg(all(plugin_windows, not(windows)))]
