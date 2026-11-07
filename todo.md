@@ -15,7 +15,8 @@
   `set_editor_size` sync (unlinked natural size + Lemon host-link size) had no `pinned` guard, re-inflating the
   frame past the tile every tick. A pinned frame is now exactly the editor (no chrome — the tile's own header is
   the name/LED/menu), its editor area sits at the origin, and the tick sync skips pinned windows; pop-out is
-  unaffected (it un-pins first, then syncs as before). `cargo check` clean, `cargo test -p os-app` 1081/0/62.
+  unaffected (it un-pins first, then syncs as before). `cargo check` clean, `cargo test -p os-app` 1082/0/62
+  (added `a_pinned_frame_is_exactly_the_editor` regression test, commit `a38cc3e1`).
 - 📋 **Signal routing audit (2026-11-07):** audio FX chain ALREADY WORKS — mixer insert effects process in
   slot order (`engine/mix.rs:31`), so the rack's right-side FX tiles already drive the mixer. The remaining gap
   is the **engine note-path**: MIDI FX / note-layer / note-selector plugins are hosted for UI only and their
