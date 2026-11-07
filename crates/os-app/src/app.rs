@@ -1110,16 +1110,13 @@ pub struct State {
     pub device_rack_collapsed: bool,
     pub device_rack_pin: Option<u16>,
     pub device_rack_float: std::collections::BTreeSet<usize>,
-    pub device_rack_embed: std::collections::BTreeSet<usize>,
-    pub device_rack_failed: std::collections::BTreeSet<usize>,
-    /// The tiles whose built-in editor is really open (docked) in them; every other tile shows parameter rows.
-    pub device_rack_editor: std::collections::BTreeSet<usize>,
     pub device_rack_menu: Option<usize>,
     pub device_rack_split_click: Option<std::time::Instant>,
-    /// Live parameters of the rack's devices, by plugin-window key (refreshed by
-    /// `device_rack::sync_embed`): the controls a tile shows when its editor cannot embed.
-    /// Each row is (param id, name, normalized value).
-    pub device_rack_params: std::collections::BTreeMap<usize, Vec<(u32, String, f64)>>,
+    /// Live controls of the rack's devices, by plugin-window key (refreshed by `device_rack::sync_embed`): what a
+    /// tile draws in its body — the plugin's own parameters, names, sections and value texts.
+    pub device_rack_params: std::collections::BTreeMap<usize, Vec<crate::device_rack::RackParam>>,
+    /// How far each tile's control grid is scrolled up, by key (only tiles whose controls overflow scroll).
+    pub device_rack_tile_scroll: std::collections::BTreeMap<usize, f32>,
     /// The device rack's horizontal scroll (content px): the chain is wider than the panel at times.
     pub device_rack_scroll_x: f32,
     /// The device tile being dragged (its kind), and the gap it would drop at (a chain index).
@@ -1574,12 +1571,10 @@ impl App {
                 device_rack_collapsed: false,
                 device_rack_pin: None,
                 device_rack_float: Default::default(),
-                device_rack_embed: Default::default(),
-                device_rack_failed: Default::default(),
-                device_rack_editor: Default::default(),
                 device_rack_menu: None,
                 device_rack_split_click: None,
                 device_rack_params: Default::default(),
+                device_rack_tile_scroll: Default::default(),
                 device_rack_scroll_x: 0.0,
                 device_rack_drag: None,
                 device_rack_drop: None,

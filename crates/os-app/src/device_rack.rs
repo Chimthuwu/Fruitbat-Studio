@@ -4,10 +4,10 @@
 
 //! The device rack (Lemon Studio's design: spec model/track-model.md §7): a panel docked at the bottom of the main
 //! window that holds the devices of the selected track in signal-flow order — a MIDI track's instrument (its
-//! channel's plugin) and the mixer strip's effect slots. Built-in Lemon plugins' editors render inside their device
-//! tile; anything else shows a placeholder body with a Pop out button, and every device's header menu can pop the
-//! editor out to the floating window machinery (Options ▸ Detached's) or dock it back. Only Linear mode shows the
-//! rack: Classic mode keeps today's behaviour untouched.
+//! channel's plugin) and the mixer strip's effect slots. A device's tile draws the device's own controls in the app's
+//! canvas (its parameters, names, sections and value texts — see [`sync_embed`]), and every device's header menu can
+//! pop its full editor out to the floating window machinery (Options ▸ Detached's) or dock it back. Only Linear mode
+//! shows the rack: Classic mode keeps today's behaviour untouched.
 //!
 //! ## Signal-flow container seam
 //!
@@ -88,6 +88,24 @@ pub struct Device {
     pub name: String,
     pub on: bool,
     pub builtin: bool,
+}
+
+/// One control a device tile draws in its body: a parameter of the device's hosted instance, with everything the
+/// tile needs to show it the way the plugin's own editor does.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RackParam {
+    /// The plugin's parameter id (`Plugins::set_param`).
+    pub id: u32,
+    /// The parameter's name ("Semitones").
+    pub name: String,
+    /// The plugin's section for it ("Envelope"), empty when the plugin names none.
+    pub group: String,
+    /// The normalized value, 0..=1.
+    pub value: f64,
+    /// The plugin's own text for the value ("Mixolydian", "+0 st", "On").
+    pub text: String,
+    /// A two-state parameter: drawn as a switch, not a dial.
+    pub toggle: bool,
 }
 
 /// The track whose devices the rack shows: the pinned lane while the chain is pinned, else the selected lane
@@ -376,7 +394,6 @@ pub fn toggle_pin(app: &mut App) {
 /// pinning it to its tile. An editor that is not open yet opens first, detached.
 pub fn pop_out(app: &mut App, key: usize) {
     app.state.device_rack_float.insert(key);
-    app.state.device_rack_embed.remove(&key);
     app.plugins.set_detached(key, true);
     // An editor that was not open yet opens detached now; one that was moves out of its tile.
     #[cfg(plugin_windows)]
@@ -387,10 +404,12 @@ pub fn pop_out(app: &mut App, key: usize) {
     app.invalidate();
 }
 
-/// A device's Dock: `key`'s editor comes back into its tile (the rack re-pins it on the next frame).
+/// A device's Dock: `key`'s floating editor window closes and its tile draws the device's controls again (the tile
+/// always draws them; the window is what comes and goes).
 pub fn dock(app: &mut App, key: usize) {
     app.state.device_rack_float.remove(&key);
     app.plugins.set_detached(key, false);
+    app.plugins.close_if_open(key);
     app.state.device_rack_menu = None;
     app.invalidate();
 }
@@ -501,7 +520,6 @@ pub fn set_param_value(app: &mut App, key: usize, id: u32, v: f64) {
     let v = v.clamp(0.0, 1.0);
     if app.plugins.set_param(key, id, v) {
         app.state.params.set_by_host(key, id, v);
-        app.state.device_rack_failed.remove(&key);
         app.invalidate();
     }
 }
@@ -627,82 +645,31 @@ pub fn remove_device(app: &mut App, kind: DeviceKind) {
     app.invalidate();
 }
 
-/// Keeps the rack's embedded editors on their tiles: opens the built-in devices' editors that are missing, closes
-/// the ones whose device left the chain, and moves each to its tile's rect. Called from `clip_docked` (every tick,
-/// like the docked windows' stacking and clipping); guarded so a tile whose editor fails becomes a placeholder
-/// instead of a crash (§7 risks) — `open_window`'s `Err` and an instance that stopped (`Request::Stopped`) both
-/// leave the tile with its placeholder body.
+/// Keeps the rack's tiles showing their devices' own controls. Called from `clip_docked` (every tick).
+///
+/// The tile draws the controls itself, in the app's canvas: the device's own editor in miniature, with the same
+/// parameter names, sections and value texts. It does not embed a native plugin window — pinning the editor's frame
+/// into the tile never painted reliably (a tile stayed flat until its editor was popped out, and only then showed
+/// controls, because the tile had fallen back to drawing them), so the rack now draws them from the start.
 pub fn sync_embed(app: &mut App) {
-    let prev: Vec<usize> = app.state.device_rack_embed.iter().copied().collect();
     if !visible(&app.state) || app.state.device_rack_collapsed {
-        for key in prev {
-            app.plugins.close_if_open(key);
-        }
-        app.state.device_rack_embed.clear();
-        app.state.device_rack_editor.clear();
+        app.state.device_rack_params.clear();
+        app.state.device_rack_tile_scroll.clear();
         return;
     }
-    // The tiles the rack embeds: every built-in device the user has not popped out.
-    let tiles = crate::views::device_rack::device_rects(&app.state);
-    let keys: BTreeSet<usize> = tiles.iter().map(|&(k, _)| k).collect();
-    for key in prev {
-        if !keys.contains(&key) {
-            app.plugins.close_if_open(key);
-        }
-    }
-    app.state.device_rack_embed = keys;
-    // The tiles' live parameters (every device's key, so a tile's placeholder body always has its controls —
-    // hosted, non-builtin devices included: their param list is read straight off the hosted instance, no editor
-    // needed): each row is (param id, name, normalized value) for the params a tile can render and set.
+    // Every device tile's instance, hosted or built-in: its parameter list is read straight off the instance, so a
+    // tile never needs its editor opened to show (and set) its controls.
     let keys = crate::views::device_rack::device_keys(&app.state);
-    app.state.device_rack_params = keys
-        .iter()
-        .filter_map(|&k| {
-            let ps = app
-                .plugins
-                .param_infos(k)
-                .iter()
-                .filter(|i| !i.read_only && !i.bypass)
-                .take(8)
-                .map(|i| (i.id, i.name.clone(), app.plugins.param_value(k, i.id).unwrap_or(i.default)))
-                .collect::<Vec<_>>();
-            (!ps.is_empty()).then_some((k, ps))
-        })
-        .collect();
-    // Open what is missing and pin each editor to its tile's rect. Without plugin windows there is nothing to
-    // embed: every tile keeps its placeholder body.
-    #[cfg(plugin_windows)]
-    {
-        // A stopped or failed editor is not retried: its tile keeps the placeholder.
-        for &(key, _) in &tiles {
-            if app.plugins.window_of(key).is_some()
-                || app.state.device_rack_failed.contains(&key)
-                || app.plugins.is_stopped(key)
-            {
-                continue;
-            }
-            if !matches!(open_editor(app, key), Some(Ok(()))) {
-                app.state.device_rack_failed.insert(key);
-            }
+    app.state.device_rack_tile_scroll.retain(|k, _| keys.contains(k));
+    let mut params = std::collections::BTreeMap::new();
+    for &key in &keys {
+        let prev = app.state.device_rack_params.get(&key).cloned().unwrap_or_default();
+        let rows = app.plugins.rack_controls(key, &prev);
+        if !rows.is_empty() {
+            params.insert(key, rows);
         }
-        let k = app.plugins.scale;
-        let (ox, oy) = app.canvas_off;
-        for (key, r) in &tiles {
-            let rect = [
-                (r.x * k).floor() as i32 + ox,
-                (r.y * k).floor() as i32 + oy,
-                (r.right() * k).ceil() as i32 + ox,
-                (r.bottom() * k).ceil() as i32 + oy,
-            ];
-            app.plugins.pin_window(*key, rect);
-        }
-        // The tiles whose editor is really open in them: only those show it instead of parameter rows.
-        app.state.device_rack_editor = tiles
-            .iter()
-            .map(|&(k, _)| k)
-            .filter(|k| app.plugins.window_of(*k).is_some() && !app.state.device_rack_failed.contains(k))
-            .collect();
     }
+    app.state.device_rack_params = params;
 }
 
 #[cfg(test)]
@@ -857,15 +824,14 @@ mod tests {
             run(&mut app, RackAct::PopOut(row));
             assert!(app.plugins.hosted[&row].detached, "popped out");
             assert!(app.state.device_rack_float.contains(&row));
-            assert!(
-                !crate::views::device_rack::device_rects(&app.state)
-                    .iter()
-                    .any(|&(k, _)| k == row),
-                "not pinned while floated"
-            );
+            assert!(app.plugins.window_of(row).is_some(), "popped out: its window is open");
             run(&mut app, RackAct::Dock(row));
             assert!(!app.plugins.hosted[&row].detached, "docked back");
             assert!(!app.state.device_rack_float.contains(&row));
+            assert!(
+                app.plugins.window_of(row).is_none(),
+                "docked: the floating window closes, the tile draws the device's controls"
+            );
         }
     }
 
@@ -1609,7 +1575,7 @@ mod tests {
     /// The render path: every tile that is not showing an embedded editor has >= 1 parameter row that is really
     /// on screen (inside the body, with height), and paints a ParamSet hit for it.
     #[test]
-    fn every_tile_without_an_editor_renders_visible_param_rows() {
+    fn every_tile_renders_its_own_controls() {
         let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
         let mut app = full_chain_app();
         app.paint(&mut c, None);
@@ -1620,18 +1586,41 @@ mod tests {
         for (d, tile) in &tiles {
             let Some(key) = d.key else { continue };
             midi_fx += usize::from(matches!(d.kind, DeviceKind::MidiFx(_)));
-            if crate::views::device_rack::body_mode(&app.state, d) == crate::views::device_rack::BodyMode::Embedded {
-                continue;
-            }
             let ps = app.state.device_rack_params.get(&key).unwrap_or_else(|| panic!("{} has no params cached", d.name));
             assert!(!ps.is_empty(), "{}", d.name);
-            let dial = crate::views::device_rack::param_dial(&app.state, key, ps[0].0)
-                .unwrap_or_else(|| panic!("{}: first param dial is not on screen", d.name));
+            assert!(ps.iter().all(|p| !p.text.is_empty()), "{}: every control has the plugin's value text", d.name);
+            let dial = crate::views::device_rack::param_dial(&app.state, key, ps[0].id)
+                .unwrap_or_else(|| panic!("{}: first control is not on screen", d.name));
             assert!(dial.w > 20.0 && dial.h > 0.0 && tile.contains(dial.x + 1.0, dial.y + 1.0), "{}: {dial:?}", d.name);
             let hit = app.hits.iter().any(|h| matches!(h.action, Action::DeviceRack(RackAct::ParamSet { key: k, .. }) if k == key));
-            assert!(hit, "{}: no painted param row hit", d.name);
+            assert!(hit, "{}: no painted control hit", d.name);
         }
         assert!(midi_fx >= crate::midi_fx::SLOTS, "every MIDI FX slot is a tile ({midi_fx})");
+    }
+
+    /// A MIDI FX tile draws every one of its controls — the rack used to cap a tile at eight, so a device's later
+    /// controls (a sampler's ADSR, a filter's knobs) were simply absent. All of them get a hit and a place in the
+    /// grid; what does not fit scrolls.
+    #[test]
+    fn a_midi_fx_tile_shows_all_of_its_controls() {
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = full_chain_app();
+        app.paint(&mut c, None);
+        let tiles = crate::views::device_rack::tiles(&app.state);
+        let (d, tile) = tiles.iter().find(|(d, _)| matches!(d.kind, DeviceKind::MidiFx(_))).unwrap().clone();
+        let key = d.key.unwrap();
+        let count = app.state.device_rack_params[&key].len();
+        assert!(count > 0, "{}", d.name);
+        for p in &app.state.device_rack_params[&key] {
+            let cell = crate::views::device_rack::param_dial(&app.state, key, p.id)
+                .unwrap_or_else(|| panic!("{}: {} has no cell", d.name, p.name));
+            assert!(tile.contains(cell.x + 1.0, cell.y + 1.0), "{}: {} is outside its tile: {cell:?}", d.name, p.name);
+        }
+        assert!(
+            app.hits.iter().filter(|h| matches!(h.action, Action::DeviceRack(RackAct::ParamSet { key: k, .. }) if k == key)).count() >= count.min(4),
+            "{}: the tile paints a hit per visible control",
+            d.name
+        );
     }
 
     /// The chain fits ~4 tiles with their ＋ gaps in the default panel width without scrolling.

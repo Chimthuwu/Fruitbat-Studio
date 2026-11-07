@@ -916,6 +916,30 @@ impl Plugins {
     }
 
     /// The normalized value of parameter `id` of the instance under `key`.
+    /// The controls a device tile draws, in the plugin's own parameter order: every parameter it shows and the user
+    /// can set, with the plugin's own text for the current value (the previous refresh `prev` supplies the text of a
+    /// value that did not move, so a steady parameter costs no text call). One lock for the whole tile.
+    pub fn rack_controls(&self, key: usize, prev: &[crate::device_rack::RackParam]) -> Vec<crate::device_rack::RackParam> {
+        use crate::device_rack::RackParam;
+        let Some(mut p) = self.hosted.get(&key).and_then(|h| h.plugin.lock().ok()) else { return Vec::new() };
+        let infos: Vec<os_host::ParamInfo> = (0..p.param_count()).filter_map(|i| p.param_info(i)).collect();
+        infos
+            .into_iter()
+            .filter(|i| !i.read_only && !i.bypass && !i.hidden)
+            .map(|i| {
+                let value = p.param_value(i.id).unwrap_or(i.default);
+                let text = match prev.iter().find(|r| r.id == i.id) {
+                    Some(r) if r.value == value => r.text.clone(),
+                    _ => p
+                        .param_text(i.id, value)
+                        .filter(|t| !t.is_empty())
+                        .unwrap_or_else(|| format!("{:.0}%", value * 100.0)),
+                };
+                RackParam { id: i.id, name: i.name, group: i.group, value, text, toggle: i.steps == 1 }
+            })
+            .collect()
+    }
+
     pub fn param_value(&self, key: usize, id: u32) -> Option<f64> {
         self.hosted.get(&key)?.plugin.lock().ok()?.param_value(id)
     }

@@ -4,13 +4,13 @@
 
 //! The device rack's view (Lemon Studio's design: spec model/track-model.md §7): a panel docked at the bottom of
 //! the main window, resizable by its splitter and collapsible to its header, whose device tiles hold the selected
-//! track's devices in signal-flow order. Built-in Lemon plugins' editors render inside their tile; anything else
-//! (and a tile whose editor failed) shows a placeholder body.
+//! track's devices in signal-flow order. Each tile draws its device's own controls, in the app's canvas: the
+//! parameters, names, sections and value texts the plugin's editor shows, docked or popped out.
 
 use os_ui::{Color, Rect, kit};
 
 use crate::app::{Action, State};
-use crate::device_rack::{self, Device, DeviceKind, HEADER_H, RackAct, TILE_W};
+use crate::device_rack::{self, Device, DeviceKind, RackParam, HEADER_H, RackAct, TILE_W};
 use crate::views::{Ui, fnt};
 
 /// The rack's panel rect in the window: the full width, its height at the bottom edge (`device_rack::height`).
@@ -56,12 +56,24 @@ pub(crate) fn scroll_x(s: &State, w: f32) -> f32 {
     s.device_rack_scroll_x.clamp(0.0, (content_w(s) - w).max(0.0))
 }
 
-/// The wheel over the rack's body scrolls the chain horizontally (`d` notches, up = left, as the mixer's);
-/// `r` is the rack panel rect. Returns whether the wheel was over the rack.
+/// The wheel over the rack's body: the tile under the pointer scrolls its own controls when the device has more
+/// than its body shows, else the chain scrolls horizontally (`d` notches, up = left, as the mixer's); `r` is the
+/// rack panel rect. Returns whether the wheel was over the rack.
 pub(crate) fn wheel(s: &mut State, r: Rect, x: f32, y: f32, d: f32) -> bool {
-    let body = Rect::new(r.x, r.y + HEADER_H, r.w, r.h - HEADER_H);
-    if !body.contains(x, y) || d == 0.0 {
+    let area = Rect::new(r.x, r.y + HEADER_H, r.w, r.h - HEADER_H);
+    if !area.contains(x, y) || d == 0.0 {
         return false;
+    }
+    if let Some((dev, tile)) = layout(s, r).into_iter().find(|(_, t)| t.contains(x, y)) {
+        if let Some(key) = dev.key {
+            let b = body(tile);
+            let max = s.device_rack_params.get(&key).map_or(0.0, |ps| scroll_max(b, ps));
+            if max > 0.0 {
+                let at = s.device_rack_tile_scroll.entry(key).or_insert(0.0);
+                *at = (*at - d * 34.0).clamp(0.0, max);
+                return true;
+            }
+        }
     }
     s.device_rack_scroll_x = (scroll_x(s, r.w) - d * 44.0).clamp(0.0, (content_w(s) - r.w).max(0.0));
     true
@@ -96,24 +108,10 @@ fn drop_highlight(ui: &mut Ui, s: &State, tiles: &[(Device, Rect)]) {
 }
 
 /// The keys of every device tile in the rack (any kind, floated or not): what the params cache covers so a hosted
-/// (non-builtin) tile's placeholder body gets its parameter rows too.
+/// (non-builtin) tile's body gets its controls too — the cache reads every instance's parameters.
 pub fn device_keys(s: &State) -> Vec<usize> {
     let r = panel_rect(s, s.screen.0, s.screen.1);
     layout(s, r).into_iter().filter_map(|(d, _)| d.key).collect()
-}
-
-/// The tile bodies the rack embeds a built-in editor into: the built-in devices the user has not popped out. The
-/// app pins each editor's native window here on the next tick (`device_rack::sync_embed`).
-pub fn device_rects(s: &State) -> Vec<(usize, Rect)> {
-    let (_, w, h) = ((), s.screen.0, s.screen.1);
-    let r = panel_rect(s, w, h);
-    layout(s, r)
-        .into_iter()
-        .filter_map(|(d, tile)| {
-            let key = d.key?;
-            (d.builtin && !s.device_rack_float.contains(&key)).then(|| (key, body(tile)))
-        })
-        .collect()
 }
 
 /// A tile's editor body: below its header.
@@ -246,7 +244,7 @@ fn gap_button(ui: &mut Ui, x: f32, y: f32, slot: Option<u8>, h: f32) {
     ui.c.text(fnt(14.0), b.x + 4.0, b.y + 1.0, t.text, "+");
 }
 
-/// A device tile: a header (name, enable light, menu) over an editor body — embedded, or a placeholder.
+/// A device tile: a header (name, enable light, menu) over a body of the device's own controls.
 fn tile_paint(ui: &mut Ui, s: &State, d: Device, tile: Rect) {
     let t = ui.t;
     // The tile: a raised surface with a hairline between header and body.
@@ -310,116 +308,160 @@ fn tile_paint(ui: &mut Ui, s: &State, d: Device, tile: Rect) {
         let _ = ui.hit(body, Action::DeviceRack(RackAct::AddAt(None)), "Choose this track's instrument");
         return;
     }
-    match (d.key, body_mode(s, &d)) {
-        // A built-in's editor renders into the tile (its native window is pinned there by the app each tick).
-        (Some(key), BodyMode::Embedded) => {
-            ui.c.fill_rect(body, t.s(0x131718));
-            if s.device_rack_failed.contains(&key) {
-                ui.c.text(fnt(13.0), body.x + 10.0, body.y + 8.0, t.text_dim, "Editor unavailable");
+    // The device's own controls, drawn here rather than by an embedded native window (see
+    // `device_rack::sync_embed`): the same names, sections and value texts its editor shows.
+    controls(ui, s, &d, body);
+}
+
+/// One control cell: the name above, the dial (or the switch), the value below.
+const CELL_W: f32 = 62.0;
+const CELL_H: f32 = 64.0;
+/// A section row (a parameter group's name) above its cells.
+const GROUP_H: f32 = 15.0;
+/// The body's padding.
+const PAD: f32 = 7.0;
+
+/// A tile body's laid-out controls: the section headers, the cells and the content height (which the wheel's
+/// scroll clamps against).
+struct Grid {
+    sections: Vec<(Rect, String)>,
+    cells: Vec<(usize, Rect)>,
+    height: f32,
+}
+
+/// Lays out a body's control cells `scroll` px up: `cols` per row at `CELL_W`, with a header row above each named
+/// parameter group. The one geometry `controls` paints, `param_dial` hit-tests and `scroll_max` measures.
+fn grid(body: Rect, params: &[RackParam], scroll: f32) -> Grid {
+    let cols = (((body.w - 2.0 * PAD) / CELL_W).floor().max(1.0)) as usize;
+    let x0 = body.x + (body.w - cols as f32 * CELL_W) * 0.5;
+    let mut g = Grid { sections: Vec::new(), cells: Vec::new(), height: 0.0 };
+    let top = body.y + PAD - scroll;
+    let mut y = top;
+    let mut group = "\u{0}";
+    let mut i = 0;
+    while i < params.len() {
+        let name = params[i].group.as_str();
+        if name != group {
+            group = name;
+            if !name.is_empty() {
+                g.sections.push((Rect::new(body.x + PAD, y, body.w - 2.0 * PAD, GROUP_H), name.to_string()));
+                y += GROUP_H;
             }
         }
-        // Everything else (hosted third-party, built-ins whose editor is popped out, failed, not open yet or
-        // absent -- e.g. the linked MIDI FX): the parameter rows, and a Pop out button when there is an editor.
-        (Some(key), BodyMode::Rows) => {
-            let button = (!s.device_rack_float.contains(&key)).then_some(Action::DeviceRack(RackAct::PopOut(key)));
-            placeholder(ui, s, &d, body, button)
+        let mut col = 0;
+        while i < params.len() && params[i].group == group {
+            g.cells.push((i, Rect::new(x0 + col as f32 * CELL_W, y, CELL_W, CELL_H)));
+            i += 1;
+            col += 1;
+            if col == cols {
+                col = 0;
+                y += CELL_H;
+            }
         }
-        // No hosted key (nothing hosted yet): the plain placeholder.
-        (None, _) => placeholder(ui, s, &d, body, None),
+        if col != 0 {
+            y += CELL_H;
+        }
     }
+    g.height = y - top + 2.0 * PAD;
+    g
 }
 
-/// How a device tile's body is filled: by the editor of a built-in docked into it, or by parameter rows.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum BodyMode {
-    Embedded,
-    Rows,
+/// How far a tile's controls scroll: their content past the body (0 when they all fit).
+fn scroll_max(body: Rect, params: &[RackParam]) -> f32 {
+    (grid(body, params, 0.0).height - body.h).max(0.0)
 }
 
-/// A tile's body mode: `Embedded` only while a built-in's editor is really open in the tile (popped-out, failed,
-/// not-yet-open and editor-less devices get parameter rows instead of a blank body).
-pub(crate) fn body_mode(s: &State, d: &Device) -> BodyMode {
-    match d.key {
-        Some(key) if d.builtin && !s.device_rack_float.contains(&key) && s.device_rack_editor.contains(&key) => BodyMode::Embedded,
-        _ => BodyMode::Rows,
-    }
-}
-
-/// Width / height of one dial cell (name above, knob, value below).
-const DIAL_W: f32 = 64.0;
-const DIAL_H: f32 = 68.0;
-
-/// The top of the dial grid: below the Pop out button strip when the tile has one.
-fn dials_top(body: Rect, button: bool) -> f32 {
-    body.y + if button { 34.0 } else { 10.0 }
-}
-
-/// The dial grid that fits `body` below `top`: columns, rows, and the left edge of the first column (centred).
-fn dial_grid(body: Rect, top: f32) -> (usize, usize, f32) {
-    let cols = ((body.w - 12.0) / DIAL_W).floor().max(1.0) as usize;
-    let rows = ((body.bottom() - top - 6.0) / DIAL_H).floor().max(0.0) as usize;
-    let x0 = body.x + (body.w - cols as f32 * DIAL_W) * 0.5;
-    (cols, rows, x0)
-}
-
-/// The centre of dial `i` in the grid, or `None` when it would not fit.
-fn dial_centre(body: Rect, top: f32, i: usize) -> Option<(f32, f32)> {
-    let (cols, rows, x0) = dial_grid(body, top);
-    if i >= cols * rows {
-        return None;
-    }
-    let (col, row) = (i % cols, i / cols);
-    Some((x0 + col as f32 * DIAL_W + DIAL_W * 0.5, top + row as f32 * DIAL_H + DIAL_H * 0.5))
-}
-
-/// A tile body's dial hit rect, by hosted key and param id (the same geometry `placeholder` paints).
+/// A control's hit rect in its tile body, by hosted key and param id: the knob and its value together, so the
+/// whole cell is draggable (the same geometry `controls` paints). The paint path does not need it — it has each
+/// cell at hand — so it exists for the rack's own hit-testing tests.
+#[cfg(test)]
 pub(crate) fn param_dial(s: &State, key: usize, id: u32) -> Option<Rect> {
     let (_, w, h) = ((), s.screen.0, s.screen.1);
-    let (d, tile) = layout(s, panel_rect(s, w, h)).into_iter().find(|(d, _)| d.key == Some(key))?;
-    let i = s.device_rack_params.get(&key)?.iter().position(|(pid, ..)| *pid == id)?;
+    let (_, tile) = layout(s, panel_rect(s, w, h)).into_iter().find(|(d, _)| d.key == Some(key))?;
+    let params = s.device_rack_params.get(&key)?;
+    let i = params.iter().position(|p| p.id == id)?;
     let body = body(tile);
-    let button = !s.device_rack_float.contains(&key) && d.key.is_some();
-    let (cx, cy) = dial_centre(body, dials_top(body, button), i)?;
-    Some(Rect::new(cx - 15.0, cy - 15.0, 30.0, 30.0))
+    let scroll = s.device_rack_tile_scroll.get(&key).copied().unwrap_or(0.0);
+    let (_, cell) = *grid(body, params, scroll).cells.iter().find(|(j, _)| *j == i)?;
+    Some(Rect::new(cell.x + 4.0, cell.y + 18.0, CELL_W - 8.0, CELL_H - 20.0))
 }
 
-/// A placeholder body: parameter rows (when the device has any), and a `button` when there is one to press.
-fn placeholder(ui: &mut Ui, s: &State, d: &Device, body: Rect, button: Option<Action>) {
+/// A tile's body: the device's own controls, as its editor shows them — a section header per parameter group, then
+/// a cell per parameter (its name, a dial or a switch, and the plugin's own value text). More controls than the
+/// body fits scroll with the wheel (the wheel's `scroll_max` clamp); a bar on the right edge says so.
+fn controls(ui: &mut Ui, s: &State, d: &Device, body: Rect) {
     let t = ui.t;
     ui.c.fill_rect(body, t.s(0x131718));
     ui.c.stroke_rrect(body.inset(1.0), 2.0, 1.0, t.splitter_dark);
-    let params: &[(u32, String, f64)] = d.key.and_then(|k| s.device_rack_params.get(&k)).map_or(&[], |v| v);
-    let top = dials_top(body, button.is_some());
+    let Some(key) = d.key else {
+        ui.c.text_clip(fnt(13.0), body.x + 10.0, body.y + 9.0, body.w - 20.0, t.text_dim, "No device");
+        return;
+    };
+    let params: &[RackParam] = s.device_rack_params.get(&key).map_or(&[], |v| v.as_slice());
     if params.is_empty() {
-        let label = if d.key.is_some() { "No parameters to show" } else { "No device" };
-        ui.c.text_clip(fnt(13.0), body.x + 10.0, top, body.w - 20.0, t.text_dim, label);
+        ui.c.text_clip(fnt(13.0), body.x + 10.0, body.y + 9.0, body.w - 20.0, t.text_dim, "No parameters to show");
+        return;
     }
-    // Live parameters (cached by `sync_embed`): the tile's dials when its editor is not embedded. A dial's press
-    // starts a vertical drag from the value now (through `device_rack::set_param_value`, the one set path); the
-    // name sits above the knob and the value below it.
-    if let Some(key) = d.key {
-        for (i, (id, name, val)) in params.iter().enumerate() {
-            let Some((cx, cy)) = dial_centre(body, top, i) else { break };
-            let v = (*val as f32).clamp(0.0, 1.0);
-            ui.c.text_clip(fnt(11.0), cx - DIAL_W * 0.5 + 6.0, cy - 32.0, DIAL_W - 12.0, t.text_dim, name);
-            let hit = Rect::new(cx - 15.0, cy - 15.0, 30.0, 30.0);
-            let hov = ui.hit(
-                hit,
-                Action::DeviceRack(RackAct::ParamSet { key, id: *id, v: *val }),
-                "Drag up / down to set this parameter",
-            );
-            kit::knob(ui.c, t, cx, cy, 13.0, v, false, kit::KnobLook::Ring, kit::State::hover(hov));
-            let value = format!("{:.0}%", v * 100.0);
-            ui.c.text_center(fnt(11.0), Rect::new(cx - DIAL_W * 0.5, cy + 19.0, DIAL_W, 14.0), t.text_dim, &value);
+    let max = scroll_max(body, params);
+    let scroll = s.device_rack_tile_scroll.get(&key).copied().unwrap_or(0.0).clamp(0.0, max);
+    let g = grid(body, params, scroll);
+    for (r, name) in &g.sections {
+        if r.bottom() <= body.y + 2.0 || r.y >= body.bottom() - 2.0 {
+            continue;
         }
+        ui.c.text_clip(fnt(11.0), r.x + 2.0, r.y + 1.0, r.w - 4.0, t.text, name);
+        ui.c.fill_rect(Rect::new(r.x + 2.0, r.bottom() - 3.0, r.w - 4.0, 1.0), t.splitter_dark);
     }
-    if let Some(action) = button {
-        let b = Rect::new(body.x + 10.0, body.y + 5.0, 70.0, 20.0);
-        let hov = ui.hit(b, action, "Pop the editor out to its own window");
-        let st = kit::State::hover(hov);
-        kit::button(ui.c, t, b, st);
-        ui.c.text(fnt(13.0), b.x + 8.0, b.y + 2.0, t.text, "Pop out");
+    for (i, cell) in &g.cells {
+        // A cell scrolled past the body is not drawn (and its hit goes with it).
+        if cell.bottom() <= body.y + 2.0 || cell.y >= body.bottom() - 2.0 {
+            continue;
+        }
+        cell_paint(ui, key, &params[*i], *cell);
     }
+    // The scroll bar: how much of the control list the body is showing, and where.
+    if max > 0.0 {
+        let track = Rect::new(body.right() - 4.0, body.y + 2.0, 3.0, body.h - 4.0);
+        ui.c.fill_rect(track, t.s(0x1b1f21));
+        let len = (track.h * body.h / (body.h + max)).max(14.0);
+        let top = track.y + (track.h - len) * (scroll / max);
+        ui.c.fill_rect(Rect::new(track.x, top, 3.0, len), t.s(0x4a5358));
+    }
+}
+
+/// One control cell: its name, a dial (or a switch for a two-state parameter) and the plugin's own value text.
+fn cell_paint(ui: &mut Ui, key: usize, p: &RackParam, cell: Rect) {
+    let t = ui.t;
+    let cx = cell.cx();
+    ui.c.text_clip(fnt(11.0), cell.x + 2.0, cell.y + 1.0, CELL_W - 4.0, t.text_dim, &p.name);
+    let hit = Rect::new(cell.x + 4.0, cell.y + 18.0, CELL_W - 8.0, CELL_H - 20.0);
+    // A switch flips on the press; a dial starts at its value and follows a vertical drag (the one set path,
+    // `device_rack::set_param_value`).
+    let v = if p.toggle { f64::from(p.value < 0.5) } else { p.value };
+    let hov = ui.hit(
+        hit,
+        Action::DeviceRack(RackAct::ParamSet { key, id: p.id, v }),
+        "Drag up / down to set this parameter",
+    );
+    if p.toggle {
+        let b = Rect::new(cx - 8.0, cell.y + 27.0, 16.0, 16.0);
+        let on = p.value >= 0.5;
+        ui.c.fill_rrect(b, 3.0, if on { t.glyph } else { t.s(0x24282b) });
+        ui.c.stroke_rrect(b, 3.0, 1.0, if hov || on { t.text } else { t.splitter_dark });
+    } else {
+        kit::knob(
+            ui.c,
+            t,
+            cx,
+            cell.y + 35.0,
+            13.0,
+            p.value.clamp(0.0, 1.0) as f32,
+            false,
+            kit::KnobLook::Ring,
+            kit::State::hover(hov),
+        );
+    }
+    ui.c.text_center(fnt(11.0), Rect::new(cell.x, cell.y + 47.0, CELL_W, 14.0), t.text_dim, &p.text);
 }
 
 /// A small flat header button (the rack's Pin / Hide).
