@@ -1461,8 +1461,13 @@ impl Plugins {
                 }
                 #[cfg(plugin_windows)]
                 if let (Some(w), false, Some((ew, eh))) = (&h.window, h.linked(), p.editor_size()) {
-                    let k = w.scale();
-                    w.set_editor_size((ew as f32 / k, eh as f32 / k));
+                    // A window pinned into its rack tile is sized by the tile (`pin_window`), never by the plugin's
+                    // own natural size — syncing here blew the frame back up past the tile, so the rack showed it
+                    // blank. Un-pinned (popped out) it syncs as before.
+                    if !w.pinned() {
+                        let k = w.scale();
+                        w.set_editor_size((ew as f32 / k, eh as f32 / k));
+                    }
                 }
                 if let Some(m) = &h.meter {
                     m.note_hold(t0.elapsed());
@@ -1477,7 +1482,10 @@ impl Plugins {
                     w.set_page(l.page());
                     w.set_hint(l.hint());
                     if let Some((lw, lh)) = l.size() {
-                        w.set_editor_size((lw as f32, lh as f32));
+                        // Same as above: a pinned rack tile keeps the tile's size, not the plugin's link size.
+                        if !w.pinned() {
+                            w.set_editor_size((lw as f32, lh as f32));
+                        }
                     }
                     // A resizable Lemon plugin (Tesla): the frame's edges resize it.
                     w.set_resizable(l.resizable().map(|(mw, mh)| (mw as f32, mh as f32)));

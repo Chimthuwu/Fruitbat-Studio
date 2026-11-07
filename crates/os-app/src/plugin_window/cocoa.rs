@@ -450,6 +450,11 @@ impl FrameWindow {
         self.f.state.borrow().detached
     }
 
+    /// Pinned into a device-rack tile: the frame is exactly the editor and the tile supplies the header.
+    pub fn pinned(&self) -> bool {
+        self.f.state.borrow().pinned
+    }
+
     /// Docks the window into `owner` (a view of the main window, same place on screen) or detaches it (a panel of its
     /// own). The plugin's editor stays embedded.
     pub fn set_detached(&self, owner: isize, on: bool) {

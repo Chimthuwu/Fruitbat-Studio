@@ -416,6 +416,13 @@ impl State {
         }
     }
     fn size(&self) -> (f32, f32) {
+        // Pinned into a device-rack tile the frame carries no chrome of its own: the tile's header (name, LED,
+        // menu) is what the user reads, so the frame is exactly the editor — the tile body. With title/strip/border
+        // the frame was `tile + chrome` wide and tall, so `pin_window` put it over the tile and the editor was
+        // pushed out of it — the rack showed a blank dark body instead of the plugin's own UI.
+        if self.pinned {
+            return self.editor;
+        }
         let (w, h) = self.shown();
         (w + 2.0 * BORDER, self.area_y() + h + BORDER)
     }
@@ -430,6 +437,10 @@ impl State {
     }
     /// Top of the editor (below the strip, or the title bar, and the editor's 1 px outline).
     fn area_y(&self) -> f32 {
+        // Pinned: no title bar or strip sits above the editor (see `size`); the tile header lives above the frame.
+        if self.pinned {
+            return 0.0;
+        }
         TITLE_H + if self.strip { STRIP_H } else { 0.0 } + 1.0
     }
 }

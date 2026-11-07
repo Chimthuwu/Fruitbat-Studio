@@ -252,6 +252,11 @@ impl FrameWindow {
         self.state.borrow().detached
     }
 
+    /// Pinned into a device-rack tile: the frame is exactly the editor and the tile supplies the header.
+    pub fn pinned(&self) -> bool {
+        self.state.borrow().pinned
+    }
+
     /// Docks the window into `owner` (a child, same place on screen) or detaches it (a top-level window owned by
     /// `owner`). The plugin's editor stays embedded.
     pub fn set_detached(&self, owner: isize, on: bool) {
@@ -604,6 +609,8 @@ unsafe fn layout(hwnd: HWND) {
     let px = |v: f32| (v * w.scale).round() as i32;
     let tab_plugin = !st.misc;
     let (ay, ed, detached) = (st.area_y(), st.editor, st.detached);
+    // Pinned fills the frame edge to edge — there is no border to inset the editor area by (see `State::size`).
+    let ax = if st.pinned { 0.0 } else { BORDER };
     drop(st);
     unsafe {
         let mut r: RECT = std::mem::zeroed();
@@ -612,7 +619,7 @@ unsafe fn layout(hwnd: HWND) {
             expose();
         }
         SetWindowPos(hwnd, std::ptr::null_mut(), 0, 0, px(fw), px(fh), SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-        SetWindowPos(w.area, std::ptr::null_mut(), px(BORDER), px(ay), px(ed.0), px(ed.1), SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(w.area, std::ptr::null_mut(), px(ax), px(ay), px(ed.0), px(ed.1), SWP_NOZORDER | SWP_NOACTIVATE);
         ShowWindow(w.area, if tab_plugin { SW_SHOW } else { SW_HIDE });
     }
     w.canvas.resize(px(fw) as u32, px(fh) as u32, w.scale);

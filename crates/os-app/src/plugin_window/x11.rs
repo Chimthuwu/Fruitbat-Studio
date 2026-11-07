@@ -299,6 +299,11 @@ impl FrameWindow {
         self.f.state.borrow().detached
     }
 
+    /// Pinned into a device-rack tile: the frame is exactly the editor and the tile supplies the header.
+    pub fn pinned(&self) -> bool {
+        self.f.state.borrow().pinned
+    }
+
     /// Docks the window into `owner` (a child, same place on screen) or detaches it (a top-level window transient for
     /// `owner`). The plugin's editor stays embedded. Only when the main window is an X11 one.
     pub fn set_detached(&self, owner: isize, on: bool) {
