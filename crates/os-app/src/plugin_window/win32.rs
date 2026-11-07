@@ -623,7 +623,18 @@ unsafe fn layout(hwnd: HWND) {
         ShowWindow(w.area, if tab_plugin { SW_SHOW } else { SW_HIDE });
     }
     w.canvas.resize(px(fw) as u32, px(fh) as u32, w.scale);
-    unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
+    unsafe {
+        // The frame is `WS_CLIPCHILDREN`, so invalidating it alone never reaches the
+        // embedded editor (a child of `area`): after a re-layout the rack tile stayed
+        // blank until some unrelated redraw pushed a paint through. Invalidate the
+        // children too, so a moved/resized editor repaints at once.
+        RedrawWindow(
+            hwnd,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW,
+        );
+    }
 }
 
 unsafe extern "system" fn area_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
