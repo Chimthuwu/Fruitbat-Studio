@@ -47,8 +47,30 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
         let x = client.x + scene_w + i as f32 * cell_w;
         let h = Rect::new(x, head.y, cell_w, HEAD_H);
         ui.c.fill_rect(Rect::new(x, head.y, 1.0, HEAD_H), t.splitter_dark);
-        let name = Rect::new(x + 6.0, h.y + 3.0, cell_w - 26.0, 15.0);
+        // A MIDI track whose instrument slot is empty plays nothing: its header says so, so a silent column explains
+        // itself where its clips are launched (the device rack's empty instrument tile is where one is added). The
+        // name gives up the room it needs, and a narrow column falls back to "!" rather than clipping the words.
+        let hint_f = fnt(11.0);
+        let room = (cell_w - 26.0).max(0.0) - 4.0;
+        let hint = if c.no_instrument {
+            ["no instrument", "no inst", "!"]
+                .into_iter()
+                .find(|text| ui.c.text_width(hint_f, text) <= room)
+                .unwrap_or("")
+        } else {
+            ""
+        };
+        let hint_w = ui.c.text_width(hint_f, hint);
+        let name = Rect::new(
+            x + 6.0,
+            h.y + 3.0,
+            (cell_w - 26.0 - if hint.is_empty() { 0.0 } else { hint_w + 4.0 }).max(1.0),
+            15.0,
+        );
         ui.c.text_clip(fnt(13.0), name.x, name.y, name.w, t.text, &c.name);
+        if !hint.is_empty() {
+            ui.c.text(hint_f, x + cell_w - 23.0 - hint_w, h.y + 6.0, t.accent, hint);
+        }
         if let Some(c) = c.color {
             ui.c.fill_rect(Rect::new(x + 5.0, h.bottom() - 5.0, cell_w - 28.0, 2.0), rgb(c));
         }

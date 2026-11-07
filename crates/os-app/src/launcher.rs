@@ -44,6 +44,8 @@ pub struct Column {
     pub lane: u16,
     pub name: String,
     pub color: Option<os_model::Rgb>,
+    /// A MIDI track whose instrument slot is empty: it has nothing to play its clips through, so its header says so.
+    pub no_instrument: bool,
 }
 
 /// The launcher's actions (its cells, scene buttons and track headers).
@@ -78,6 +80,7 @@ pub fn columns(s: &State) -> Vec<Column> {
                     lane,
                     name: crate::playlist::track_name(s, lane),
                     color: crate::playlist::track_info(s, lane).and_then(|i| i.color),
+                    no_instrument: instrument_missing(s, t),
                 },
             )
         })
@@ -87,6 +90,15 @@ pub fn columns(s: &State) -> Vec<Column> {
 }
 
 /// The clip in (track, scene), when the slot holds one.
+/// Whether a MIDI track's instrument slot is empty: no channel plays it (the same test the device rack's
+/// `device_rack::DeviceKind::NoInstrument` tile makes, so the two never disagree).
+fn instrument_missing(s: &State, t: &os_model::Track) -> bool {
+    t.kind == os_model::TrackKind::Midi
+        && t.channel
+            .and_then(|ch| s.project.channels.iter().position(|c| c.index == ch))
+            .is_none()
+}
+
 pub fn clip(s: &State, track: u32, scene: usize) -> Option<Slot> {
     s.launcher.clips.get(&(track, scene)).copied()
 }
@@ -356,6 +368,24 @@ mod tests {
         run(&mut app, Act::Launch(id, 6));
         run(&mut app, Act::Launch(id, 6));
         assert!(!app.state.shown(crate::app::Win::PianoRoll));
+    }
+
+    /// A MIDI track with no instrument channel is marked, so the launcher can say so on its header: clips launched
+    /// there would have nothing to play.
+    #[test]
+    fn a_midi_track_without_an_instrument_is_marked() {
+        let mut app = app();
+        assert!(
+            columns(&app.state).iter().all(|c| !c.no_instrument),
+            "the inserted MIDI tracks have their channels"
+        );
+        let id = columns(&app.state)[0].id;
+        let track = app.state.project.tracks.iter_mut().find(|t| t.id.0 == id).expect("the column's track");
+        track.channel = None;
+        assert!(
+            columns(&app.state).iter().find(|c| c.id == id).unwrap().no_instrument,
+            "the emptied instrument slot is marked"
+        );
     }
 
     /// The columns follow the mixer: one per track that has a lane, ordered by its mixer strip.
