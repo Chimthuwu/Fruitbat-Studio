@@ -297,6 +297,39 @@ pub fn midi_fx_of(key: usize) -> Option<(u32, usize)> {
     (key >= MIDI_FX_KEY).then(|| (((key - MIDI_FX_KEY) / 16) as u32, (key - MIDI_FX_KEY) % 16))
 }
 
+/// The arpeggiator's settings as an instance of Lemon Arp has them now, read from the plugin's own parameters by name
+/// (the ranges are the plugin's, `plugins/lemon-arp/src/params.rs`).
+pub fn arp_values(p: &mut dyn os_host::Plugin) -> crate::note_fx::ArpValues {
+    let mut v = crate::note_fx::ArpValues { pattern: 0, octaves: 1, rate: 3, gate: 50, swing: 0, hold: false, latch: false };
+    for i in 0..p.param_count() {
+        let Some(info) = p.param_info(i) else { continue };
+        let Some(norm) = p.param_value(info.id) else { continue };
+        // The plugin's own ranges (`plugins/lemon-arp/src/params.rs`, `DEFS`): a CLAP instance's min and max do not
+        // always carry a signed range, so the values are worked out from the normalized one.
+        let (lo, hi) = match info.name.as_str() {
+            "Pattern" => (0.0, 3.0),
+            "Octave" => (0.0, 4.0),
+            "Rate" => (0.0, 4.0),
+            "Gate" => (0.0, 100.0),
+            "Swing" => (-50.0, 50.0),
+            "Hold" | "Latch" => (0.0, 1.0),
+            _ => continue,
+        };
+        let plain = (lo + norm.clamp(0.0, 1.0) * (hi - lo)).round();
+        match info.name.as_str() {
+            "Pattern" => v.pattern = plain.round().clamp(0.0, 3.0) as u8,
+            "Octave" => v.octaves = plain.round().clamp(1.0, 5.0) as u8,
+            "Rate" => v.rate = plain.round().clamp(0.0, 4.0) as u8,
+            "Gate" => v.gate = plain.round().clamp(0.0, 100.0) as u8,
+            "Swing" => v.swing = plain.round().clamp(-50.0, 50.0) as i8,
+            "Hold" => v.hold = norm > 0.5,
+            "Latch" => v.latch = norm > 0.5,
+            _ => {}
+        }
+    }
+    v
+}
+
 /// Plugin editor windows open at once under "Limit the number of open plugin editors" (FL's hint: 25; spec:
 /// ui/settings-choices.md "Miscellaneous: naming, detached plugins and startup").
 pub const MAX_EDITORS: usize = 25;
@@ -360,6 +393,19 @@ pub struct Plugins {
     pub next_member: usize,
     /// The Lemon MIDI Out instruments, by rack row (`App::sync_midi_outs`; spec: plugins/midi-out.md §6).
     pub midi_outs: BTreeMap<usize, std::sync::Arc<std::sync::Mutex<crate::lemon_midi_out::MidiOutInstrument>>>,
+    /// The MIDI FX chains playing rack rows (`App::sync_note_fx`): a row's instrument as its track's MIDI FX slots
+    /// make of it (spec: track-model-plan.md §9).
+    pub note_fx: BTreeMap<usize, NoteFxRow>,
+}
+
+/// One row's MIDI FX chain on the note path (`crate::note_fx::NoteFx`): the chain's instrument, the arpeggiator's
+/// settings the UI thread keeps fresh, and what the chain was made from (a change rebuilds it).
+pub struct NoteFxRow {
+    pub chain: std::sync::Arc<std::sync::Mutex<crate::note_fx::NoteFx>>,
+    /// The "Lemon Arp" slot's settings, when the chain has one.
+    pub arp: Option<std::sync::Arc<crate::note_fx::ArpSettings>>,
+    /// The hosted MIDI FX instances whose parameters the arpeggiator reads, in chain order: (hosted key, name).
+    pub sources: Vec<(usize, String)>,
 }
 
 /// How many gone instances `Plugins::stash` keeps.
@@ -1152,7 +1198,59 @@ impl Plugins {
         let hosted = self.hosted.range(..FX_KEY).map(|(&r, h)| (r, h.plugin.clone() as SharedInstrument));
         // A channel's container plays its channel (`crate::container`).
         let chains = self.containers.range(..FX_KEY).map(|(&r, c)| (r, c.fx.clone() as SharedInstrument));
-        hosted.chain(self.midi_outs.iter().map(|(&r, m)| (r, m.clone() as SharedInstrument))).chain(chains).collect()
+        // A track's MIDI FX chain plays its row's instrument (`crate::note_fx`); it comes last, so it takes the row.
+        let notes = self.note_fx.iter().map(|(&r, n)| (r, n.chain.clone() as SharedInstrument));
+        hosted
+            .chain(self.midi_outs.iter().map(|(&r, m)| (r, m.clone() as SharedInstrument)))
+            .chain(chains)
+            .chain(notes)
+            .collect()
+    }
+
+    /// The MIDI FX chains playing rack rows, from the tracks' slots (`App::sync_note_fx`): `rows` gives, per row, the
+    /// hosted MIDI FX instances in chain order (hosted key, plugin name). A row whose chain did not change keeps its
+    /// instrument, so the arpeggiator does not restart under the notes it holds. Returns whether anything changed.
+    pub fn set_note_fx(&mut self, rows: Vec<(usize, Vec<(usize, String)>)>) -> bool {
+        let given: Vec<usize> = rows.iter().map(|(r, _)| *r).collect();
+        let before = self.note_fx.len();
+        self.note_fx.retain(|r, _| given.contains(r));
+        let mut changed = self.note_fx.len() != before;
+        for (row, sources) in rows {
+            if self.note_fx.get(&row).is_some_and(|n| n.sources == sources) {
+                continue;
+            }
+            let inner = self.hosted.get(&row).map(|h| h.plugin.clone() as SharedInstrument);
+            let Some(inner) = inner else {
+                // Nothing hosted on the row: nothing to put notes into.
+                changed |= self.note_fx.remove(&row).is_some();
+                continue;
+            };
+            let arp = sources
+                .iter()
+                .any(|(_, name)| name == crate::note_fx::LEMON_ARP)
+                .then(|| std::sync::Arc::new(crate::note_fx::ArpSettings::default()));
+            let chain = std::sync::Arc::new(std::sync::Mutex::new(crate::note_fx::NoteFx::new(inner, arp.clone())));
+            self.note_fx.insert(row, NoteFxRow { chain, arp, sources });
+            changed = true;
+        }
+        changed
+    }
+
+    /// Reads the arpeggiators' settings from their plugins' parameters (the UI thread, every tick): an edit in the
+    /// device rack or the plugin's editor reaches the sound with the next block.
+    pub fn refresh_note_fx(&self) {
+        for n in self.note_fx.values() {
+            let Some(settings) = &n.arp else { continue };
+            for (key, name) in &n.sources {
+                if name != crate::note_fx::LEMON_ARP {
+                    continue;
+                }
+                if let Some(mut p) = self.hosted.get(key).and_then(|h| h.plugin.lock().ok()) {
+                    settings.write(arp_values(&mut *p));
+                }
+                break;
+            }
+        }
     }
 
     /// Tells instance `key` that its menu `id` closed, with the entry picked: a pick runs now, on this (the UI) thread

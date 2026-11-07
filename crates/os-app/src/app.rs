@@ -1394,6 +1394,8 @@ pub struct App {
     rack_click: Option<(Action, std::time::Instant)>,
     /// Last press on the CPU panel, for its double click (the Plugin performance monitor).
     cpu_click: Option<std::time::Instant>,
+    /// Last launcher slot press (track, scene, when), for a double click that opens the clip in the piano roll.
+    pub(crate) launcher_click: Option<((u32, usize), std::time::Instant)>,
     pub hint: Cow<'static, str>,
     pub mouse: (f32, f32),
     pub drag: Option<Drag>,
@@ -1673,6 +1675,7 @@ impl App {
             title_click: None,
             rack_click: None,
             cpu_click: None,
+            launcher_click: None,
             hint: Cow::Borrowed(""),
             mouse: (-1.0, -1.0),
             drag: None,
@@ -2720,6 +2723,7 @@ impl App {
         crate::zipped::tick(self);
         self.midi_tick();
         self.sync_midi_outs();
+        self.sync_note_fx();
         self.mixer_tick();
         self.follow_ids(false, true);
         self.host_commands();

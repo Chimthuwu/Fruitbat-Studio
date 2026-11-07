@@ -118,46 +118,47 @@ Every item below was disproven with a direct measurement on the running exe:
 - Editor paint path (`os-plugkit/src/simple.rs`): created `WS_CHILD|WS_VISIBLE` at (0,0)
   of `area`, paints only on `WM_PAINT`, `WM_ERASEBKGND => 1`, no `WM_SIZE` arm.
 
-## 6. Open — MIDI FX do not process MIDI (the real remaining bug)
+## 6. MIDI FX on the note path — Arp works, the rest pass through
 
 > "If i put a Lemon Arp Before a Trio or a Citrus and play a long chord, it should play an
 > arpeggio not a chord!! theyre not sending midi signals it seems."
-> "they should send the MIDI signal to the device on its right, the chain in device rack
-> goes from left to right!"
 
-Status: **not wired at all.**
+**Wired 2026-11-08 (uncommitted at the time of writing; suite 1097 passed).**
 
-- `crates/os-app/src/midi_fx.rs` is slots + add/reorder/remove/toggle/info only. No
-  processing.
-- `crates/os-engine` never mentions MIDI FX. The note path is
-  `Engine::notes_under_way` → `Trigger` → the channel's `Instrument::note_on`, with no
-  hook in between.
-- The plugins do implement the transform already: e.g. `plugins/lemon-arp/src/dsp/arp.rs`
-  takes `MidiEvent`s. Nothing calls it.
+How it works — no `os-engine` change, which is the whole point of the design:
 
-### Planned shape (this is the todo `M9 → note-path` milestone, sized L)
+- The engine hands a channel's `Instrument` its tick's notes with frame offsets, then
+  one `process` call (`crates/os-engine/src/engine/jobs.rs`, `instrument_job`). So a note
+  transformer sits in the instrument's own seat.
+- `crates/os-app/src/note_fx.rs`: `NoteFx` is an `Instrument` that wraps the row's hosted
+  instrument. It swallows `note_on` / `note_off` / `note_start` / `choke` into a queue,
+  runs the arpeggiator over them in `process` (sample offsets kept), and plays the inner
+  instrument what the chain makes. Everything else (`tune`, `param`, `channel_levels`,
+  `midi`, `transport`, `reported_delay`, `active`, `voices`, …) is forwarded, so automation,
+  pitch and the idle tail keep working.
+- `Plugins::note_fx` holds one chain per rack row; `App::sync_note_fx` (called from
+  `plugin_tick`) builds it from `state.midi_fx` + the project's tracks, and
+  `Plugins::instruments()` chains it last, so the engine's `set_instrument(row, …)` ends on
+  the chain (a later entry wins). A row whose chain did not change keeps its `NoteFx`, so
+  held notes survive unrelated refreshes.
+- Settings reach the audio thread as atomics: `Plugins::refresh_note_fx` (each tick) reads
+  the hosted Lemon Arp's parameters by name and writes `ArpSettings`. The CLAP min/max of
+  a signed parameter is not trustworthy, so `plugins::arp_values` decodes from the
+  normalized value with the plugin's own ranges.
+- The arpeggiator itself is `note_fx::Arp` — pattern (up/down/up-down/random), octaves,
+  rate (1/4 … 1/64), gate, swing, hold, latch — driven by the transport's tempo.
 
-1. `os-engine`: a `MidiFx` trait next to `HostedEffect` — note-side analogue. Time-based
-   effects (Arp, Echo, Note Repeats, Note Delay, Strum, Random) need a per-block
-   `(block_len, &[(offset, NoteEvent)]) -> Vec<(offset, NoteEvent)>` with a pending queue
-   so a note scheduled past the block's end is drained next block; sample-accurate
-   transforms (Transpose, Quantize, Humanize, Note Length, Key Filter, Velocity Curve,
-   Chord) do not.
-2. `Engine`: the channel owns `midi_fx: Vec<Box<dyn MidiFx>>`; `Trigger`s for a channel
-   go through them left→right before the instrument, and the engine ticks the time-based
-   ones once per block. Watch out for the existing machinery this must not break:
-   `self.triggers` / `next_trigger` / `notes_under_way` / `seek_tick`, PDC
-   (`self.pdc`), and layer containers (`start_notes`).
-3. `os-app`: a bridge handing the engine each track's hosted MIDI FX instances (the
-   existing bridge only exposes `instruments()` and `effects()`); `crates/os-clap` can
-   drive a hosted instance with `note_on`/`note_off` + `process`, and
-   `capture_notes` / `take_notes_out` (`os-host::NoteOut`) already reads a plugin's note
-   output — that is the path to reuse rather than a new trait, if the engine's block
-   structure allows it.
-4. Each of the 18 MIDI/container plugins implements the trait, reusing its `dsp::process`.
+### What is still open
 
-Do it with tests, in the order above — the workspace suite is green (1083 in `os-app`,
-2248 total) and must stay green.
+- **The other 17 MIDI FX pass notes through unchanged.** The framework is in place (one
+  `impl Instrument` in `note_fx.rs`, `ArpSettings`-style atomics per plugin); each needs its
+  own transform in `NoteFx::play` and a settings sync in `Plugins::refresh_note_fx`.
+- Only one arpeggiator runs per chain (the first Lemon Arp), and MIDI FX only affect a row
+  whose instrument is a **hosted** plugin — the engine's internal sampler voices never pass
+  through `Instrument`.
+- The plugins' own `dsp` modules (`plugins/lemon-arp/src/dsp/arp.rs`) are still unused by
+  their CLAP `process`; the note path does the transform in-process instead, because a
+  hosted MIDI-only plugin's note I/O is not reliable through the linked host.
 
 ### Also open
 

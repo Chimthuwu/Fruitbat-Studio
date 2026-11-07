@@ -170,10 +170,35 @@ fn play_pattern(app: &mut App, pattern: u16) {
     app.invalidate();
 }
 
+/// Opens (track, scene)'s clip in the piano roll: its pattern becomes the current one and the window comes up. False
+/// when the slot is empty.
+pub fn open(app: &mut App, track: u32, scene: usize) -> bool {
+    let Some(slot) = clip(&app.state, track, scene) else { return false };
+    app.state.pattern = slot.pattern;
+    app.state.project.current_pattern = Some(slot.pattern);
+    app.state.launcher.playing.insert(track, scene);
+    app.state.piano.dirty = true;
+    app.state.raise(crate::app::Win::PianoRoll);
+    app.invalidate();
+    true
+}
+
 /// Runs a launcher action.
 pub fn run(app: &mut App, act: Act) {
     match act {
-        Act::Launch(track, scene) => launch(app, track, scene),
+        Act::Launch(track, scene) => {
+            // A second click on the same slot opens its clip in the piano roll; the first one launches it, as Bitwig's
+            // press does.
+            let now = std::time::Instant::now();
+            let double = app
+                .launcher_click
+                .is_some_and(|((t, sc), at)| t == track && sc == scene && at.elapsed().as_millis() < 450);
+            app.launcher_click = if double { None } else { Some(((track, scene), now)) };
+            if double && open(app, track, scene) {
+                return;
+            }
+            launch(app, track, scene)
+        }
         Act::Stop(track) => stop(app, track),
         Act::LaunchScene(scene) => launch_scene(app, scene),
         Act::StopAll => stop_all(app),
@@ -297,6 +322,40 @@ mod tests {
         // Tab goes back to the arrangement.
         app.key(&Key::Named(NamedKey::Tab), false, false);
         assert!(!app.state.launcher_open);
+    }
+
+    /// A double click on a filled slot opens its clip in the piano roll (the first click launched it).
+    #[test]
+    fn a_double_click_opens_the_clip_in_the_piano_roll() {
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = app();
+        app.state.z = vec![crate::app::Win::Playlist];
+        app.key(&Key::Named(NamedKey::Tab), false, false);
+        let id = columns(&app.state)[0].id;
+        set(&mut app, id, 1, Some(5));
+        app.paint(&mut c, None);
+        let cell = app
+            .hits
+            .iter()
+            .find(|h| h.action == Action::Launcher(Act::Launch(id, 1)))
+            .expect("the slot is painted")
+            .rect;
+        let at = (cell.cx(), cell.cy());
+        app.mouse_move(at.0, at.1);
+        app.mouse_down();
+        app.mouse_up();
+        assert_eq!(playing(&app.state, id), Some(1), "one click launches");
+        assert!(!app.state.shown(crate::app::Win::PianoRoll), "one click does not open the piano roll");
+        app.mouse_down();
+        app.mouse_up();
+        assert!(app.state.shown(crate::app::Win::PianoRoll), "the second click opens it");
+        assert_eq!(app.state.pattern, 5, "the clip's own pattern");
+        assert_eq!(app.state.project.current_pattern, Some(5));
+        // An empty slot has nothing to open: the double click just stops the track.
+        app.state.hide(crate::app::Win::PianoRoll);
+        run(&mut app, Act::Launch(id, 6));
+        run(&mut app, Act::Launch(id, 6));
+        assert!(!app.state.shown(crate::app::Win::PianoRoll));
     }
 
     /// The columns follow the mixer: one per track that has a lane, ordered by its mixer strip.

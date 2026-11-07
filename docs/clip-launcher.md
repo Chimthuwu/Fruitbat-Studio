@@ -24,7 +24,9 @@ the window's own frame, so it sits exactly where the arrangement was.
   piano roll, the device rack and the mixer all see the same notes.
 - **Left-click** a filled cell: that track lights up for the scene and the pattern starts.
   An empty cell stops the track. **Right-click** a cell: the current pattern goes in, or out if
-  it is already there.
+  it is already there. **Double-click** a filled cell: that clip's pattern opens in the Piano
+  Roll (the first click launched it; the second opens it, as a double-click on a playlist MIDI
+  clip does).
 - Launching switches the transport to PAT mode at the clip's pattern (song playback would
   ignore the launcher) and starts the transport when it is stopped.
 
@@ -41,6 +43,13 @@ the window's own frame, so it sits exactly where the arrangement was.
 
 Each step should land on its own, green, with tests. `cargo test -p os-app` is currently
 1089 passed / 0 failed / 62 ignored — keep it that way.
+
+### S0 — Editing from the launcher (done)
+
+Double-clicking a filled cell opens the clip's pattern in the Piano Roll (`launcher::open`,
+`Act::Launch` twice within 450 ms, tracked by `App::launcher_click`). Nothing else about the
+clip is editable in place yet: a right-click holds only "the current pattern, or nothing". A
+real slot menu (rename, duplicate, colour, delete) belongs with S4/S5.
 
 ### S1 — Quantised launch (S)
 

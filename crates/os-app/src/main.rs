@@ -45,6 +45,7 @@ mod device;
 mod device_rack;
 mod launcher;
 mod midi_fx;
+mod note_fx;
 mod dialog;
 mod floating;
 mod filedlg;
