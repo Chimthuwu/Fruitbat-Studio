@@ -297,6 +297,70 @@ pub fn midi_fx_of(key: usize) -> Option<(u32, usize)> {
     (key >= MIDI_FX_KEY).then(|| (((key - MIDI_FX_KEY) / 16) as u32, (key - MIDI_FX_KEY) % 16))
 }
 
+/// The transposer's settings as an instance of Lemon Transpose has them now (its parameters by name).
+pub fn transpose_values(p: &mut dyn os_host::Plugin) -> crate::note_fx::TransposeValues {
+    use crate::note_fx::TransposeValues;
+    let mut v = TransposeValues { semitones: 0, octaves: 0, scale_aware: false, root: 0, scale: 0 };
+    for i in 0..p.param_count() {
+        let Some(info) = p.param_info(i) else { continue };
+        let Some(norm) = p.param_value(info.id) else { continue };
+        let norm = norm.clamp(0.0, 1.0);
+        // The plugin's own ranges (`plugins/lemon-transpose/src/params.rs`, `DEFS`).
+        let (lo, hi) = match info.name.as_str() {
+            "Semitones" => (-24.0, 24.0),
+            "Octaves" => (-4.0, 4.0),
+            "Scale Aware" => (0.0, 1.0),
+            "Root" => (0.0, 11.0),
+            "Scale" => (0.0, 8.0),
+            _ => continue,
+        };
+        let plain = (lo + norm * (hi - lo)).round() as i32;
+        match info.name.as_str() {
+            "Semitones" => v.semitones = plain,
+            "Octaves" => v.octaves = plain,
+            "Scale Aware" => v.scale_aware = norm > 0.5,
+            "Root" => v.root = plain.clamp(0, 11) as u8,
+            _ => v.scale = plain.clamp(0, 8) as u8,
+        }
+    }
+    v
+}
+
+/// The chord maker's settings as an instance of Lemon Chord has them now (its parameters by name).
+pub fn chord_values(p: &mut dyn os_host::Plugin) -> crate::note_fx::ChordValues {
+    use crate::note_fx::ChordValues;
+    let mut v = ChordValues { root: 0, scale: 0, chord: 0, inversion: 0, voicing: 0, strum: 0, strum_speed: 5000, hold: false };
+    for i in 0..p.param_count() {
+        let Some(info) = p.param_info(i) else { continue };
+        let Some(norm) = p.param_value(info.id) else { continue };
+        let norm = norm.clamp(0.0, 1.0);
+        // The plugin's own ranges (`plugins/lemon-chord/src/params.rs`, `DEFS`).
+        let (lo, hi) = match info.name.as_str() {
+            "Root" => (0.0, 11.0),
+            "Scale" => (0.0, 8.0),
+            "Chord Type" => (0.0, 6.0),
+            "Inversion" => (0.0, 3.0),
+            "Voicing" => (0.0, 3.0),
+            "Strum" => (0.0, 3.0),
+            "Strum Speed" => (0.0, 10_000.0),
+            "Hold" => (0.0, 1.0),
+            _ => continue,
+        };
+        let plain = (lo + norm * (hi - lo)).round();
+        match info.name.as_str() {
+            "Root" => v.root = plain as u8,
+            "Scale" => v.scale = plain as u8,
+            "Chord Type" => v.chord = plain as u8,
+            "Inversion" => v.inversion = plain as u8,
+            "Voicing" => v.voicing = plain as u8,
+            "Strum" => v.strum = plain as u8,
+            "Strum Speed" => v.strum_speed = plain as u16,
+            _ => v.hold = norm > 0.5,
+        }
+    }
+    v
+}
+
 /// The arpeggiator's settings as an instance of Lemon Arp has them now, read from the plugin's own parameters by name
 /// (the ranges are the plugin's, `plugins/lemon-arp/src/params.rs`).
 pub fn arp_values(p: &mut dyn os_host::Plugin) -> crate::note_fx::ArpValues {
@@ -402,9 +466,9 @@ pub struct Plugins {
 /// settings the UI thread keeps fresh, and what the chain was made from (a change rebuilds it).
 pub struct NoteFxRow {
     pub chain: std::sync::Arc<std::sync::Mutex<crate::note_fx::NoteFx>>,
-    /// The "Lemon Arp" slot's settings, when the chain has one.
-    pub arp: Option<std::sync::Arc<crate::note_fx::ArpSettings>>,
-    /// The hosted MIDI FX instances whose parameters the arpeggiator reads, in chain order: (hosted key, name).
+    /// Each stage's settings and the hosted instance they come from, in chain order.
+    pub stages: Vec<(usize, crate::note_fx::ChainSettings)>,
+    /// What the chain was made from (a change rebuilds it).
     pub sources: Vec<(usize, String)>,
 }
 
@@ -1225,12 +1289,23 @@ impl Plugins {
                 changed |= self.note_fx.remove(&row).is_some();
                 continue;
             };
-            let arp = sources
+            // The stages the chain has: the MIDI FX of the note path, in slot order. The others pass notes through.
+            use crate::note_fx::ChainSettings;
+            let stages: Vec<(usize, ChainSettings)> = sources
                 .iter()
-                .any(|(_, name)| name == crate::note_fx::LEMON_ARP)
-                .then(|| std::sync::Arc::new(crate::note_fx::ArpSettings::default()));
-            let chain = std::sync::Arc::new(std::sync::Mutex::new(crate::note_fx::NoteFx::new(inner, arp.clone())));
-            self.note_fx.insert(row, NoteFxRow { chain, arp, sources });
+                .filter_map(|(key, name)| {
+                    let settings = match name.as_str() {
+                        crate::note_fx::LEMON_ARP => ChainSettings::Arp(std::sync::Arc::new(Default::default())),
+                        crate::note_fx::LEMON_TRANSPOSE => ChainSettings::Transpose(std::sync::Arc::new(Default::default())),
+                        crate::note_fx::LEMON_CHORD => ChainSettings::Chord(std::sync::Arc::new(Default::default())),
+                        _ => return None,
+                    };
+                    Some((*key, settings))
+                })
+                .collect();
+            let built: Vec<crate::note_fx::Stage> = stages.iter().map(|(_, s)| s.stage()).collect();
+            let chain = std::sync::Arc::new(std::sync::Mutex::new(crate::note_fx::NoteFx::new(inner, built)));
+            self.note_fx.insert(row, NoteFxRow { chain, stages, sources });
             changed = true;
         }
         changed
@@ -1239,16 +1314,15 @@ impl Plugins {
     /// Reads the arpeggiators' settings from their plugins' parameters (the UI thread, every tick): an edit in the
     /// device rack or the plugin's editor reaches the sound with the next block.
     pub fn refresh_note_fx(&self) {
+        use crate::note_fx::ChainSettings;
         for n in self.note_fx.values() {
-            let Some(settings) = &n.arp else { continue };
-            for (key, name) in &n.sources {
-                if name != crate::note_fx::LEMON_ARP {
-                    continue;
+            for (key, settings) in &n.stages {
+                let Some(mut p) = self.hosted.get(key).and_then(|h| h.plugin.lock().ok()) else { continue };
+                match settings {
+                    ChainSettings::Arp(s) => s.write(arp_values(&mut *p)),
+                    ChainSettings::Transpose(s) => s.write(transpose_values(&mut *p)),
+                    ChainSettings::Chord(s) => s.write(chord_values(&mut *p)),
                 }
-                if let Some(mut p) = self.hosted.get(key).and_then(|h| h.plugin.lock().ok()) {
-                    settings.write(arp_values(&mut *p));
-                }
-                break;
             }
         }
     }

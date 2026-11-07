@@ -145,17 +145,28 @@ How it works — no `os-engine` change, which is the whole point of the design:
   the hosted Lemon Arp's parameters by name and writes `ArpSettings`. The CLAP min/max of
   a signed parameter is not trustworthy, so `plugins::arp_values` decodes from the
   normalized value with the plugin's own ranges.
-- The arpeggiator itself is `note_fx::Arp` — pattern (up/down/up-down/random), octaves,
-  rate (1/4 … 1/64), gate, swing, hold, latch — driven by the transport's tempo.
+- Three stages exist, and the chain composes left to right (`Stage::run`):
+  - `Stage::Arp` — pattern (up/down/up-down/random), octaves, rate (1/4 … 1/64), gate,
+    swing, hold, latch, clocked by the transport's tempo.
+  - `Stage::Transpose` — semitones, octaves and Scale Aware snapping (Root, Scale), with
+    the per-note bookkeeping the plugin has, so a note off follows the note it started.
+  - `Stage::Chord` — the note read as a scale degree of Root/Scale with the chord type
+    stacked on it **in the played note's octave** (the plugin's own DSP anchors every chord
+    on middle C, which is not what playing a bass line wants), plus inversions, voicings, a
+    strum whose late notes wait in a queue across blocks, and Hold.
+- Chain order is the rack's slot order: Chord → Arp plays the chord's notes one at a time;
+  Arp → Transpose shifts what the arpeggiator picked.
 
 ### What is still open
 
-- **The other 17 MIDI FX pass notes through unchanged.** The framework is in place (one
-  `impl Instrument` in `note_fx.rs`, `ArpSettings`-style atomics per plugin); each needs its
-  own transform in `NoteFx::play` and a settings sync in `Plugins::refresh_note_fx`.
-- Only one arpeggiator runs per chain (the first Lemon Arp), and MIDI FX only affect a row
-  whose instrument is a **hosted** plugin — the engine's internal sampler voices never pass
-  through `Instrument`.
+- **The other 14 MIDI FX pass notes through unchanged** (Echo, Note Repeats, Note Delay,
+  Strum, Random, Note Length, Quantize, Humanize, Key Filter, Velocity Curve, the N\*
+  containers…). The framework is in place: one more `Stage` variant, its `*Values` + atomics,
+  a branch in `Plugins::set_note_fx`, and a params decoder next to `arp_values`.
+- MIDI FX only affect a row whose instrument is a **hosted** plugin — the engine's internal
+  sampler voices never pass through `Instrument`.
+- Two copies of each idea now exist: the plugin's own `dsp` (what its editor previews) and
+  the note path's stage (what plays). Keep them in step when either changes.
 - The plugins' own `dsp` modules (`plugins/lemon-arp/src/dsp/arp.rs`) are still unused by
   their CLAP `process`; the note path does the transform in-process instead, because a
   hosted MIDI-only plugin's note I/O is not reliable through the linked host.

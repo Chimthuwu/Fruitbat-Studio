@@ -3,23 +3,58 @@
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! A MIDI track's MIDI FX on the note path: the notes its clips play go through the track's MIDI FX chain, left to
-//! right, before they reach the instrument (spec: track-model-plan.md §9, plugins/lemon-arp.md). The device rack shows
-//! the chain; this is what it does to the sound.
+//! right, before they reach the instrument (spec: track-model-plan.md §9, plugins/lemon-arp.md, plugins/lemon-chord.md,
+//! plugins/lemon-transpose.md). The device rack shows the chain; this is what it does to the sound.
 //!
 //! The engine gives a channel's instrument each tick's notes with their frame offsets and then one `process` call
-//! (`os_engine::Instrument`), so a MIDI FX that moves notes in time — an arpeggiator — fits the instrument's own seat:
-//! [`NoteFx`] takes the channel's place in the engine's instrument list, keeps the notes for itself, and plays the
-//! instrument what the chain makes of them.
+//! (`os_engine::Instrument`), so MIDI FX fit the instrument's own seat: [`NoteFx`] takes the channel's place in the
+//! engine's instrument list, keeps the notes for itself, runs the chain and plays the instrument what the chain makes.
 //!
-//! Only Lemon Arp transforms notes today (the first one in a chain); the other MIDI FX pass them through unchanged.
+//! Each stage turns the notes it is given into the notes it puts out ([`Stage::run`]), with the frame they fall on, so
+//! the chain composes: Lemon Chord → Lemon Arp plays each chord note in turn, Lemon Arp → Lemon Transpose shifts what
+//! the arpeggiator picked.
 
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU8, Ordering};
 use std::sync::Arc;
 
 use os_engine::{ChannelLevels, ChannelVoicing, Instrument, NoteLevels, SharedInstrument, TransportInfo};
 
-/// The plugin name that selects the arpeggiator (`Plugins::midi_fx`).
+/// The plugin names that play on the note path (`Plugins::midi_fx`).
 pub const LEMON_ARP: &str = "Lemon Arp";
+pub const LEMON_CHORD: &str = "Lemon Chord";
+pub const LEMON_TRANSPOSE: &str = "Lemon Transpose";
+
+/// One note the chain is given, with the frame of the next block it falls on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum In {
+    On { offset: u32, key: u8, velocity: f32 },
+    Off { offset: u32, key: u8 },
+}
+
+impl From<In> for (u32, Out) {
+    fn from(i: In) -> (u32, Out) {
+        match i {
+            In::On { offset, key, velocity } => (offset, Out::On { key, velocity }),
+            In::Off { offset, key } => (offset, Out::Off(key)),
+        }
+    }
+}
+
+/// A note the chain puts out.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Out {
+    On { key: u8, velocity: f32 },
+    Off(u8),
+}
+
+/// A note's key as MIDI 0..=127.
+fn clamp_key(key: i32) -> Option<u8> {
+    (0..=127).contains(&key).then_some(key as u8)
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Lemon Arp
+// ---------------------------------------------------------------------------------------------------------------
 
 /// Lemon Arp's settings as its live instance has them: the UI thread writes them from the plugin's parameters every
 /// tick, the audio thread reads them each block.
@@ -104,35 +139,13 @@ impl ArpSettings {
     }
 }
 
-/// One note the chain is given, with the frame of the next block it falls on.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum In {
-    On { offset: u32, key: u8, velocity: f32 },
-    Off { offset: u32, key: u8 },
-}
-
-impl In {
-    fn offset(self) -> u32 {
-        match self {
-            In::On { offset, .. } | In::Off { offset, .. } => offset,
-        }
-    }
-}
-
-/// A note the chain puts out.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Out {
-    On { key: u8, velocity: f32 },
-    Off(u8),
-}
-
 /// The arpeggiator: the keys held, the step it is on, and when its next step and its sounding note's end fall.
 #[derive(Debug)]
 pub struct Arp {
     settings: Arc<ArpSettings>,
     /// The keys held, in key order, with the velocity they were pressed at.
     held: Vec<(u8, f32)>,
-    /// How far through the seen keys' sequence the pattern is.
+    /// How far through the keys' sequence the pattern is.
     step: usize,
     /// Frames from the block's start until the next step.
     clock: f64,
@@ -149,8 +162,12 @@ impl Arp {
         Arp { settings, held: Vec::new(), step: 0, clock: 0.0, steps: 0, sounding: None, cut: false }
     }
 
+    pub fn settings(&self) -> &Arc<ArpSettings> {
+        &self.settings
+    }
+
     /// A note reaches the chain.
-    pub fn note_on(&mut self, key: u8, velocity: f32) {
+    fn note_on(&mut self, key: u8, velocity: f32) {
         let v = self.settings.values();
         if v.latch && self.held.is_empty() {
             // Latch: the first note after everything was released starts a new chord.
@@ -165,7 +182,7 @@ impl Arp {
     }
 
     /// A note is released (Hold and Latch keep it in the pattern).
-    pub fn note_off(&mut self, key: u8) {
+    fn note_off(&mut self, key: u8) {
         let v = self.settings.values();
         if v.hold || v.latch {
             return;
@@ -176,12 +193,12 @@ impl Arp {
         }
     }
 
-    /// Everything stops (Stop, a seek, the chain's slot switched off).
-    pub fn reset(&mut self) {
+    fn reset(&mut self) {
         self.held.clear();
         self.step = 0;
         self.clock = 0.0;
         self.steps = 0;
+        self.sounding = None;
         self.cut = true;
     }
 
@@ -242,7 +259,7 @@ impl Arp {
         seq.get(at).copied()
     }
 
-    /// Plays the steps that start before block frame `limit` into `out` (frames of the block's `n`).
+    /// Plays the steps that start before block frame `limit` into `out` (frames of the block).
     fn advance(&mut self, limit: f64, rate: u32, tempo: f64, out: &mut Vec<(u32, Out)>) {
         let v = self.settings.values();
         let step = (f64::from(rate) * 60.0 / tempo.max(1.0) * v.beats_per_step()).max(1.0);
@@ -294,12 +311,482 @@ impl Arp {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// Lemon Transpose
+// ---------------------------------------------------------------------------------------------------------------
+
+/// Lemon Transpose's settings as its live instance has them.
+#[derive(Debug)]
+pub struct TransposeSettings {
+    /// Whole semitones, -24..=24.
+    semitones: AtomicI32,
+    /// Whole octaves, -4..=4.
+    octaves: AtomicI32,
+    /// Snap the result into the scale (`root`, `scale`).
+    scale_aware: AtomicBool,
+    /// Pitch class of the scale's root, 0 = C.
+    root: AtomicU8,
+    /// Index into the plugin's scales.
+    scale: AtomicU8,
+}
+
+/// What the transposer reads of its settings in a block.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransposeValues {
+    pub semitones: i32,
+    pub octaves: i32,
+    pub scale_aware: bool,
+    pub root: u8,
+    pub scale: u8,
+}
+
+impl TransposeValues {
+    /// The whole shift in semitones.
+    pub fn shift(&self) -> i32 {
+        self.semitones + 12 * self.octaves
+    }
+}
+
+impl Default for TransposeSettings {
+    /// The plugin's factory state: no shift, no scale.
+    fn default() -> TransposeSettings {
+        TransposeSettings {
+            semitones: AtomicI32::new(0),
+            octaves: AtomicI32::new(0),
+            scale_aware: AtomicBool::new(false),
+            root: AtomicU8::new(0),
+            scale: AtomicU8::new(0),
+        }
+    }
+}
+
+impl TransposeSettings {
+    pub fn values(&self) -> TransposeValues {
+        TransposeValues {
+            semitones: self.semitones.load(Ordering::Relaxed).clamp(-24, 24),
+            octaves: self.octaves.load(Ordering::Relaxed).clamp(-4, 4),
+            scale_aware: self.scale_aware.load(Ordering::Relaxed),
+            root: self.root.load(Ordering::Relaxed) % 12,
+            scale: self.scale.load(Ordering::Relaxed) % 9,
+        }
+    }
+
+    pub fn write(&self, v: TransposeValues) {
+        self.semitones.store(v.semitones.clamp(-24, 24), Ordering::Relaxed);
+        self.octaves.store(v.octaves.clamp(-4, 4), Ordering::Relaxed);
+        self.scale_aware.store(v.scale_aware, Ordering::Relaxed);
+        self.root.store(v.root % 12, Ordering::Relaxed);
+        self.scale.store(v.scale % 9, Ordering::Relaxed);
+    }
+}
+
+/// Is `note` in the scale (`scale` index, root pitch class `root`)?
+fn in_scale(note: i32, root: u8, scale: u8) -> bool {
+    let degrees = lemon_chord::params::Scale::from_index(scale).degrees();
+    degrees.contains(&((note - i32::from(root)).rem_euclid(12) as u8))
+}
+
+/// The nearest note in the scale to `note` (itself when in it; a tie goes down). `None` outside 0..=127.
+fn snap_to_scale(note: i32, root: u8, scale: u8) -> Option<u8> {
+    for d in 0..=6 {
+        for cand in [note - d, note + d] {
+            if (0..=127).contains(&cand) && in_scale(cand, root, scale) {
+                return Some(cand as u8);
+            }
+        }
+    }
+    None
+}
+
+/// `note` shifted by `shift` semitones, snapped into the scale with `scale_aware`; `None` when it leaves 0..=127.
+fn transpose_note(note: u8, shift: i32, v: &TransposeValues) -> Option<u8> {
+    let target = i32::from(note) + shift;
+    if !(0..=127).contains(&target) {
+        return None;
+    }
+    if v.scale_aware {
+        snap_to_scale(target, v.root, v.scale)
+    } else {
+        Some(target as u8)
+    }
+}
+
+/// The transposer: remembers which note each sounding input note became, so its note off hits the same note even if
+/// the settings moved meanwhile.
+#[derive(Debug)]
+pub struct Transpose {
+    settings: Arc<TransposeSettings>,
+    /// Per input key: the output key + 1 (0 = none).
+    active: [u8; 128],
+}
+
+impl Transpose {
+    pub fn new(settings: Arc<TransposeSettings>) -> Transpose {
+        Transpose { settings, active: [0; 128] }
+    }
+
+    pub fn settings(&self) -> &Arc<TransposeSettings> {
+        &self.settings
+    }
+
+    fn run(&mut self, input: Vec<(u32, Out)>, _n: usize, _rate: u32, _tempo: f64) -> Vec<(u32, Out)> {
+        let v = self.settings.values();
+        let shift = v.shift();
+        input
+            .into_iter()
+            .filter_map(|(at, ev)| match ev {
+                Out::On { key, velocity } => {
+                    let out = transpose_note(key, shift, &v)?;
+                    self.active[usize::from(key) & 127] = out + 1;
+                    Some((at, Out::On { key: out, velocity }))
+                }
+                Out::Off(key) => {
+                    let slot = &mut self.active[usize::from(key) & 127];
+                    let out = slot.checked_sub(1)?;
+                    *slot = 0;
+                    Some((at, Out::Off(out)))
+                }
+            })
+            .collect()
+    }
+
+    fn reset(&mut self) {
+        self.active.fill(0);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Lemon Chord
+// ---------------------------------------------------------------------------------------------------------------
+
+/// Lemon Chord's settings as its live instance has them.
+#[derive(Debug)]
+pub struct ChordSettings {
+    root: AtomicU8,
+    scale: AtomicU8,
+    /// Chord type: 0 triad, 1 7th, 2 9th, 3 11th, 4 13th, 5 sus2, 6 sus4.
+    chord: AtomicU8,
+    /// 0 root, 1 first, 2 second, 3 third.
+    inversion: AtomicU8,
+    /// 0 close, 1 open, 2 drop 2, 3 drop 3.
+    voicing: AtomicU8,
+    /// 0 off, 1 down, 2 up, 3 alternating.
+    strum: AtomicU8,
+    /// 0..=10000, 100 = slowest (the plugin's).
+    strum_speed: AtomicU16,
+    hold: AtomicBool,
+}
+
+/// What the chord maker reads of its settings in a block.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChordValues {
+    pub root: u8,
+    pub scale: u8,
+    pub chord: u8,
+    pub inversion: u8,
+    pub voicing: u8,
+    pub strum: u8,
+    pub strum_speed: u16,
+    pub hold: bool,
+}
+
+impl Default for ChordSettings {
+    /// The plugin's factory state: C major, triads, root position, close, no strum.
+    fn default() -> ChordSettings {
+        ChordSettings {
+            root: AtomicU8::new(0),
+            scale: AtomicU8::new(0),
+            chord: AtomicU8::new(0),
+            inversion: AtomicU8::new(0),
+            voicing: AtomicU8::new(0),
+            strum: AtomicU8::new(0),
+            strum_speed: AtomicU16::new(5000),
+            hold: AtomicBool::new(false),
+        }
+    }
+}
+
+impl ChordSettings {
+    pub fn values(&self) -> ChordValues {
+        ChordValues {
+            root: self.root.load(Ordering::Relaxed) % 12,
+            scale: self.scale.load(Ordering::Relaxed) % 9,
+            chord: self.chord.load(Ordering::Relaxed) % 7,
+            inversion: self.inversion.load(Ordering::Relaxed).min(3),
+            voicing: self.voicing.load(Ordering::Relaxed).min(3),
+            strum: self.strum.load(Ordering::Relaxed).min(3),
+            strum_speed: self.strum_speed.load(Ordering::Relaxed).min(10_000),
+            hold: self.hold.load(Ordering::Relaxed),
+        }
+    }
+
+    pub fn write(&self, v: ChordValues) {
+        self.root.store(v.root % 12, Ordering::Relaxed);
+        self.scale.store(v.scale % 9, Ordering::Relaxed);
+        self.chord.store(v.chord % 7, Ordering::Relaxed);
+        self.inversion.store(v.inversion.min(3), Ordering::Relaxed);
+        self.voicing.store(v.voicing.min(3), Ordering::Relaxed);
+        self.strum.store(v.strum.min(3), Ordering::Relaxed);
+        self.strum_speed.store(v.strum_speed.min(10_000), Ordering::Relaxed);
+        self.hold.store(v.hold, Ordering::Relaxed);
+    }
+}
+
+/// The chord a note stands for, keeping its octave: the note is read as a scale degree of `root` / `scale` and the
+/// chord type stacked on it inside that scale (`plugins/lemon-chord/src/dsp/chord.rs`, but anchored on the played
+/// note rather than on middle C).
+pub fn chord_of(key: u8, v: &ChordValues) -> Vec<u8> {
+    let scale = lemon_chord::params::Scale::from_index(v.scale).degrees();
+    let chord = lemon_chord::params::ChordType::from_index(v.chord).degrees();
+    let root = i32::from(v.root);
+    // The scale degree the played note is closest to.
+    let rel = (i32::from(key % 12) - root).rem_euclid(12);
+    let degree = (0..scale.len())
+        .min_by_key(|&i| (rel - i32::from(scale[i])).abs())
+        .unwrap_or(0);
+    let octave = i32::from(key / 12) * 12;
+    let chord_root = octave + (root + i32::from(scale[degree])) % 12;
+    let mut notes: Vec<u8> = chord
+        .iter()
+        .filter_map(|&cd| {
+            let idx = degree + cd;
+            let octaves = (idx / scale.len()) as i32;
+            let at = idx % scale.len();
+            let interval = (i32::from(scale[at]) - i32::from(scale[degree])).rem_euclid(12) + 12 * octaves;
+            clamp_key(chord_root + interval)
+        })
+        .collect();
+    notes.sort_unstable();
+    notes.dedup();
+    // Inversions: the lowest notes go up an octave.
+    for _ in 0..usize::from(v.inversion).min(notes.len().saturating_sub(1)) {
+        if let Some(k) = notes.first_mut() {
+            *k = k.saturating_add(12);
+        }
+        notes.sort_unstable();
+    }
+    // Voicings.
+    match v.voicing {
+        1 => {
+            // Open: the 2nd, 3rd … notes of the close position go up an octave each.
+            for (i, k) in notes.iter_mut().enumerate() {
+                if i % 2 == 1 {
+                    *k = k.saturating_add(12);
+                }
+            }
+            notes.sort_unstable();
+        }
+        2 if notes.len() >= 2 => {
+            let i = notes.len() - 2;
+            notes[i] = notes[i].saturating_sub(12);
+            notes.sort_unstable();
+        }
+        3 if notes.len() >= 3 => {
+            let i = notes.len() - 3;
+            notes[i] = notes[i].saturating_sub(12);
+            notes.sort_unstable();
+        }
+        _ => {}
+    }
+    notes.retain(|&k| k < 128);
+    notes
+}
+
+/// The chord maker: the chord each input key made (so its note offends them all), the strum's pending notes.
+#[derive(Debug)]
+pub struct Chord {
+    settings: Arc<ChordSettings>,
+    /// The notes each held key stands for.
+    active: Vec<(u8, Vec<u8>)>,
+    /// Frames processed so far (the strum's clock).
+    now: u64,
+    /// Notes the strum put later than the block they came in.
+    pending: Vec<(u64, Out)>,
+    /// Alternating strum's direction, 1 or -1.
+    dir: i8,
+}
+
+impl Chord {
+    pub fn new(settings: Arc<ChordSettings>) -> Chord {
+        Chord { settings, active: Vec::new(), now: 0, pending: Vec::new(), dir: 1 }
+    }
+
+    pub fn settings(&self) -> &Arc<ChordSettings> {
+        &self.settings
+    }
+
+    /// How many frames note `i` of a strummed chord waits: `strum_speed` is the plugin's 0..10000, 10000 = together.
+    fn strum_frames(i: usize, v: &ChordValues, rate: u32) -> u64 {
+        if v.strum == 0 || i == 0 {
+            return 0;
+        }
+        let gap_ms = (100.0 - f64::from(v.strum_speed) / 100.0).max(0.0);
+        (f64::from(rate) * gap_ms / 1000.0 * i as f64) as u64
+    }
+
+    fn run(&mut self, input: Vec<(u32, Out)>, n: usize, rate: u32, _tempo: f64) -> Vec<(u32, Out)> {
+        let v = self.settings.values();
+        let start = self.now;
+        let end = start + n as u64;
+        let mut timed: Vec<(u64, Out)> = Vec::with_capacity(self.pending.len() + input.len());
+        for (at, ev) in input {
+            let at = start + u64::from(at.min(n as u32));
+            match ev {
+                Out::On { key, velocity } => {
+                    // A new note on the same key replaces the chord it made.
+                    if let Some((_, old)) = self.active.iter().position(|(k, _)| *k == key).map(|i| self.active.remove(i)) {
+                        timed.extend(old.into_iter().map(|k| (at, Out::Off(k))));
+                    }
+                    let mut notes = chord_of(key, &v);
+                    if notes.is_empty() {
+                        notes.push(key);
+                    }
+                    match v.strum {
+                        2 => notes.reverse(),
+                        3 => {
+                            if self.dir < 0 {
+                                notes.reverse();
+                            }
+                            self.dir = -self.dir;
+                        }
+                        _ => {}
+                    }
+                    let mut made = vec![key];
+                    for (i, k) in notes.iter().enumerate() {
+                        timed.push((at + Self::strum_frames(i, &v, rate), Out::On { key: *k, velocity }));
+                    }
+                    made.extend(notes);
+                    made.sort_unstable();
+                    made.dedup();
+                    self.active.push((key, made));
+                }
+                Out::Off(key) => {
+                    if v.hold {
+                        continue;
+                    }
+                    if let Some(i) = self.active.iter().position(|(k, _)| *k == key) {
+                        let (_, notes) = self.active.remove(i);
+                        timed.extend(notes.into_iter().map(|k| (at, Out::Off(k))));
+                    }
+                }
+            }
+        }
+        timed.extend(self.pending.drain(..));
+        timed.sort_by_key(|(t, _)| *t);
+        let mut out = Vec::with_capacity(timed.len());
+        for (t, ev) in timed {
+            if t < end {
+                out.push(((t - start) as u32, ev));
+            } else {
+                self.pending.push((t, ev));
+            }
+        }
+        self.now = end;
+        out
+    }
+
+    fn reset(&mut self) {
+        self.active.clear();
+        self.pending.clear();
+        self.now = 0;
+        self.dir = 1;
+    }
+
+    /// True while a Hold keeps a chord of its own.
+    fn ringing(&self) -> bool {
+        !self.active.is_empty()
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The chain
+// ---------------------------------------------------------------------------------------------------------------
+
+/// One MIDI FX of a chain, with its live settings.
+pub enum Stage {
+    Arp(Arp),
+    Transpose(Transpose),
+    Chord(Chord),
+}
+
+impl Stage {
+    /// The stage's settings, the way the UI tick refreshes them.
+    pub fn settings(&self) -> ChainSettings {
+        match self {
+            Stage::Arp(a) => ChainSettings::Arp(a.settings.clone()),
+            Stage::Transpose(t) => ChainSettings::Transpose(t.settings.clone()),
+            Stage::Chord(c) => ChainSettings::Chord(c.settings.clone()),
+        }
+    }
+
+    fn reset(&mut self) {
+        match self {
+            Stage::Arp(a) => a.reset(),
+            Stage::Transpose(t) => t.reset(),
+            Stage::Chord(c) => c.reset(),
+        }
+    }
+
+    fn ringing(&self) -> bool {
+        match self {
+            Stage::Arp(a) => a.ringing(),
+            Stage::Transpose(_) => false,
+            Stage::Chord(c) => c.ringing(),
+        }
+    }
+
+    /// This block's notes through the stage.
+    fn run(&mut self, input: Vec<(u32, Out)>, n: usize, rate: u32, tempo: f64) -> Vec<(u32, Out)> {
+        match self {
+            Stage::Arp(a) => {
+                let mut events = Vec::with_capacity(input.len() + 4);
+                let mut at = 0.0;
+                for (offset, ev) in input {
+                    let o = f64::from(offset.min(n as u32));
+                    if o > at {
+                        a.advance(o, rate, tempo, &mut events);
+                        at = o;
+                    }
+                    match ev {
+                        Out::On { key, velocity } => a.note_on(key, velocity),
+                        Out::Off(key) => a.note_off(key),
+                    }
+                }
+                a.advance(f64::from(n as u32), rate, tempo, &mut events);
+                a.end_block(f64::from(n as u32));
+                events.sort_by_key(|(o, _)| *o);
+                events
+            }
+            Stage::Transpose(t) => t.run(input, n, rate, tempo),
+            Stage::Chord(c) => c.run(input, n, rate, tempo),
+        }
+    }
+}
+
+/// A chain stage's settings, whichever plugin it is (the UI thread writes them every tick).
+#[derive(Clone)]
+pub enum ChainSettings {
+    Arp(Arc<ArpSettings>),
+    Transpose(Arc<TransposeSettings>),
+    Chord(Arc<ChordSettings>),
+}
+
+impl ChainSettings {
+    /// A stage reading these settings.
+    pub fn stage(&self) -> Stage {
+        match self {
+            ChainSettings::Arp(s) => Stage::Arp(Arp::new(s.clone())),
+            ChainSettings::Transpose(s) => Stage::Transpose(Transpose::new(s.clone())),
+            ChainSettings::Chord(s) => Stage::Chord(Chord::new(s.clone())),
+        }
+    }
+}
+
 /// A MIDI track's instrument as its MIDI FX chain makes of it: the notes its clips play reach the instrument through
 /// the chain.
 pub struct NoteFx {
     inner: SharedInstrument,
-    /// The chain's arpeggiator, if it has one (the first Lemon Arp in slot order).
-    arp: Option<Arp>,
+    stages: Vec<Stage>,
     /// This tick's notes, with their frames, waiting for the next `process`.
     notes: Vec<In>,
     /// The transport's tempo (the arpeggiator's clock).
@@ -307,44 +794,30 @@ pub struct NoteFx {
 }
 
 impl NoteFx {
-    pub fn new(inner: SharedInstrument, arp: Option<Arc<ArpSettings>>) -> NoteFx {
-        NoteFx { inner, arp: arp.map(Arp::new), notes: Vec::new(), tempo: 120.0 }
+    pub fn new(inner: SharedInstrument, stages: Vec<Stage>) -> NoteFx {
+        NoteFx { inner, stages, notes: Vec::new(), tempo: 120.0 }
     }
 
-    /// Renders the chain's notes into the instrument. True when the instrument took the block.
+    /// The chain's stages, for the app to read their settings back.
+    pub fn stages(&self) -> &[Stage] {
+        &self.stages
+    }
+
+    /// Renders the chain's notes into the instrument. False when the instrument is busy.
     fn play(&mut self, rate: u32, n: usize, left: &mut [f32], right: &mut [f32]) -> bool {
         let Ok(mut inner) = self.inner.try_lock() else { return false };
-        let Some(arp) = &mut self.arp else {
-            for note in std::mem::take(&mut self.notes) {
-                match note {
-                    In::On { offset, key, velocity } => inner.note_on(offset.min(n as u32), key, velocity),
-                    In::Off { offset, key } => inner.note_off(offset.min(n as u32), key),
-                }
-            }
-            inner.process(rate, left, right);
-            return true;
-        };
-        let mut events: Vec<(u32, Out)> = Vec::with_capacity(self.notes.len() + 8);
-        let mut at = 0.0f64;
-        for note in std::mem::take(&mut self.notes) {
-            let offset = f64::from(note.offset().min(n as u32));
-            if offset > at {
-                arp.advance(offset, rate, self.tempo, &mut events);
-                at = offset;
-            }
-            match note {
-                In::On { key, velocity, .. } => arp.note_on(key, velocity),
-                In::Off { key, .. } => arp.note_off(key),
+        let mut events: Vec<(u32, Out)> = std::mem::take(&mut self.notes).into_iter().map(Into::into).collect();
+        events.sort_by_key(|(o, _)| *o);
+        if !self.stages.is_empty() {
+            for stage in &mut self.stages {
+                events = stage.run(events, n, rate, self.tempo);
             }
         }
-        let end = f64::from(n as u32);
-        arp.advance(end, rate, self.tempo, &mut events);
-        arp.end_block(end);
-        events.sort_by_key(|(o, _)| *o);
         for (offset, ev) in events {
+            let at = offset.min(n.saturating_sub(1) as u32);
             match ev {
-                Out::On { key, velocity } => inner.note_on(offset.min(n as u32), key, velocity),
-                Out::Off(key) => inner.note_off(offset.min(n as u32), key),
+                Out::On { key, velocity } => inner.note_on(at, key, velocity),
+                Out::Off(key) => inner.note_off(at, key),
             }
         }
         inner.process(rate, left, right);
@@ -472,7 +945,7 @@ impl Instrument for NoteFx {
     }
 
     fn active(&self) -> bool {
-        self.arp.as_ref().is_some_and(Arp::ringing) || self.inner.try_lock().is_ok_and(|i| i.active())
+        self.stages.iter().any(Stage::ringing) || self.inner.try_lock().is_ok_and(|i| i.active())
     }
 
     fn voices(&self) -> usize {
@@ -481,8 +954,8 @@ impl Instrument for NoteFx {
 
     fn reset(&mut self) {
         self.notes.clear();
-        if let Some(arp) = &mut self.arp {
-            arp.reset();
+        for stage in &mut self.stages {
+            stage.reset();
         }
         if let Ok(mut i) = self.inner.try_lock() {
             i.reset();
@@ -544,21 +1017,36 @@ mod tests {
         let rec = Arc::new(Mutex::new(Recorder::default()));
         let settings = Arc::new(ArpSettings::default());
         settings.write(values);
-        let fx = NoteFx::new(rec.clone() as SharedInstrument, Some(settings.clone()));
+        let fx = NoteFx::new(rec.clone() as SharedInstrument, vec![Stage::Arp(Arp::new(settings.clone()))]);
         (fx, rec, settings)
+    }
+
+    fn transpose(values: TransposeValues) -> Stage {
+        let s = Arc::new(TransposeSettings::default());
+        s.write(values);
+        Stage::Transpose(Transpose::new(s))
+    }
+
+    fn chord(values: ChordValues) -> Stage {
+        let s = Arc::new(ChordSettings::default());
+        s.write(values);
+        Stage::Chord(Chord::new(s))
     }
 
     fn info(tempo: f64) -> TransportInfo {
         TransportInfo { playing: true, tempo, frame: 0, beats: 0.0, bar_start: 0.0, bar: 0, numerator: 4, denominator: 4, looping: None }
     }
 
-    fn run(fx: &mut NoteFx, rate: u32, blocks: usize, n: usize) -> Vec<f32> {
+    fn run_all(fx: &mut NoteFx, blocks: usize, n: usize) {
         let mut out = vec![0.0; 2 * n];
         for _ in 0..blocks {
             let (l, r) = out.split_at_mut(n);
-            fx.process(rate, l, r);
+            fx.process(48_000, l, r);
         }
-        out
+    }
+
+    fn heard(rec: &Arc<Mutex<Recorder>>) -> Vec<String> {
+        rec.lock().unwrap().got.drain(..).collect()
     }
 
     /// A held chord is played one note at a time, in pattern order, instead of all at once.
@@ -570,19 +1058,15 @@ mod tests {
             fx.note_start(0, key, 100.0 / 128.0, 0.0, NoteLevels::default());
         }
         // At 48 kHz and 120 BPM a 1/16 step is 6000 frames: one block of 6000 frames plays one step.
-        let mut heard = Vec::new();
-        for _ in 0..6 {
-            run(&mut fx, 48_000, 1, 6000);
-            heard.extend(rec.lock().unwrap().got.drain(..));
-        }
-        let ons: Vec<&String> = heard.iter().filter(|s| s.starts_with("on ")).collect();
+        run_all(&mut fx, 6, 6000);
+        let got = heard(&rec);
+        let ons: Vec<&String> = got.iter().filter(|s| s.starts_with("on ")).collect();
         assert_eq!(
             ons,
             vec!["on 60 @0 v100", "on 64 @0 v100", "on 67 @0 v100", "on 60 @0 v100", "on 64 @0 v100", "on 67 @0 v100"],
-            "one key at a time, in order, the pattern starting over: {heard:?}"
+            "one key at a time, in order, the pattern starting over: {got:?}"
         );
-        // Each note is gated: half a step long.
-        assert!(heard.contains(&"off 60 @3000".to_string()), "{heard:?}");
+        assert!(got.contains(&"off 60 @3000".to_string()), "the gate ends each note: {got:?}");
     }
 
     /// Nothing held, nothing plays: the chord's notes do not reach the instrument as a chord.
@@ -592,10 +1076,9 @@ mod tests {
         fx.transport(&info(120.0));
         fx.note_on(0, 60, 0.5);
         fx.note_on(0, 64, 0.5);
-        run(&mut fx, 48_000, 1, 100);
-        let heard: Vec<String> = rec.lock().unwrap().got.drain(..).collect();
-        // The step at once, then silence: two keys, one at a time.
-        assert!(heard.iter().filter(|s| s.starts_with("on ")).count() <= 1, "{heard:?}");
+        run_all(&mut fx, 1, 100);
+        let got = heard(&rec);
+        assert!(got.iter().filter(|s| s.starts_with("on ")).count() <= 1, "{got:?}");
     }
 
     /// Releasing the chord ends the arpeggio.
@@ -605,13 +1088,12 @@ mod tests {
         fx.transport(&info(120.0));
         fx.note_on(0, 60, 0.5);
         fx.note_on(0, 64, 0.5);
-        run(&mut fx, 48_000, 1, 10);
-        rec.lock().unwrap().got.clear();
+        run_all(&mut fx, 1, 10);
+        heard(&rec);
         fx.note_off(0, 60);
         fx.note_off(0, 64);
-        run(&mut fx, 48_000, 1, 10);
-        let heard: Vec<String> = rec.lock().unwrap().got.drain(..).collect();
-        assert_eq!(heard, vec!["off 60 @0".to_string()], "the sounding note ends at once: {heard:?}");
+        run_all(&mut fx, 1, 10);
+        assert_eq!(heard(&rec), vec!["off 60 @0".to_string()], "the sounding note ends at once");
     }
 
     /// Octaves put the pattern up an octave per pass.
@@ -622,8 +1104,8 @@ mod tests {
         fx.note_on(0, 60, 0.5);
         let mut ons = Vec::new();
         for _ in 0..4 {
-            run(&mut fx, 48_000, 1, 6000);
-            for s in rec.lock().unwrap().got.drain(..) {
+            run_all(&mut fx, 1, 6000);
+            for s in heard(&rec) {
                 if s.starts_with("on ") {
                     ons.push(s);
                 }
@@ -634,13 +1116,104 @@ mod tests {
 
     /// With no MIDI FX the notes reach the instrument as they come, offsets and all.
     #[test]
-    fn a_chain_without_an_arp_passes_notes_through() {
+    fn a_chain_without_a_midi_fx_passes_notes_through() {
         let rec = Arc::new(Mutex::new(Recorder::default()));
-        let mut fx = NoteFx::new(rec.clone() as SharedInstrument, None);
+        let mut fx = NoteFx::new(rec.clone() as SharedInstrument, Vec::new());
         fx.note_on(3, 60, 0.5);
         fx.note_off(4, 60);
-        run(&mut fx, 48_000, 1, 100);
-        assert_eq!(rec.lock().unwrap().got, vec!["on 60 @3 v64".to_string(), "off 60 @4".to_string()]);
+        run_all(&mut fx, 1, 100);
+        assert_eq!(heard(&rec), vec!["on 60 @3 v64".to_string(), "off 60 @4".to_string()]);
+    }
+
+    /// Transpose moves the notes, and their offs follow them.
+    #[test]
+    fn transpose_shifts_the_notes() {
+        let rec = Arc::new(Mutex::new(Recorder::default()));
+        let stage = transpose(TransposeValues { semitones: 7, octaves: 1, scale_aware: false, root: 0, scale: 0 });
+        let mut fx = NoteFx::new(rec.clone() as SharedInstrument, vec![stage]);
+        fx.note_on(2, 60, 0.5);
+        fx.note_off(9, 60);
+        run_all(&mut fx, 1, 64);
+        assert_eq!(heard(&rec), vec!["on 79 @2 v64".to_string(), "off 79 @9".to_string()]);
+    }
+
+    /// Scale aware: a shift lands on the scale's notes.
+    #[test]
+    fn transpose_snaps_into_the_scale() {
+        let rec = Arc::new(Mutex::new(Recorder::default()));
+        let stage = transpose(TransposeValues { semitones: 1, octaves: 0, scale_aware: true, root: 0, scale: 0 });
+        let mut fx = NoteFx::new(rec.clone() as SharedInstrument, vec![stage]);
+        // C up one is C#, which C major does not have: it snaps back to C (the tie goes down).
+        fx.note_on(0, 60, 0.5);
+        run_all(&mut fx, 1, 32);
+        assert_eq!(heard(&rec), vec!["on 60 @0 v64".to_string()]);
+    }
+
+    /// A note becomes the chord of its scale degree, in its own octave.
+    #[test]
+    fn a_note_becomes_its_chord() {
+        let rec = Arc::new(Mutex::new(Recorder::default()));
+        let stage = chord(ChordValues { root: 0, scale: 0, chord: 0, inversion: 0, voicing: 0, strum: 0, strum_speed: 5000, hold: false });
+        let mut fx = NoteFx::new(rec.clone() as SharedInstrument, vec![stage]);
+        fx.note_on(0, 60, 0.5);
+        run_all(&mut fx, 1, 32);
+        assert_eq!(
+            heard(&rec),
+            vec!["on 60 @0 v64".to_string(), "on 64 @0 v64".to_string(), "on 67 @0 v64".to_string()],
+            "C major on C: C E G"
+        );
+        // Its note off ends all of them.
+        fx.note_off(0, 60);
+        run_all(&mut fx, 1, 32);
+        assert_eq!(heard(&rec), vec!["off 60 @0".to_string(), "off 64 @0".to_string(), "off 67 @0".to_string()]);
+        // A different degree builds the chord on that degree: E4 is E G B.
+        fx.note_on(0, 64, 0.5);
+        run_all(&mut fx, 1, 32);
+        assert_eq!(
+            heard(&rec),
+            vec!["on 64 @0 v64".to_string(), "on 67 @0 v64".to_string(), "on 71 @0 v64".to_string()],
+            "the minor triad on E"
+        );
+        assert_eq!(chord_of(60, &ChordValues { root: 0, scale: 0, chord: 1, inversion: 0, voicing: 0, strum: 0, strum_speed: 5000, hold: false }), vec![60, 64, 67, 71], "C major 7");
+        assert_eq!(chord_of(60, &ChordValues { root: 0, scale: 0, chord: 0, inversion: 1, voicing: 0, strum: 0, strum_speed: 5000, hold: false }), vec![64, 67, 72], "first inversion");
+    }
+
+    /// The chain composes: a chord through the arpeggiator plays the chord's notes one at a time.
+    #[test]
+    fn the_chain_runs_left_to_right() {
+        let rec = Arc::new(Mutex::new(Recorder::default()));
+        let triad = ChordValues { root: 0, scale: 0, chord: 0, inversion: 0, voicing: 0, strum: 0, strum_speed: 5000, hold: false };
+        let arp = Arc::new(ArpSettings::default());
+        arp.write(ArpValues { pattern: 0, octaves: 1, rate: 2, gate: 50, swing: 0, hold: false, latch: false });
+        let mut fx = NoteFx::new(rec.clone() as SharedInstrument, vec![chord(triad), Stage::Arp(Arp::new(arp))]);
+        fx.transport(&info(120.0));
+        fx.note_on(0, 60, 0.5);
+        run_all(&mut fx, 1, 6000);
+        let got = heard(&rec);
+        assert_eq!(got.iter().filter(|s| s.starts_with("on ")).count(), 1, "one note of the chord at a time: {got:?}");
+        // The chord alone plays all three.
+        let rec2 = Arc::new(Mutex::new(Recorder::default()));
+        let mut plain = NoteFx::new(rec2.clone() as SharedInstrument, vec![chord(triad)]);
+        plain.note_on(0, 60, 0.5);
+        run_all(&mut plain, 1, 6000);
+        assert_eq!(heard(&rec2).iter().filter(|s| s.starts_with("on ")).count(), 3);
+    }
+
+    /// The settings atomics round-trip what the plugin's parameters say.
+    #[test]
+    fn settings_as_the_plugin_says() {
+        let s = ArpSettings::default();
+        assert_eq!(s.values(), ArpValues { pattern: 0, octaves: 2, rate: 3, gate: 50, swing: 0, hold: false, latch: false });
+        s.write(ArpValues { pattern: 2, octaves: 4, rate: 1, gate: 90, swing: -20, hold: true, latch: false });
+        assert_eq!(s.values(), ArpValues { pattern: 2, octaves: 4, rate: 1, gate: 90, swing: -20, hold: true, latch: false });
+        let t = TransposeSettings::default();
+        assert_eq!(t.values(), TransposeValues { semitones: 0, octaves: 0, scale_aware: false, root: 0, scale: 0 });
+        t.write(TransposeValues { semitones: -5, octaves: 2, scale_aware: true, root: 3, scale: 7 });
+        assert_eq!(t.values(), TransposeValues { semitones: -5, octaves: 2, scale_aware: true, root: 3, scale: 7 });
+        let c = ChordSettings::default();
+        assert_eq!(c.values().chord, 0);
+        c.write(ChordValues { root: 9, scale: 1, chord: 4, inversion: 2, voicing: 3, strum: 2, strum_speed: 100, hold: true });
+        assert_eq!(c.values(), ChordValues { root: 9, scale: 1, chord: 4, inversion: 2, voicing: 3, strum: 2, strum_speed: 100, hold: true });
     }
 
     /// A track with a MIDI FX slot filled plays its row through the chain; switching the slot off plays the instrument
@@ -659,41 +1232,24 @@ mod tests {
         assert!(a.state.hosted_rows.contains(&row), "the Trio is hosted: {:?}", a.state.message);
         crate::playlist::run(&mut a, Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi));
         let at = a.state.project.tracks.len() - 1;
-        let t = a.state.project.tracks[at].clone();
-        // The track over the Trio's channel.
         a.state.project.tracks[at].channel = Some(row as u16);
+        let id = a.state.project.tracks[at].id.0;
         let index = a.plugins.midi_fx.iter().position(|x| x.desc.name == LEMON_ARP).expect("Lemon Arp is built in");
-        assert!(crate::midi_fx::add(&mut a, t.id.0, None, index).is_none());
+        assert!(crate::midi_fx::add(&mut a, id, None, index).is_none());
         a.sync_note_fx();
         let n = a.plugins.note_fx.get(&row).expect("the row plays through its chain");
-        assert!(n.arp.is_some(), "the chain has the arpeggiator");
+        assert!(n.stages.len() == 1, "one stage: {}", n.stages.len());
         let inner = a.plugins.hosted[&row].plugin.clone() as SharedInstrument;
         // The engine takes the list's last instrument for a row, so the chain is what plays.
         let played = a.plugins.instruments().into_iter().filter(|(r, _)| *r == row).next_back().expect("the row plays").1;
         assert!(!std::sync::Arc::ptr_eq(&played, &inner), "the chain, not the bare instrument");
-        // The settings come from the plugin's own parameters (its factory: up, 2 octaves, 1/32, 50 %).
-        let arp = n.arp.clone().unwrap();
+        let ChainSettings::Arp(arp) = &n.stages[0].1 else { panic!("the arpeggiator's settings") };
         assert_eq!(arp.values(), ArpSettings::default().values());
         // Off: the row plays its instrument directly again.
-        crate::midi_fx::toggle(&mut a.state, t.id.0, 0);
+        crate::midi_fx::toggle(&mut a.state, id, 0);
         a.sync_note_fx();
         assert!(a.plugins.note_fx.is_empty(), "the chain is gone");
         let played = a.plugins.instruments().into_iter().filter(|(r, _)| *r == row).next_back().expect("the row plays").1;
         assert!(std::sync::Arc::ptr_eq(&played, &inner), "the instrument itself");
-    }
-
-    /// The settings atomics round-trip what the plugin's parameters say.
-    #[test]
-    fn settings_as_the_plugin_says() {
-        let s = ArpSettings::default();
-        assert_eq!(
-            s.values(),
-            ArpValues { pattern: 0, octaves: 2, rate: 3, gate: 50, swing: 0, hold: false, latch: false }
-        );
-        s.write(ArpValues { pattern: 2, octaves: 4, rate: 1, gate: 90, swing: -20, hold: true, latch: false });
-        assert_eq!(
-            s.values(),
-            ArpValues { pattern: 2, octaves: 4, rate: 1, gate: 90, swing: -20, hold: true, latch: false }
-        );
     }
 }
