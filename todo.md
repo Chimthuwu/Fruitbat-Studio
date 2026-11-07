@@ -9,6 +9,13 @@
 - ✅ Commit `fc17c4ec` pushed to `main`.
 - ✅ **Rack params are dials** (commit `37e9eca1`): horizontal sliders replaced with vertical-drag knobs
   (`kit::knob`, `Drag::DeviceRackParam { y0, v0 }`); `param_bar` → `param_dial`; 1081 tests green.
+- ✅ **Embedded rack tiles now show the plugin's own UI** (commit `54a692cf`): the tiles were blank dark bodies,
+  two bugs — `State::size()`/`area_y()` always added the floating window's chrome (title/strip/border) so a pinned
+  frame was `tile + chrome` and `pin_window` pushed the editor down/right out of the tile body, and the per-tick
+  `set_editor_size` sync (unlinked natural size + Lemon host-link size) had no `pinned` guard, re-inflating the
+  frame past the tile every tick. A pinned frame is now exactly the editor (no chrome — the tile's own header is
+  the name/LED/menu), its editor area sits at the origin, and the tick sync skips pinned windows; pop-out is
+  unaffected (it un-pins first, then syncs as before). `cargo check` clean, `cargo test -p os-app` 1081/0/62.
 - 📋 **Signal routing audit (2026-11-07):** audio FX chain ALREADY WORKS — mixer insert effects process in
   slot order (`engine/mix.rs:31`), so the rack's right-side FX tiles already drive the mixer. The remaining gap
   is the **engine note-path**: MIDI FX / note-layer / note-selector plugins are hosted for UI only and their

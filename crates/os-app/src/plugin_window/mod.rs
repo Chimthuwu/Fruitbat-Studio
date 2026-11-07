@@ -1311,6 +1311,22 @@ mod tests {
         State { strip, ..State::new(info, (480.0, 270.0), false) }
     }
 
+    /// A device-rack tile pins the frame to the tile's body: the frame IS the editor (no border, no title or
+    /// strip above it — the tile's own header supplies those), so `pin_window` can't push the editor out of the
+    /// tile. With the floating window's chrome the frame was `tile + chrome` wide and tall, so the editor sat
+    /// down-and-right of the body and the rack rendered a blank dark tile instead of the plugin's own UI.
+    #[test]
+    fn a_pinned_frame_is_exactly_the_editor() {
+        let mut st = state(true, "Master");
+        let (w, h) = st.size();
+        assert!(w > 480.0, "a floating frame adds a border: {w}");
+        assert!(h > 270.0, "a floating frame adds a title above the editor: {h}");
+        assert!(st.area_y() > 0.0, "a floating editor starts below the title/strip");
+        st.pinned = true;
+        assert_eq!(st.size(), (480.0, 270.0), "pinned: exactly the tile's editor");
+        assert_eq!(st.area_y(), 0.0, "pinned: nothing sits above the editor");
+    }
+
     /// "Open detached plugins with the main window": a detached window opening for the first time keeps its place
     /// relative to the monitor it would open on, moved to the chosen monitor and kept on it (spec:
     /// ui/settings-choices.md "Miscellaneous: naming, detached plugins and startup").
