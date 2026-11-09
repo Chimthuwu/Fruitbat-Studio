@@ -204,7 +204,16 @@ pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo) -> usize {
     }
     if bottom > 0.0 {
         let r = Rect::new(0.0, h - bottom, w, bottom);
-        ui.part(Seg::DeviceRack, r, |ui| device_rack::paint(ui, s, r));
+        // While the launcher is out, an audio clip's editor takes the device rack's panel (`launcher::Panel`;
+        // a track's click or the panel's Devices gives the rack back).
+        let clip_editor = s.launcher_open && s.launcher.panel == crate::launcher::Panel::TeslaClipEditor;
+        ui.part(Seg::DeviceRack, r, |ui| {
+            if clip_editor {
+                launcher::paint_panel(ui, s, r);
+            } else {
+                device_rack::paint(ui, s, r);
+            }
+        });
     }
     let _ = work;
     for (i, &win) in s.z.iter().enumerate() {
@@ -268,23 +277,12 @@ pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo) -> usize {
     if let Some(m) = s.menu_open {
         ui.scaled(popup_scale(ui.c.scale), |ui, k| menus::paint_dropdown(ui, s, m, k));
     }
-    // A menu opened from the settings window (Audio page combos) goes over it; a dropdown's submenu over the dropdown;
-    // the time signature dialog's value lists over the dialog.
-    let over_dialog = crate::timesig::form_open(s);
-    // The popups and boxes opened from a detached window are in that window (`paint_detached`).
-    let here = !s.overlay_on.is_some_and(|w| s.is_detached(w) && s.shown(w));
-    if !s.settings.open && !over_dialog && here {
-        playlist::paint_overlays(ui, s);
-    }
     rack::paint_fill(ui, s);
     // An open device header menu goes over the windows and panels.
     device_rack::paint_menu(ui, s);
     patterns::paint(ui, s);
     if s.settings.open {
         settings::paint(ui, s);
-        if !over_dialog && here {
-            playlist::paint_overlays(ui, s);
-        }
     }
     // A browser drag over a detached window draws its ghost there (`paint_detached`).
     if s.drag_on.is_none_or(|w| !s.is_detached(w)) {
@@ -304,7 +302,14 @@ pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo) -> usize {
     }
     // Message boxes and file dialogs go over everything (spec: ui/dialogs.md).
     dialog::paint(ui, s);
-    if over_dialog && here {
+    // The popups (context menus, combo lists, pickers, the rename box) paint last, once: what a partial repaint
+    // draws of them must match a full one, whatever is open under them (settings, dialogs, the launcher).
+    // The popups and boxes opened from a detached window are in that window (`paint_detached`): they belong to
+    // that surface only while an overlay is open there (`overlay_on` is cleared with the overlays and with the
+    // window, so a stale one can never stop the main window from painting its own).
+    let overlays_open = s.playlist.popup.is_some() || s.playlist.edit.is_some();
+    let on_detached = overlays_open && s.overlay_on.is_some_and(|w| s.is_detached(w) && s.shown(w));
+    if !on_detached {
         playlist::paint_overlays(ui, s);
     }
     overlays
@@ -331,7 +336,10 @@ pub fn paint_detached(ui: &mut Ui, s: &State, f: &FrameInfo, w: Win) -> usize {
         if w == Win::ChannelRack {
             rack::paint_fill(ui, s);
         }
-        playlist::paint_overlays(ui, s);
+        // As in the main window: the popups belong to this surface only while an overlay is open on it.
+        if s.playlist.popup.is_some() || s.playlist.edit.is_some() {
+            playlist::paint_overlays(ui, s);
+        }
     }
     if s.drag_on == Some(w) {
         browser::paint_ghost(ui, s);

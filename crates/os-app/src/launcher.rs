@@ -387,10 +387,33 @@ pub struct Pending {
     pub alt: bool,
 }
 
+/// The bottom panel's mode while the launcher is out: the device rack as before, or the selected audio clip's
+/// editor (a Tesla on the clip's audio channel, the panel area where the device rack goes, like the piano roll
+/// opens a pattern clip's notes). Selecting a track gives the rack back.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Panel {
+    /// The device rack.
+    #[default]
+    DeviceRack,
+    /// The selected audio clip's audio editor.
+    TeslaClipEditor,
+}
+
+/// Whether the device rack shows: the launcher's clip editor takes its panel while it is out ([`Panel`]; the
+/// panel paints and its hit tests are the launcher's then, not the rack's).
+pub fn rack_visible(s: &State) -> bool {
+    !(s.launcher_open && s.launcher.panel == Panel::TeslaClipEditor)
+}
+
 /// The launcher's grid: the clips by (track id, scene), the scene each track is playing, and the open menu.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Launcher {
     pub clips: BTreeMap<(u32, usize), Slot>,
+    /// The cell a click selected (an audio clip cell: a double click opens it in the panel's clip editor, and the
+    /// selection then drives which sample the editor shows).
+    pub sel: Option<(u32, usize)>,
+    /// The bottom panel's mode ([`Panel`]).
+    pub panel: Panel,
     /// By the track's id: the clip it plays.
     pub playing: BTreeMap<u32, Playing>,
     /// By the track's id: the clip waiting for its grid line (a launch made while the transport runs).
@@ -467,6 +490,8 @@ pub enum Act {
     CycleNextTiming(u32, usize),
     /// Turn the scene's "Override Launch Settings" on / off.
     SceneOverride(usize),
+    /// The clip editor panel's Devices button: the device rack takes the bottom panel back.
+    PanelDevices,
 }
 
 /// The tracks the launcher has a column for, in the mixer's order (`mixer_strip`), so a column sits over the strip
@@ -569,8 +594,18 @@ pub fn scene_name(s: &State, scene: usize) -> String {
 
 /// A clip's name as the text box opens with it (an empty one lets the pattern's name show through).
 pub fn set_clip_name(s: &mut State, track: u32, scene: usize, text: &str) {
+    let text = text.trim();
+    // An audio clip's name is its channel's (the arranger's audio clips rename theirs, and the mixer sees the
+    // same), so the edit lands there and the cell keeps following it; a pattern clip keeps its own name.
+    let audio = s.launcher.clips.get(&(track, scene)).and_then(|sl| sl.audio);
+    if let Some(ch) = audio
+        && let Some(c) = s.project.channels.iter_mut().find(|c| c.index == ch)
+    {
+        c.name = (!text.is_empty()).then(|| text.to_string());
+        return;
+    }
     if let Some(sl) = s.launcher.clips.get_mut(&(track, scene)) {
-        sl.name = (!text.trim().is_empty()).then(|| text.trim().to_string());
+        sl.name = (!text.is_empty()).then(|| text.to_string());
     }
 }
 
@@ -1338,9 +1373,18 @@ pub fn run(app: &mut App, act: Act) {
                 .launcher_click
                 .is_some_and(|((t, sc), at)| t == track && sc == scene && at.elapsed().as_millis() < 450);
             app.launcher_click = if double { None } else { Some(((track, scene), now)) };
-            if double {
-                // An empty slot gets its clip from the double click itself (Bitwig's way of making one), then opens
-                // in the piano roll to be filled.
+            // A click selects the cell: an audio clip's selection drives which sample the panel's clip editor
+            // shows (and a single click on another audio clip retargets it).
+            app.state.launcher.sel = Some((track, scene));
+            let audio = clip(&app.state, track, scene).is_some_and(|sl| sl.audio.is_some());
+            // A double click opens the clip (an audio clip's in the panel's clip editor); an audio clip does
+            // that from a single click too while its editor already stands (`Panel::TeslaClipEditor`).
+            if double || (audio && app.state.launcher.panel == Panel::TeslaClipEditor) {
+                if audio && open_audio_clip(app, track, scene) {
+                    return;
+                }
+                // An empty slot gets its clip from the double click itself (Bitwig's way of making one), then
+                // opens in the piano roll to be filled.
                 if clip(&app.state, track, scene).is_none() {
                     make_clip(app, track, scene);
                 }
@@ -1362,6 +1406,12 @@ pub fn run(app: &mut App, act: Act) {
             set(app, track, scene, next);
         }
         Act::SelectTrack(track) => {
+            // A track's click (header or row) gives the device rack its panel back (§F3): the clip editor stands
+            // only for an audio clip's selection.
+            if app.state.launcher.panel != Panel::DeviceRack {
+                app.state.launcher.panel = Panel::DeviceRack;
+                app.invalidate();
+            }
             // The row's lane is selected in the arrangement; Shift+click extends the selection from the last track
             // clicked (the playlist's own Shift+click range), so several rows are highlighted together.
             if let Some(lane) = lane_of(&app.state, track) {
@@ -1377,6 +1427,10 @@ pub fn run(app: &mut App, act: Act) {
             app.state.launcher.menu = None;
             app.invalidate();
         }
+        Act::PanelDevices => {
+            app.state.launcher.panel = Panel::DeviceRack;
+            app.invalidate();
+        }
         Act::Clear(track, scene) => set(app, track, scene, None),
         Act::Record(track, scene) => record(app, track, scene),
         Act::RenameClip(track, scene) => rename(app, crate::playlist::EditTarget::LauncherClip(track, scene)),
@@ -1387,7 +1441,14 @@ pub fn run(app: &mut App, act: Act) {
             }
         }
         Act::ColorClip(track, scene, color) => {
-            if let Some(sl) = app.state.launcher.clips.get_mut(&(track, scene)) {
+            // An audio clip's colour is its channel's too (as its name is), so the recolour lands there and the
+            // cell keeps following it.
+            let ch = app.state.launcher.clips.get(&(track, scene)).and_then(|sl| sl.audio);
+            if let Some(ch) = ch
+                && let Some(c) = app.state.project.channels.iter_mut().find(|c| c.index == ch)
+            {
+                c.color = color;
+            } else if let Some(sl) = app.state.launcher.clips.get_mut(&(track, scene)) {
                 sl.color = color;
             }
             app.invalidate();
@@ -1478,7 +1539,8 @@ pub fn add_audio(app: &mut App, path: &str, track: u32, scene: usize) -> String 
     };
     let src = ClipSource::Channel(ch);
     let name = crate::playlist::source_name(&app.state, src);
-    app.state.launcher.clips.insert((track, scene), Slot { pattern: 0, audio: Some(ch), name: Some(name.clone()), ..Default::default() });
+    // The cell's name is left to its channel (`clip_name` follows it, as the arranger's audio clips do).
+    app.state.launcher.clips.insert((track, scene), Slot { pattern: 0, audio: Some(ch), ..Default::default() });
     // The cell may have been the one playing: its track plays the sample now.
     if app.state.launcher.playing.contains_key(&track) {
         let p = crate::rack::play_project(&app.state);
@@ -1497,6 +1559,81 @@ pub fn open(app: &mut App, track: u32, scene: usize) -> bool {
     app.state.project.current_pattern = Some(slot.pattern);
     app.state.piano.dirty = true;
     app.state.raise(crate::app::Win::PianoRoll);
+    app.invalidate();
+    true
+}
+
+/// Double-clicking an audio clip cell (or clicking it while its editor stands) opens its sample in the audio
+/// editor: a Tesla hosted on the clip's audio channel (the channel got a mixer track of its own from
+/// `playlist::audio_channel`, and a track's Edison slots open as Tesla), shown in the panel area where the device
+/// rack goes ([`Panel::TeslaClipEditor`]), like the piano roll opens a pattern clip's notes. The clip's selection
+/// drives which sample the editor shows: every cell's channel keeps its own Tesla, and reopening a cell shows its
+/// track's Tesla as it was (the user's edits stay). False when the slot holds no audio clip.
+pub fn open_audio_clip(app: &mut App, track: u32, scene: usize) -> bool {
+    use crate::plugins::{EDISON_FILE_NAME, TESLA};
+    use tesla::state::{Saved, to_edison};
+    let Some(slot) = clip(&app.state, track, scene).filter(|sl| sl.pattern == 0 && sl.audio.is_some()) else {
+        return false;
+    };
+    let ch = slot.audio.expect("an audio slot's channel");
+    let Some(chan) = app.state.project.channels.iter().find(|c| c.index == ch) else { return false };
+    let Some(path) = chan.sample_path.clone().filter(|p| !p.is_empty()) else { return false };
+    let t = chan.mixer_track;
+    // The clip's channel's track already holds the editor (this cell was opened before, or its Tesla is kept
+    // from an Edison in the project file): its audio is the clip's sample, so it is only shown.
+    let hold = app
+        .state
+        .project
+        .mixer
+        .iter()
+        .find(|m| m.index == t)
+        .and_then(|m| m.slots.iter().position(|sl| sl.as_ref().is_some_and(|sl| sl.name == EDISON_FILE_NAME || sl.name == TESLA)));
+    if hold.is_none() {
+        // A fresh Edison slot on the clip's track, holding the sample: hosting opens it as Tesla with its audio
+        // and recording settings, as a project's Edison slots do. One undo step (`playlist::add_audio_clip_as`
+        // takes one for the channel too, so they undo together).
+        let file = std::path::PathBuf::from(crate::plugins::resolve_sample(&path));
+        let name = file.file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
+        // A WAV keeps its own sample format; other files are decoded as the engine plays them
+        // (`playlist::edit_sample` reads the same way).
+        let sample = match std::fs::read(&file).map_err(|e| e.to_string()).and_then(|b| tesla::wav::read(&b)) {
+            Ok(s) => s,
+            Err(_) => match os_engine::sample::load(&file) {
+                Ok(s) => tesla::sample::Sample::from_channels(s.rate, vec![s.left, s.right], tesla::sample::Format::Float32),
+                Err(e) => {
+                    app.state.message = Some(format!("{name} could not be read: {e}"));
+                    app.invalidate();
+                    return true;
+                }
+            },
+        };
+        let saved = Saved { sample, path: file.to_string_lossy().into_owned(), ..Default::default() };
+        crate::playlist::snapshot_as(&mut app.state, "Clip editor");
+        let Some(m) = app.state.project.mixer.iter_mut().find(|m| m.index == t) else { return false };
+        let Some(k) = m.slots.iter().position(Option::is_none) else {
+            app.state.message = Some("No free effect slot on this track".into());
+            app.invalidate();
+            return true;
+        };
+        m.slots[k] = Some(os_model::SlotPlugin { id: os_model::Id::NONE, name: EDISON_FILE_NAME.into(), state: to_edison(&saved) });
+        m.slot_on[k] = true;
+        m.slot_mix[k] = 1.0;
+        m.slot_cpu[k] = os_model::PluginCpu::default();
+    }
+    app.sync_effects();
+    let slot_k = hold.or_else(|| {
+        app.state
+            .project
+            .mixer
+            .iter()
+            .find(|m| m.index == t)
+            .and_then(|m| m.slots.iter().position(|sl| sl.as_ref().is_some_and(|sl| sl.name == EDISON_FILE_NAME || sl.name == TESLA)))
+    });
+    // The editor's window opens with the panel (the mixer's own "Open audio editor" shows its track's Tesla).
+    if let Some(k) = slot_k {
+        app.state.mixer.pending.push(crate::mixer::FxReq::Show { track: t, slot: k as u8 });
+    }
+    app.state.launcher.panel = Panel::TeslaClipEditor;
     app.invalidate();
     true
 }
@@ -2128,6 +2265,136 @@ mod tests {
         assert!(
             p.arrangements.iter().flat_map(|a| &a.clips).any(|c| c.track == lane && c.source == ClipSource::Channel(ch)),
             "the cell's lane holds the sample"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A sample dropped on a cell, double-clicked: it opens in the audio editor in the device rack's panel area,
+    /// a Tesla hosted on the clip's audio channel with the sample in it; the cell is the selection that drives
+    /// which sample the editor shows (`open_audio_clip`).
+    #[test]
+    fn a_double_click_opens_an_audio_clip_in_tesla() {
+        let dir = std::env::temp_dir().join(format!("ls_launcher_tesla_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("Stab.wav");
+        let tone = tesla::sample::Sample::from_channels(44100, vec![vec![0.25; 4410], vec![-0.25; 4410]], tesla::sample::Format::Int16);
+        std::fs::write(&file, tesla::wav::write(&tone, tesla::wav::Depth::Own)).unwrap();
+        let path = file.to_string_lossy().into_owned();
+
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = app();
+        app.plugins.effects = crate::plugins::builtin_effects();
+        app.state.z = vec![crate::app::Win::Playlist];
+        app.key(&Key::Named(NamedKey::Tab), false, false);
+        let id = columns(&app.state)[0].id;
+        app.paint(&mut c, None);
+        let cell = app.hits.iter().find(|h| h.action == Action::Launcher(Act::Launch(id, 2))).expect("the slot is painted").rect;
+        app.mouse_move(cell.cx(), cell.cy());
+        app.drop_file(std::path::PathBuf::from(&path));
+        let ch = clip(&app.state, id, 2).and_then(|sl| sl.audio).expect("the drop made an audio clip");
+
+        // The double click: two clicks on the same cell within the double-click window.
+        run(&mut app, Act::Launch(id, 2));
+        run(&mut app, Act::Launch(id, 2));
+        assert_eq!(app.state.launcher.panel, Panel::TeslaClipEditor, "the clip editor takes the rack's panel");
+        assert_eq!(app.state.launcher.sel, Some((id, 2)), "the cell is the selection");
+        assert_eq!(playing(&app.state, id), Some(2), "the first click launched it, as any clip's does");
+
+        // A Tesla on the clip's audio channel's track, holding the sample (the Edison-slot hosting path).
+        let t = app.state.project.channels.iter().find(|c| c.index == ch).expect("the channel").mixer_track;
+        // The slot keeps its Edison name (the file's Edison is kept, whose state Tesla writes back; the track
+        // shows Tesla's name through `mixer::slot_name`).
+        let k = app.state.project.mixer.iter().find(|m| m.index == t).and_then(|m| m.slots.iter().position(|sl| sl.as_ref().is_some_and(|sl| sl.name == crate::plugins::EDISON_FILE_NAME))).expect("the track holds the audio editor");
+        let key = crate::plugins::fx_key(t, k as u8);
+        assert!(app.plugins.hosted.contains_key(&key), "the track's Tesla is hosted");
+        let back = tesla::state::from_edison(&app.plugins.edison_file_state(key).expect("an Edison state")).expect("a Tesla state");
+        assert_eq!((back.sample.frames(), back.sample.channels(), back.path.as_str()), (4410, 2, path.as_str()));
+        assert!(
+            app.state.mixer.pending.iter().any(|r| matches!(r, crate::mixer::FxReq::Show { track, slot } if *track == t && *slot as usize == k)),
+            "the editor's window opens with the panel"
+        );
+        // And the device rack is out of the panel while the editor stands.
+        assert!(!rack_visible(&app.state));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A single click on an audio clip cell selects it (it launches too, as a press does) but opens nothing: the
+    /// editor stands only from a double click. Another cell's click moves the selection.
+    #[test]
+    fn a_single_click_selects_a_launcher_cell() {
+        let dir = std::env::temp_dir().join(format!("ls_launcher_sel_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("Tick.wav");
+        let tone = tesla::sample::Sample::from_channels(44100, vec![vec![0.5; 2205]], tesla::sample::Format::Int16);
+        std::fs::write(&file, tesla::wav::write(&tone, tesla::wav::Depth::Own)).unwrap();
+        let path = file.to_string_lossy().into_owned();
+
+        let mut app = app();
+        let id = columns(&app.state)[0].id;
+        add_audio(&mut app, &path, id, 2);
+        assert_eq!(app.state.launcher.sel, None, "nothing is selected before a click");
+        run(&mut app, Act::Launch(id, 2));
+        assert_eq!(app.state.launcher.sel, Some((id, 2)), "the click selects the cell");
+        assert_eq!(app.state.launcher.panel, Panel::DeviceRack, "a single click opens nothing");
+        assert_eq!(playing(&app.state, id), Some(2), "the click launches as before");
+        // A click on another cell moves the selection (a different cell is not a double click).
+        run(&mut app, Act::Launch(id, 3));
+        assert_eq!(app.state.launcher.sel, Some((id, 3)));
+        assert_eq!(app.state.launcher.panel, Panel::DeviceRack);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Clicking a track (header or row) gives the device rack its panel back: the clip editor stands only for an
+    /// audio clip's selection.
+    #[test]
+    fn selecting_a_track_gives_the_device_rack_back() {
+        let dir = std::env::temp_dir().join(format!("ls_launcher_rack_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("Hit.wav");
+        let tone = tesla::sample::Sample::from_channels(44100, vec![vec![0.5; 2205]], tesla::sample::Format::Int16);
+        std::fs::write(&file, tesla::wav::write(&tone, tesla::wav::Depth::Own)).unwrap();
+        let path = file.to_string_lossy().into_owned();
+
+        let mut app = app();
+        let cols = columns(&app.state);
+        let id = cols[0].id;
+        add_audio(&mut app, &path, id, 2);
+        run(&mut app, Act::Launch(id, 2));
+        run(&mut app, Act::Launch(id, 2));
+        assert_eq!(app.state.launcher.panel, Panel::TeslaClipEditor);
+        let (other, other_lane) = cols.get(1).map(|c| (c.id, c.lane)).unwrap_or((id, cols[0].lane));
+        run(&mut app, Act::SelectTrack(other));
+        assert_eq!(app.state.launcher.panel, Panel::DeviceRack, "the device rack is back");
+        assert!(rack_visible(&app.state));
+        assert!(crate::playlist::track_selected(&app.state, other_lane), "the track's lane is selected");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// An audio clip cell's rename and recolour land on its channel (as the arranger's audio clips'), so the
+    /// mixer and the Tesla on its track see them; the cell keeps following it.
+    #[test]
+    fn an_audio_clip_rename_and_colour_land_on_its_channel() {
+        let dir = std::env::temp_dir().join(format!("ls_launcher_rename_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("Blip.wav");
+        let tone = tesla::sample::Sample::from_channels(44100, vec![vec![0.5; 2205]], tesla::sample::Format::Int16);
+        std::fs::write(&file, tesla::wav::write(&tone, tesla::wav::Depth::Own)).unwrap();
+        let path = file.to_string_lossy().into_owned();
+
+        let mut app = app();
+        let id = columns(&app.state)[0].id;
+        add_audio(&mut app, &path, id, 2);
+        let ch = clip(&app.state, id, 2).and_then(|sl| sl.audio).expect("an audio clip");
+        set_clip_name(&mut app.state, id, 2, "Zap");
+        assert_eq!(clip_name(&app.state, id, 2), "Zap", "the cell shows the new name");
+        assert_eq!(app.state.project.channels.iter().find(|c| c.index == ch).and_then(|c| c.name.clone()).as_deref(), Some("Zap"), "the channel was renamed");
+        let slot = clip(&app.state, id, 2).expect("the slot");
+        assert_eq!(slot.name, None, "the cell keeps following the channel");
+        run(&mut app, Act::ColorClip(id, 2, Some(os_model::Rgb { r: 255, g: 40, b: 40 })));
+        assert_eq!(
+            app.state.project.channels.iter().find(|c| c.index == ch).and_then(|c| c.color),
+            Some(os_model::Rgb { r: 255, g: 40, b: 40 }),
+            "the channel was recoloured"
         );
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -156,6 +156,9 @@ fn hit_in(ui: &mut Ui, r: Rect, area: Rect, act: Action, hint: &'static str) -> 
 /// Paints the launcher over the Playlist window's rect `r`.
 pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
     let t = ui.t;
+    // The launcher takes the Playlist window whole (as `playlist::paint`): a click in its frame or client area is
+    // the launcher's, not a click through to what is under the window.
+    super::window_body(ui, r);
     let (_, client) = super::framed(ui, s, Win::Playlist, r, "Clip Launcher", 13.0, true);
     ui.c.fill_rect(client, t.s(0x16191b));
     let cols = launcher::columns(s);
@@ -264,6 +267,9 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
         hint.push_str(" - wheel scrolls, Shift for the scenes");
     }
     ui.c.text_clip(fnt(11.0), client.x + 6.0, client.bottom() - 14.0, client.w - 12.0, t.text_dim, &hint);
+    // The launcher leaves the band to the toolbar and the overlays to `paint`: anything after it (the toolbar paints
+    // after the windows) must not stay clipped to the launcher's client (the toolbar once vanished over the launcher).
+    ui.c.pop_clip();
     menu_paint(ui, s);
     edit_paint(ui, s);
 }
@@ -314,6 +320,11 @@ fn slot_paint(ui: &mut Ui, s: &State, c: &launcher::Column, scene: usize, cell: 
             if queued {
                 ui.c.stroke_rrect(cell, 2.0, 2.0, t.accent);
             }
+            // The cell a click selected (the panel's clip editor shows its sample): a thin mark, under the
+            // playing and queued rings (`launcher::Panel`).
+            if s.launcher.sel == Some((c.id, scene)) && !playing && !queued {
+                ui.c.stroke_rrect(cell, 2.0, 1.0, t.text_dim);
+            }
         }
         None => {
             ui.c.fill_rrect(cell, 2.0, if hov { t.s(0x242a2d) } else { t.s(0x1b1f21) });
@@ -328,6 +339,49 @@ fn slot_paint(ui: &mut Ui, s: &State, c: &launcher::Column, scene: usize, cell: 
     if launcher::recording(s, c.id, scene) {
         ui.c.stroke_rrect(cell, 2.0, 1.5, t.record);
         ui.c.text(fnt(10.0), cell.right() - 10.0, cell.y + 1.0, t.record, "\u{25cf}");
+    }
+}
+
+/// The bottom panel while the launcher is out and an audio clip's editor stands ([`launcher::Panel`]): where the
+/// device rack goes, the selected clip shows — its name, its sample's peaks — and the Tesla hosted on the clip's
+/// audio channel holds the editing ([`launcher::open_audio_clip`]; its window opens with the panel, as any
+/// plugin's does). ◀ Devices gives the rack its panel back.
+pub fn paint_panel(ui: &mut Ui, s: &State, r: Rect) {
+    let t = ui.t;
+    ui.c.fill_rect(r, t.s(0x16191b));
+    ui.c.fill_rect(Rect::new(r.x, r.y, r.w, 1.0), t.splitter_dark);
+    // The rack comes back from here too (a track's click does the same).
+    let back = Rect::new(r.x + 6.0, r.y + 5.0, 78.0, 19.0);
+    let hov = ui.hit(back, Action::Launcher(Act::PanelDevices), "Back to the device rack");
+    ui.c.fill_rrect(back, 2.0, if hov { t.s(0x2b3134) } else { t.s(0x222629) });
+    ui.c.text(fnt(12.0), back.x + 6.0, back.y + 2.0, t.text, "\u{25c0} Devices");
+    ui.c.text(fnt(13.0), back.right() + 10.0, r.y + 5.0, t.text, "Clip editor");
+    let sel = s.launcher.sel.and_then(|(tr, sc)| launcher::clip(s, tr, sc).map(|sl| (tr, sc, sl)));
+    match sel.filter(|(_, _, sl)| sl.audio.is_some()) {
+        Some((tr, sc, slot)) => {
+            let name = launcher::clip_name(s, tr, sc);
+            ui.c.text_clip(fnt(13.0), back.right() + 96.0, r.y + 5.0, 240.0, t.accent, &name);
+            let sample = slot
+                .audio
+                .and_then(|ch| s.project.channels.iter().find(|c| c.index == ch))
+                .and_then(|c| c.sample_path.clone())
+                .map(|p| {
+                    std::path::Path::new(&p)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or(p)
+                })
+                .unwrap_or_default();
+            let sw = ui.c.text_width(fnt(12.0), &sample);
+            ui.c.text_clip(fnt(12.0), r.right() - 8.0 - sw.min(r.w * 0.4), r.y + 6.0, r.w * 0.4, t.text_dim, &sample);
+            // The sample across the panel's body, the peaks a cell draws, larger.
+            let body = Rect::new(r.x + 8.0, r.y + 34.0, r.w - 16.0, r.h - 42.0);
+            ui.c.fill_rrect(body, 3.0, t.s(0x101315));
+            audio_paint(ui, s, &slot, body, t.s(0x9fc5dc));
+        }
+        None => {
+            ui.c.text(fnt(13.0), back.right() + 96.0, r.y + 5.0, t.text_dim, "Double-click an audio clip to open it here");
+        }
     }
 }
 

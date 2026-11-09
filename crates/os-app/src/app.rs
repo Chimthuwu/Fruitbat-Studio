@@ -1332,6 +1332,11 @@ impl State {
 
     pub fn hide(&mut self, w: Win) {
         self.z.retain(|&o| o != w);
+        // A popup or type-in box opened on `w`'s surface (a detached window's) goes with the window: a stale
+        // `overlay_on` would keep the main window from painting its own overlays.
+        if self.overlay_on == Some(w) {
+            self.overlay_on = None;
+        }
     }
 
     /// Whether `w` is in front of everything that could cover it: the top window for floating
@@ -6878,7 +6883,12 @@ impl App {
                 return;
             }
             // Right-click on a device tile (header, body or a row): its device menu (Pop out / Remove / ...).
-            _ if crate::device_rack::visible(&self.state) && self.tile_key_at(x, y).is_some() => {
+            // The launcher's clip editor takes the rack's panel while it is out (`launcher::Panel`), so the
+            // rack's tiles answer only while it is the rack there.
+            _ if crate::device_rack::visible(&self.state)
+                && crate::launcher::rack_visible(&self.state)
+                && self.tile_key_at(x, y).is_some() =>
+            {
                 self.state.device_rack_menu = self.tile_key_at(x, y);
                 return self.invalidate();
             }
@@ -7583,7 +7593,10 @@ impl App {
     fn wheel_act(&mut self, dx: f32, dy: f32, shift: bool, ctrl: bool) -> Option<Win> {
         let (x, y) = self.mouse;
         // The device rack's body: the wheel scrolls its chain horizontally (up = left, as the mixer's).
-        if crate::device_rack::visible(&self.state) && !self.state.device_rack_collapsed {
+        if crate::device_rack::visible(&self.state)
+            && crate::launcher::rack_visible(&self.state)
+            && !self.state.device_rack_collapsed
+        {
             let r = crate::views::device_rack::panel_rect(&self.state, self.state.screen.0, self.state.screen.1);
             if crate::views::device_rack::wheel(&mut self.state, r, x, y, dy + dx) {
                 self.invalidate();
@@ -12323,6 +12336,108 @@ mod tests {
             dump(&a, &b);
         }
         assert!(diffs.is_empty(), "{} differing pixels in x {}..{} y {}..{}", diffs.len(), bbox.0, bbox.2, bbox.1, bbox.3);
+    }
+
+    /// The clip launcher keeps the top band: a full repaint with the launcher open paints the same toolbar as the
+    /// arrangement's, a click's partial repaint matches a full one, and a hover's band repaint still matches (the
+    /// toolbar once vanished over launcher clicks).
+    #[test]
+    fn launcher_click_repaint_matches_full() {
+        let Ok(mut a) = Canvas::new(1920, 1080, 1.0) else { return }; // no system font: skip
+        let mut b = Canvas::new(1920, 1080, 1.0).unwrap();
+        let mut app = App::new(None);
+        app.state.project = test_project();
+        app.state.project.linear_mode = true;
+        use crate::track_links::Mode;
+        crate::playlist::run(&mut app, crate::playlist::Cmd::TrackMode(0, Mode::LinearMidi));
+        crate::playlist::run(&mut app, crate::playlist::Cmd::TrackMode(1, Mode::LinearMidi));
+        app.state.launcher_open = true;
+        let track = crate::launcher::columns(&app.state)[0].id;
+        crate::launcher::run(&mut app, crate::launcher::Act::Set(track, 0));
+        crate::launcher::run(&mut app, crate::launcher::Act::Set(track, 2));
+        frame(&mut app, &mut a, None);
+        let band_top = views::work_y(&app.state) as usize * 1920;
+        let band = |c: &Canvas| {
+            let p = c.pixmap.data();
+            (0..band_top).map(|i| p[i]).collect::<Vec<_>>()
+        };
+        let band_launcher = band(&a);
+        // The launcher's click target, from the launcher paint's hits (`take` below swaps them out).
+        let cell = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::Launcher(crate::launcher::Act::Launch(_, _))))
+            .map(|h| h.rect)
+            .expect("a launcher cell");
+        // The same state in the arrangement: the toolbar must come out identical.
+        app.state.launcher_open = false;
+        frame(&mut app, &mut b, None);
+        app.state.launcher_open = true;
+        let band_arranged = band(&b);
+        assert_eq!(band_launcher, band_arranged, "the top band changed with the launcher open");
+
+        app.mouse_move(cell.cx(), cell.cy());
+        app.mouse_down();
+        app.mouse_up();
+        let d = app.take_damage();
+        frame_damage(&mut app, &mut a, d);
+        frame(&mut app, &mut b, None);
+        assert_same(&a, &b, "launcher click");
+
+        // Hovering a cell repaints its look (and the hint band); still matches a full repaint.
+        let cell = app
+            .hits
+            .iter()
+            .find(|h| matches!(h.action, Action::Launcher(crate::launcher::Act::Launch(_, _))))
+            .map(|h| h.rect)
+            .expect("a launcher cell");
+        app.mouse_move(cell.right() - 2.0, cell.cy());
+        let d = app.take_damage();
+        frame_damage(&mut app, &mut a, d);
+        frame(&mut app, &mut b, None);
+        assert_same(&a, &b, "launcher hover");
+    }
+
+    /// A browser context menu with the launcher open paints over the browser and survives partial repaints: it is
+    /// visible in a full frame, and a repaint whose damage covers the browser under it still matches a full one.
+    #[test]
+    fn browser_menu_survives_launcher_repaints() {
+        let Ok(mut a) = Canvas::new(1920, 1080, 1.0) else { return }; // no system font: skip
+        let mut b = Canvas::new(1920, 1080, 1.0).unwrap();
+        let mut c = Canvas::new(1920, 1080, 1.0).unwrap();
+        let mut app = App::new(None);
+        app.state.launcher_open = true;
+        app.state.show_browser = true;
+        app.state.playlist.popup =
+            Some(crate::playlist::Popup { x: 40.0, y: 300.0, items: vec![crate::playlist::PItem::new("Rename clip", crate::playlist::Cmd::Nothing)], sub: None, scroll: [0, 0] });
+        frame(&mut app, &mut a, None);
+        frame(&mut app, &mut b, None);
+        assert_same(&a, &b, "full with popup");
+        // Without the menu the same frame must differ under it, so the check below can tell painted from absent.
+        app.state.playlist.popup = None;
+        frame(&mut app, &mut c, None);
+        let menu = Rect::new(40.0, 300.0, 160.0, 30.0);
+        let band = |c: &Canvas| {
+            let p = c.pixmap.data();
+            let x0 = menu.x as usize;
+            (0..30)
+                .flat_map(|row| (x0..x0 + 160).flat_map(move |x| ((300 + row) * 1920 + x) * 4..((300 + row) * 1920 + x) * 4 + 3))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|i| p[i])
+                .collect::<Vec<_>>()
+        };
+        assert_ne!(band(&a), band(&c), "the browser menu is visible");
+        // A partial repaint over the browser (the menu outside the damage) must keep it.
+        app.state.playlist.popup =
+            Some(crate::playlist::Popup { x: 40.0, y: 300.0, items: vec![crate::playlist::PItem::new("Rename clip", crate::playlist::Cmd::Nothing)], sub: None, scroll: [0, 0] });
+        frame(&mut app, &mut a, Some(Rect::new(0.0, 500.0, 300.0, 200.0)));
+        frame(&mut app, &mut b, None);
+        assert_same(&a, &b, "partial over the browser");
+        // A partial repaint whose damage covers the menu and what is under it must match a full one too.
+        frame(&mut app, &mut a, Some(menu.outset(6.0)));
+        frame(&mut app, &mut b, None);
+        assert_same(&a, &b, "partial over the menu");
     }
 
     /// While playing, only what playback moves is repainted (clock, playheads, the rack's playing step, sounding
