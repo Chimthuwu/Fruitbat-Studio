@@ -851,6 +851,32 @@ impl Plugins {
         self.presets.remove(&key);
     }
 
+    /// Moves hosted instances to new keys (`(from, to)`), keeping each plugin, its parameters, its preset and its
+    /// open editor: a MIDI FX reorder compacts the slots, so several keys shift at once and recreating the instances
+    /// would lose every value they hold. Everything moves out first, so a pair of keys that trade places is safe.
+    pub fn rekey(&mut self, moves: &[(usize, usize)]) {
+        let mut taken: Vec<(usize, Hosted)> = Vec::new();
+        let mut presets: Vec<(usize, std::path::PathBuf)> = Vec::new();
+        for (from, _) in moves {
+            if let Some(h) = self.hosted.remove(from) {
+                taken.push((*from, h));
+            }
+            if let Some(p) = self.presets.remove(from) {
+                presets.push((*from, p));
+            }
+        }
+        for (from, h) in taken {
+            if let Some((_, to)) = moves.iter().find(|(f, _)| *f == from) {
+                self.hosted.insert(*to, h);
+            }
+        }
+        for (from, p) in presets {
+            if let Some((_, to)) = moves.iter().find(|(f, _)| *f == from) {
+                self.presets.insert(*to, p);
+            }
+        }
+    }
+
     /// Keeps the state of the instance under `key`, about to go with its channel or slot, in `stash` by its owner's id.
     pub fn keep(&mut self, key: usize) {
         if let Some(h) = self.hosted.remove(&key) {
@@ -1045,7 +1071,8 @@ impl Plugins {
                         .filter(|t| !t.is_empty())
                         .unwrap_or_else(|| format!("{:.0}%", value * 100.0)),
                 };
-                RackParam { id: i.id, name: i.name, group: i.group, value, text, toggle: i.steps == 1 }
+                let plain = i.min + (i.max - i.min) * value;
+                RackParam { id: i.id, name: i.name, group: i.group, value, plain, min: i.min, max: i.max, text, toggle: i.steps == 1 }
             })
             .collect()
     }

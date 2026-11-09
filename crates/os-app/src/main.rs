@@ -43,6 +43,7 @@ mod cpu;
 mod data_folder;
 mod device;
 mod device_rack;
+mod rack_ui;
 mod launcher;
 mod midi_fx;
 mod note_fx;

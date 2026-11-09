@@ -64,6 +64,13 @@ lemon-note-repeats = { path = "../../plugins/lemon-note-repeats", features = ["l
 lemon-note-filter = { path = "../../plugins/lemon-note-filter", features = ["linked"] }
 lemon-random = { path = "../../plugins/lemon-random", features = ["linked"] }
 lemon-strum = { path = "../../plugins/lemon-strum", features = ["linked"] }
+# The containers' editors (the rack draws every native plugin's own UI, `src/rack_ui.rs`).
+lemon-note-layer = { path = "../../plugins/lemon-note-layer", features = ["linked"] }
+lemon-note-selector = { path = "../../plugins/lemon-note-selector", features = ["linked"] }
+lemon-audio-layer = { path = "../../plugins/lemon-audio-layer", features = ["linked"] }
+lemon-audio-selector = { path = "../../plugins/lemon-audio-selector", features = ["linked"] }
+# The plugins' shared editor pieces (`simple::Values`, the palettes).
+os-plugkit = { path = "../os-plugkit" }
 winit = "0.30"
 softbuffer = "0.4"
 cpal = "0.18"

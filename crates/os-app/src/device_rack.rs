@@ -26,12 +26,32 @@ use crate::app::{App, Drag, State};
 
 /// Least body height of the rack (its header and splitter aside), in logical px.
 pub const MIN_H: f32 = 96.0;
-/// The height the rack opens at, and what a double click on its splitter gives back.
-pub const DEFAULT_H: f32 = 224.0;
+/// The height the rack opens at, and what a double click on its splitter gives back: tall enough for a MIDI FX
+/// editor (the tallest is 380 px, the commonest 302) to be drawn at nearly its own size.
+pub const DEFAULT_H: f32 = 336.0;
 /// Header row (title, pin, collapse), and the collapsed rack's whole height.
 pub const HEADER_H: f32 = 23.0;
 /// Width of a device tile (rows stack name above bar, so it stays narrow): 4 tiles fit a 1229 px window.
 pub const TILE_W: f32 = 280.0;
+/// Padding between a tile's edge and the device controls drawn in it.
+pub const TILE_PAD: f32 = 6.0;
+/// The widest a tile grows to show a wide editor 1:1 (wider ones are scaled down).
+pub const TILE_MAX_W: f32 = 560.0;
+
+/// A tile's width: a device whose plugin the rack draws itself (`crate::rack_ui`) gets its editor's width at the
+/// size the rack's body shows it (its natural width where it fits, else scaled down), padded; every other device
+/// keeps [`TILE_W`]. `name` is the device's plugin name, `body_h` the tile's body height (the rack's less its
+/// header), so the tiles reflow when the rack is resized.
+pub fn tile_w(name: &str, body_h: f32) -> f32 {
+    let Some(ui) = crate::rack_ui::ui(name) else { return TILE_W };
+    let (w, h) = ui.size();
+    if w <= 0.0 || h <= 0.0 {
+        return TILE_W;
+    }
+    let fit = ((body_h - 2.0 * TILE_PAD) / h).clamp(0.1, 1.0);
+    let cap = ((TILE_MAX_W - 2.0 * TILE_PAD) / w).min(1.0);
+    (w * fit.min(cap) + 2.0 * TILE_PAD).max(180.0)
+}
 
 /// Whether the rack shows at all: Linear mode only (Classic mode = zero visual change).
 pub fn visible(s: &State) -> bool {
@@ -102,6 +122,12 @@ pub struct RackParam {
     pub group: String,
     /// The normalized value, 0..=1.
     pub value: f64,
+    /// The same value in the plugin's own unit (`min + (max - min) * value`): what the parts of an editor that read
+    /// plain values use — a selector's row, a switch, the reverb's room visual.
+    pub plain: f64,
+    /// The plugin's plain range for the parameter.
+    pub min: f64,
+    pub max: f64,
     /// The plugin's own text for the value ("Mixolydian", "+0 st", "On").
     pub text: String,
     /// A two-state parameter: drawn as a switch, not a dial.
@@ -338,9 +364,12 @@ pub enum RackAct {
     Reorder { from: usize, to: usize },
     /// An overflow stepper (the header's ‹ ›): scroll the chain by one tile (negative = left).
     ScrollBy(f32),
-    /// A tile body's parameter row: set the parameter `id` of the instance under `key` to normalized `v`
-    /// (a click, or a drag's move, on a value bar).
+    /// A tile body's control pressed: set the parameter `id` of the instance under `key` to normalized `v` and drag
+    /// it from there (a dial, a fader, a value bar).
     ParamSet { key: usize, id: u32, v: f64 },
+    /// A tile body's switch, selector row or radio pressed: set the parameter to normalized `v` once, with no drag
+    /// (`None` picks nothing).
+    ParamTap { key: usize, id: u32, v: Option<f64> },
     /// The device menu's Remove: delete the device from its chain.
     Remove(DeviceKind),
     /// The device menu's Replace (the instrument): the device browser, whose instrument pick replaces it.
@@ -466,6 +495,11 @@ pub fn run(app: &mut App, act: RackAct) {
             // drag's move maps y onto a vertical dial drag.
             set_param_value(app, key, id, v);
             app.drag = Some(Drag::DeviceRackParam { key, id, y0: app.mouse.1, v0: v });
+        }
+        RackAct::ParamTap { key, id, v } => {
+            if let Some(v) = v {
+                set_param_value(app, key, id, v);
+            }
         }
         RackAct::Remove(kind) => {
             app.state.device_rack_menu = None;
@@ -654,15 +688,24 @@ pub fn remove_device(app: &mut App, kind: DeviceKind) {
 pub fn sync_embed(app: &mut App) {
     if !visible(&app.state) || app.state.device_rack_collapsed {
         app.state.device_rack_params.clear();
+        app.state.device_rack_names.clear();
         app.state.device_rack_tile_scroll.clear();
+        app.state.rack_ui_cache.borrow_mut().retain(&[]);
         return;
     }
     // Every device tile's instance, hosted or built-in: its parameter list is read straight off the instance, so a
     // tile never needs its editor opened to show (and set) its controls.
     let keys = crate::views::device_rack::device_keys(&app.state);
     app.state.device_rack_tile_scroll.retain(|k, _| keys.contains(k));
+    app.state.rack_ui_cache.borrow_mut().retain(&keys);
     let mut params = std::collections::BTreeMap::new();
+    let mut names = std::collections::BTreeMap::new();
     for &key in &keys {
+        // The hosted plugin's own name, so the tile finds the editor it draws (a slot's stored title may be the
+        // FL plugin's, "Fruity Filter").
+        if let Some(d) = app.plugins.descriptor(key) {
+            names.insert(key, d.name);
+        }
         let prev = app.state.device_rack_params.get(&key).cloned().unwrap_or_default();
         let rows = app.plugins.rack_controls(key, &prev);
         if !rows.is_empty() {
@@ -670,6 +713,7 @@ pub fn sync_embed(app: &mut App) {
         }
     }
     app.state.device_rack_params = params;
+    app.state.device_rack_names = names;
 }
 
 #[cfg(test)]
@@ -1596,6 +1640,43 @@ mod tests {
             assert!(hit, "{}: no painted control hit", d.name);
         }
         assert!(midi_fx >= crate::midi_fx::SLOTS, "every MIDI FX slot is a tile ({midi_fx})");
+    }
+
+    /// A MIDI FX tile draws its plugin's own editor (`crate::rack_ui`): its panels' controls, each painted on the
+    /// tile (the live dials, switches and selectors), and the tile is as wide as that editor instead of the generic
+    /// width.
+    #[test]
+    fn a_midi_fx_tile_draws_its_plugins_own_editor() {
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = full_chain_app();
+        app.paint(&mut c, None);
+        let (d, tile) = crate::views::device_rack::tiles(&app.state)
+            .into_iter()
+            .find(|(d, _)| matches!(d.kind, DeviceKind::MidiFx(_)))
+            .expect("a MIDI FX tile");
+        let key = d.key.unwrap();
+        let name = app.state.device_rack_names.get(&key).expect("the hosted plugin's name");
+        let editor = crate::rack_ui::ui(name).unwrap_or_else(|| panic!("{name} has an editor"));
+        let params = &app.state.device_rack_params[&key];
+        let hits: Vec<_> = app
+            .hits
+            .iter()
+            .filter(|h| {
+                matches!(h.action, Action::DeviceRack(RackAct::ParamSet { key: k, .. } | RackAct::ParamTap { key: k, .. }) if k == key)
+            })
+            .collect();
+        assert!(
+            hits.len() >= editor.settings().len(),
+            "{name}: {} of its {} controls are painted",
+            hits.len(),
+            editor.settings().len()
+        );
+        for h in &hits {
+            assert!(tile.contains(h.rect.cx(), h.rect.cy()), "{name}: {:?} is outside its tile {tile:?}", h.rect);
+        }
+        let (w, _) = editor.size();
+        assert!(tile.w > TILE_W && tile.w <= w + 2.0 * TILE_PAD + 1.0, "{name}: tile {} for a {w} px editor", tile.w);
+        assert!(params.iter().any(|p| p.plain != 0.0 || p.min != 0.0 || p.max != 0.0), "plain ranges reach the tile");
     }
 
     /// A MIDI FX tile draws every one of its controls — the rack used to cap a tile at eight, so a device's later

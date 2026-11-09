@@ -1121,6 +1121,12 @@ pub struct State {
     pub device_rack_params: std::collections::BTreeMap<usize, Vec<crate::device_rack::RackParam>>,
     /// How far each tile's control grid is scrolled up, by key (only tiles whose controls overflow scroll).
     pub device_rack_tile_scroll: std::collections::BTreeMap<usize, f32>,
+    /// The hosted plugin's own name per device key: what the tile looks up to draw the plugin's editor
+    /// (`crate::rack_ui`), where the device's title may be the FL plugin's ("Fruity Filter" for Lemon Filter).
+    pub device_rack_names: std::collections::BTreeMap<usize, String>,
+    /// The tiles' rendered plugin editors, by device key (`crate::rack_ui::Cache`): painting has the state by
+    /// reference, so it redraws an editor through here.
+    pub rack_ui_cache: crate::rack_ui::Cell,
     /// The device rack's horizontal scroll (content px): the chain is wider than the panel at times.
     pub device_rack_scroll_x: f32,
     /// The clip launcher (Bitwig-style, `crate::launcher`): its grid and which scene each track plays.
@@ -1585,6 +1591,8 @@ impl App {
                 device_rack_split_click: None,
                 device_rack_params: Default::default(),
                 device_rack_tile_scroll: Default::default(),
+                device_rack_names: Default::default(),
+                rack_ui_cache: Default::default(),
                 device_rack_scroll_x: 0.0,
                 launcher: Default::default(),
                 launcher_open: false,

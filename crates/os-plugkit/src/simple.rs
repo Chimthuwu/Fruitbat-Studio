@@ -309,49 +309,81 @@ impl Logic {
 
     /// Paints the editor; `hint` is drawn when the host does not show it.
     pub fn paint(&mut self, c: &mut Canvas, _t: &Palette, hint: &str) {
-        let (w, h) = c.size();
-        c.begin_frame(None);
-        c.clear(plug::BG);
-        let info = self.info;
-        let bs = blocks(info, w, h);
-        self.hits.clear();
-        for b in &bs {
-            let panel = Rect::new(b.cx - CELL_W / 2.0 + 4.0, b.cy - KNOB_H / 2.0 + 4.0, CELL_W - 8.0, KNOB_H - 8.0);
-            lemon::plug_panel(c, panel);
-            // The hit area covers the panel.
-            self.hits.push((panel, b.id.to_string()));
-            let pressed = self.view.pressed.as_deref() == Some(b.id);
-            let hover = !pressed && self.view.pressed.is_none() && self.view.mouse.is_some_and(|(x, y)| panel.contains(x, y));
-            let st = State { hover, pressed, ..State::NORMAL };
-            // The caption above (the setting's name) and the value text below.
-            c.text(LABEL, panel.x + 8.0, panel.y + 5.0, plug::DIM, b.name);
-            if b.toggle {
-                let on = self.vals.plain(b.id) > 0.5;
-                lemon::toggle(c, b.cx, b.cy, on, State { on, ..st });
-            } else {
-                lemon::dial(c, b.cx, b.cy, DIAL_R, 2.8, self.vals.norm(b.id), false, brand::MAIN, st);
-            }
-            let vt = self.vals.text(b.id);
-            let ink = if pressed || hover { brand::TEXT } else { plug::OFF };
-            c.text_center(LABEL, Rect::new(panel.x, panel.bottom() - 18.0, panel.w, 14.0), ink, &vt);
-        }
-        // The foot: the hint well at the left and the wordmark at the right.
-        let foot_c = h - FOOT / 2.0 - 4.0;
-        let mark_w = lemon::spaced_width(c, MARK_BIG, info.mark, 2.0);
-        let lemon_w = lemon::spaced_width(c, MARK_SMALL, "LEMON", 2.5);
-        let bx = (w - 12.0 - mark_w).round();
-        let (lh_b, lh_s) = (c.line_height(MARK_BIG), c.line_height(MARK_SMALL));
-        lemon::spaced(c, MARK_BIG, bx, (foot_c - lh_b / 2.0).round(), plug::WORDMARK, info.mark, 2.0);
-        let sx = (bx - 8.0 - lemon_w).round();
-        lemon::spaced(c, MARK_SMALL, sx, (foot_c - lh_s / 2.0).round() + 1.0, brand::MAIN, "LEMON", 2.5);
-        lemon::lemon_mark(c, sx - 14.0, foot_c, 3.5, brand::MAIN);
-        let well = Rect::span(12.0, sx - 26.0, foot_c - 10.0, foot_c + 10.0);
-        lemon::plug_well(c, well, 5.0);
-        if !hint.is_empty() {
-            let lh = c.line_height(HINT);
-            c.text_clip(HINT, well.x + 8.0, (well.cy() - lh / 2.0).round(), well.w - 16.0, brand::TEXT, hint);
-        }
+        self.hits = paint(self.info, c, &self.vals, &self.view, hint);
     }
+}
+
+/// Read access to a simple plugin's values by parameter id: the plugin's own [`Vals`] in its editor window, or the
+/// host's parameter list when the host draws the editor into its own canvas (Lemon Studio's device rack, see
+/// `os-app/src/rack_ui.rs`). Everything the paint path reads goes through here.
+pub trait Values {
+    /// The shown value, 0..=1.
+    fn norm(&self, id: &str) -> f32;
+    /// The value in the parameter's own unit (a switch's 0 / 1, a choice's index).
+    fn plain(&self, id: &str) -> f32;
+    /// The text the plugin shows for the value ("Mixolydian", "+0 st").
+    fn text(&self, id: &str) -> String;
+}
+
+impl Values for Vals {
+    fn norm(&self, id: &str) -> f32 {
+        Vals::norm(self, id)
+    }
+    fn plain(&self, id: &str) -> f32 {
+        Vals::plain(self, id)
+    }
+    fn text(&self, id: &str) -> String {
+        Vals::text(self, id)
+    }
+}
+
+/// The editor's painting, over any value source: one panel per parameter (its caption, a dial or a switch and the
+/// value text), the hint well and the wordmark along the foot. Returns the panels' hit regions (the panel, the
+/// parameter id) in the canvas's logical px. The canvas is cleared, so it has to be the editor's own: the window's, or
+/// an offscreen one the host blits into its tile.
+pub fn paint(info: &'static Info, c: &mut Canvas, vals: &dyn Values, view: &ViewState, hint: &str) -> Vec<(Rect, String)> {
+    let (w, h) = c.size();
+    c.begin_frame(None);
+    c.clear(plug::BG);
+    let bs = blocks(info, w, h);
+    let mut hits = Vec::with_capacity(bs.len());
+    for b in &bs {
+        let panel = Rect::new(b.cx - CELL_W / 2.0 + 4.0, b.cy - KNOB_H / 2.0 + 4.0, CELL_W - 8.0, KNOB_H - 8.0);
+        lemon::plug_panel(c, panel);
+        // The hit area covers the panel.
+        hits.push((panel, b.id.to_string()));
+        let pressed = view.pressed.as_deref() == Some(b.id);
+        let hover = !pressed && view.pressed.is_none() && view.mouse.is_some_and(|(x, y)| panel.contains(x, y));
+        let st = State { hover, pressed, ..State::NORMAL };
+        // The caption above (the setting's name) and the value text below.
+        c.text(LABEL, panel.x + 8.0, panel.y + 5.0, plug::DIM, b.name);
+        if b.toggle {
+            let on = vals.plain(b.id) > 0.5;
+            lemon::toggle(c, b.cx, b.cy, on, State { on, ..st });
+        } else {
+            lemon::dial(c, b.cx, b.cy, DIAL_R, 2.8, vals.norm(b.id), false, brand::MAIN, st);
+        }
+        let vt = vals.text(b.id);
+        let ink = if pressed || hover { brand::TEXT } else { plug::OFF };
+        c.text_center(LABEL, Rect::new(panel.x, panel.bottom() - 18.0, panel.w, 14.0), ink, &vt);
+    }
+    // The foot: the hint well at the left and the wordmark at the right.
+    let foot_c = h - FOOT / 2.0 - 4.0;
+    let mark_w = lemon::spaced_width(c, MARK_BIG, info.mark, 2.0);
+    let lemon_w = lemon::spaced_width(c, MARK_SMALL, "LEMON", 2.5);
+    let bx = (w - 12.0 - mark_w).round();
+    let (lh_b, lh_s) = (c.line_height(MARK_BIG), c.line_height(MARK_SMALL));
+    lemon::spaced(c, MARK_BIG, bx, (foot_c - lh_b / 2.0).round(), plug::WORDMARK, info.mark, 2.0);
+    let sx = (bx - 8.0 - lemon_w).round();
+    lemon::spaced(c, MARK_SMALL, sx, (foot_c - lh_s / 2.0).round() + 1.0, brand::MAIN, "LEMON", 2.5);
+    lemon::lemon_mark(c, sx - 14.0, foot_c, 3.5, brand::MAIN);
+    let well = Rect::span(12.0, sx - 26.0, foot_c - 10.0, foot_c + 10.0);
+    lemon::plug_well(c, well, 5.0);
+    if !hint.is_empty() {
+        let lh = c.line_height(HINT);
+        c.text_clip(HINT, well.x + 8.0, (well.cy() - lh / 2.0).round(), well.w - 16.0, brand::TEXT, hint);
+    }
+    hits
 }
 
 /// A ready [`Editor`](nih_plug::prelude::Editor) for a `simple` plugin: holds its [`Info`] and the params + live

@@ -76,22 +76,27 @@ pub fn reorder(app: &mut App, track: u32, from: usize, to: usize) {
     if from >= filled.len() {
         return;
     }
-    let old_slot = filled[from].0;
-    let mut order: Vec<Slot> = filled.into_iter().map(|(_, sl)| sl).collect();
+    let mut order = filled;
     let moving = order.remove(from);
     let to = to.min(order.len());
-    let moving_index = moving.index;
     order.insert(to, moving);
     {
         let v = app.state.midi_fx.entry(track).or_default();
+        v.clear();
         v.resize(SLOTS, None);
-        for (i, sl) in order.iter().enumerate() {
+        for (i, (_, sl)) in order.iter().enumerate() {
             v[i] = Some(sl.clone());
         }
     }
-    // The moved instance re-hosts under its new slot's key (the old key's editor window goes with it).
-    app.plugins.drop_key(crate::plugins::midi_fx_key(track, old_slot));
-    let _ = app.plugins.create_midi_fx(track, to, moving_index, None);
+    // Every instance follows its slot's new key. Compacting the slots shifts all of them, so re-hosting only the
+    // moved plugin left the others with no instance — their tiles read "No parameters to show" and their editors
+    // went blank. `rekey` keeps the plugin objects, so parameters and open editors survive the move.
+    let moves: Vec<(usize, usize)> = order
+        .iter()
+        .enumerate()
+        .map(|(i, (old, _))| (crate::plugins::midi_fx_key(track, *old), crate::plugins::midi_fx_key(track, i)))
+        .collect();
+    app.plugins.rekey(&moves);
     app.invalidate();
 }
 
@@ -129,5 +134,52 @@ pub fn info(s: &crate::app::State, key: usize) -> Option<crate::plugin_window::C
 pub fn toggle(app: &mut crate::app::State, track: u32, slot: usize) {
     if let Some(Some(sl)) = app.midi_fx.get_mut(&track).and_then(|v| v.get_mut(slot)) {
         sl.on = !sl.on;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A rack with a MIDI track that hosts two MIDI FX, the first holding a parameter value of its own.
+    fn app_with_fx() -> (App, u32) {
+        let mut app = App::new(None);
+        app.state.project = crate::app::test_project();
+        app.state.project.linear_mode = true;
+        // The built-ins, as the app has them (a bare `App::new` has not scanned any plugin yet).
+        app.plugins = crate::plugins::Plugins::builtins();
+        app.state.plugdb.rebuild(&app.plugins);
+        crate::playlist::run(&mut app, crate::playlist::Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi));
+        let track = app.state.project.tracks.last().expect("a MIDI track").id.0;
+        let at = |name: &str| app.plugins.midi_fx.iter().position(|a| a.desc.name == name).expect(name);
+        let (arp, trans) = (at(crate::note_fx::LEMON_ARP), at(crate::note_fx::LEMON_TRANSPOSE));
+        assert!(add(&mut app, track, None, arp).is_none());
+        assert!(add(&mut app, track, None, trans).is_none());
+        (app, track)
+    }
+
+    /// Reordering keeps every instance with its own slot: the compaction shifts all the keys, so the plugins that
+    /// did not move need their instances moved too (only the dragged one used to be re-hosted, leaving the rest
+    /// with "No parameters to show"). Values survive, because the plugin objects are moved, not recreated.
+    #[test]
+    fn reordering_keeps_each_plugins_parameters() {
+        let (mut app, track) = app_with_fx();
+        let key0 = crate::plugins::midi_fx_key(track, 0);
+        let key1 = crate::plugins::midi_fx_key(track, 1);
+        let id = app
+            .plugins
+            .param_infos(key0)
+            .iter()
+            .find(|p| !p.read_only && !p.hidden && p.steps != 1)
+            .map(|p| p.id)
+            .expect("the arpeggiator has a dial");
+        assert!(app.plugins.set_param(key0, id, 0.25));
+        reorder(&mut app, track, 0, 1);
+        assert!(app.plugins.param_infos(key1).iter().any(|p| p.id == id), "the arpeggiator answers at its new key");
+        assert_eq!(info(&app.state, key1).map(|i| i.name), Some(crate::note_fx::LEMON_ARP.to_string()), "the arp moved");
+        assert_eq!(info(&app.state, key0).map(|i| i.name), Some(crate::note_fx::LEMON_TRANSPOSE.to_string()), "the other took slot 0");
+        assert_eq!(app.plugins.param_value(key1, id), Some(0.25), "the moved plugin kept its value");
+        assert!(!app.plugins.rack_controls(key0, &[]).is_empty(), "the other plugin still shows its controls");
+        assert!(!app.plugins.rack_controls(key1, &[]).is_empty(), "and so does the moved one");
     }
 }

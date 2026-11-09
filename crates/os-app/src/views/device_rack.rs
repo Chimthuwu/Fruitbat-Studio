@@ -38,17 +38,33 @@ pub(crate) fn layout(s: &State, r: Rect) -> Vec<(Device, Rect)> {
     device_rack::rack_chain(s)
         .into_iter()
         .scan(body.x - scroll, |x, d| {
-            let tile = Rect::new(*x, body.y, TILE_W, body.h);
-            *x += TILE_W + GAP;
+            let w = tile_width(s, &d, body.h);
+            let tile = Rect::new(*x, body.y, w, body.h);
+            *x += w + GAP;
             Some((d, tile))
         })
         .collect()
 }
 
+/// A tile's width: the width of the plugin editor the tile draws (`device_rack::tile_w`), else [`TILE_W`]. `s` has
+/// the hosted plugin's name per device key (`State::device_rack_names`), which is what the editor is looked up by.
+fn tile_width(s: &State, d: &Device, body_h: f32) -> f32 {
+    device_rack::tile_w(plugin_name(s, d), body_h)
+}
+
+/// The name of the plugin behind a device: the hosted instance's own (`State::device_rack_names`), else the device's
+/// title (a slot may be titled with the FL plugin's name, "Fruity Filter" for Lemon Filter).
+fn plugin_name<'a>(s: &'a State, d: &'a Device) -> &'a str {
+    d.key
+        .and_then(|k| s.device_rack_names.get(&k))
+        .map_or(d.name.as_str(), |n| n.as_str())
+}
+
 /// The chain's content width over a panel `w` wide: every tile plus the gap after it.
 pub(crate) fn content_w(s: &State) -> f32 {
-    let n = device_rack::rack_chain(s).len();
-    n as f32 * (TILE_W + GAP)
+    let r = panel_rect(s, s.screen.0, s.screen.1);
+    let body_h = (r.h - HEADER_H).max(0.0);
+    device_rack::rack_chain(s).iter().map(|d| tile_width(s, d, body_h) + GAP).sum()
 }
 
 /// The rack's horizontal scroll clamped to what the panel's width `w` can show.
@@ -397,6 +413,12 @@ fn controls(ui: &mut Ui, s: &State, d: &Device, body: Rect) {
         ui.c.text_clip(fnt(13.0), body.x + 10.0, body.y + 9.0, body.w - 20.0, t.text_dim, "No device");
         return;
     };
+    // The plugin's own editor, drawn by the app: the same panels, dials, switches and wordmark its window shows
+    // (`crate::rack_ui`). A plugin without a shared editor (an instrument, a third-party plugin) keeps the grid.
+    if let Some(editor) = crate::rack_ui::ui(plugin_name(s, d)) {
+        editor_body(ui, s, key, editor, body);
+        return;
+    }
     let params: &[RackParam] = s.device_rack_params.get(&key).map_or(&[], |v| v.as_slice());
     if params.is_empty() {
         ui.c.text_clip(fnt(13.0), body.x + 10.0, body.y + 9.0, body.w - 20.0, t.text_dim, "No parameters to show");
@@ -426,6 +448,41 @@ fn controls(ui: &mut Ui, s: &State, d: &Device, body: Rect) {
         let len = (track.h * body.h / (body.h + max)).max(14.0);
         let top = track.y + (track.h - len) * (scroll / max);
         ui.c.fill_rect(Rect::new(track.x, top, 3.0, len), t.s(0x4a5358));
+    }
+}
+
+/// A tile body showing the device's own editor: the plugin's UI (`crate::rack_ui`) at its natural aspect, as large
+/// as the body holds it, centred, with every dial, switch and selector of it live on the hosted parameter it names.
+fn editor_body(ui: &mut Ui, s: &State, key: usize, editor: crate::rack_ui::Ui, body: Rect) {
+    let t = ui.t;
+    let params: &[crate::device_rack::RackParam] = s.device_rack_params.get(&key).map_or(&[], |v| v.as_slice());
+    let (ew, eh) = editor.size();
+    if ew <= 0.0 || eh <= 0.0 {
+        return;
+    }
+    // Its largest size inside the body, never above 1:1 (a small editor is not blown up and blurred).
+    let k = ((body.w - 2.0 * PAD) / ew).min((body.h - 2.0 * PAD) / eh).clamp(0.12, 1.0);
+    // Rendered at the app's scale times that: the editor's glyphs are rasterised at the size the tile shows them.
+    let scale = ui.c.scale();
+    let Some(img) = crate::rack_ui::image(s, key, editor.name(), params, k * scale) else {
+        ui.c.text_clip(fnt(13.0), body.x + 10.0, body.y + 9.0, body.w - 20.0, t.text_dim, "This device's editor could not be drawn");
+        return;
+    };
+    let (w, h) = (img.w as f32 / scale, img.h as f32 / scale);
+    let r = Rect::new((body.x + (body.w - w) / 2.0).round(), (body.y + (body.h - h) / 2.0).round(), w, h);
+    ui.c.image(r, img.w, img.h, &img.px);
+    // The editor's controls, in the tile: a dial or fader drags its parameter, a switch or a selector row sets it.
+    let kx = w / ew;
+    let ky = h / eh;
+    for (hr, id, v) in &img.hits {
+        let cell = Rect::new(r.x + hr.x * kx, r.y + hr.y * ky, (hr.w * kx).max(2.0), (hr.h * ky).max(2.0));
+        let p = params.iter().find(|p| p.id == *id);
+        let act = match v {
+            Some(v) => RackAct::ParamTap { key, id: *id, v: Some(*v) },
+            None => RackAct::ParamSet { key, id: *id, v: p.map_or(0.0, |p| p.value) },
+        };
+        let hint = p.map_or_else(|| "Set this parameter".to_string(), |p| format!("{}: {}", p.name, p.text));
+        ui.hit(cell, Action::DeviceRack(act), hint);
     }
 }
 

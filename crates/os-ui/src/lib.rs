@@ -198,6 +198,11 @@ impl Canvas {
         (self.pixmap.width() as f32 / self.scale, self.pixmap.height() as f32 / self.scale)
     }
 
+    /// Device pixels per logical pixel (the DPI scale this canvas paints at).
+    pub fn scale(&self) -> f32 {
+        self.scale
+    }
+
     /// Current clip in logical pixels.
     pub fn clip_rect(&self) -> Rect {
         self.clips.last().copied().unwrap_or_else(|| {
