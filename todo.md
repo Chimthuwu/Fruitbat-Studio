@@ -5,83 +5,49 @@ Full plans with file:line refs in `docs/audit-2026-11-09-device-racks.md`, `-cli
 `-browser-and-tracks.md`. Order below is smoothest first; every step independently shippable.
 
 ### A. Quick launcher/UX fixes
-- [ ] **A1. Per-device wrench.** `RackAct::PopOut(key)`/`Dock(key)` + `device_rack_float` + `pop_out/dock`
+- [x] **A1. Per-device wrench.** `RackAct::PopOut(key)`/`Dock(key)` + `device_rack_float` + `pop_out/dock`
       (device_rack.rs:436/450) already do per-device pop-out — only a button is missing. Add a wrench in
       `tile_paint` (views/device_rack.rs:281, right of the `v` menu) via `header_icon_button` (:551), lit from
       `device_rack_float.contains(key)`. View-only. A *container* tile's wrench opens the docked `Win::Container`
-      instead (its UI isn't a hosted plugin window).
-- [ ] **A2. Duplicate-track launcher bug (root-caused).** `launcher::columns` (launcher.rs:472-498) only shows
-      `os_model::Track` records with `playlist_lane > 0`. Ctrl+T goes through `TrackCreate`/`track_links::insert_linear`
-      (track_links.rs:263) which pushes a `Track`; Ctrl+D → `playlist::duplicate_tracks` (playlist.rs:2207) →
-      `project.track_lane_inserted` (os-model lib.rs:2254) only renumbers — never creates a `Track`. Fix: a
-      `Command::TrackDuplicate` inserting the lane *and* the `Track` in one undo step, and route Ctrl+D through it.
-- [ ] **A3. Device-rack browser order.** `plugin_palette.rs` only: `rack_rows()` (:287) + `rack_section()` (:336).
-      Split into `native_rows`/`third_party_rows` helpers; emit MIDI FX → Lemon instruments → Lemon fx → all
-      third-party (today third-party *instruments* sit between Lemon instruments and Lemon fx). `Entry.builtin`
-      (plugin_db.rs:759) already drives the split; no other file changes.
+      instead (its UI isn't a hosted plugin window). ✅ wave 1 (f42195de)
+- [x] **A2. Duplicate-track launcher bug (root-caused).** ✅ wave 1 (f42195de): `Command::TrackDuplicate`
+      inserts the lane and the `Track` in one undo step; Ctrl+D routed through it.
+- [x] **A3. Device-rack browser order.** ✅ wave 1: MIDI FX → Lemon instruments → Lemon fx → third-party tail.
 
 ### B. Device selection + clipboard
-- [ ] **B1. Tile top bar selectable.** `RackAct::SelectTile` (device_rack.rs:349) and `device_rack_sel`
-      (app.rs:1140) already exist but the view never emits them — wire the click in the top bar (name + on/off
-      button), paint the bar slightly brighter when selected. Ctrl+D duplicates the device (small helper,
-      `midi_fx::duplicate` pattern; instrument tile = no-op, one instrument per track), Ctrl+X/V cuts/pastes into
-      another track/position; removal reuses `remove_device` (:696). Insertion point: rack keyboard block
-      app.rs:7969-8008 (runs before `playlist::key`, wins over the playlist's Ctrl+D). Multi-select: upgrade to a
-      `BTreeSet` using `playlist::track_anchor` (playlist.rs:4316) as the template.
+- [x] **B1. Tile top bar selectable.** ✅ wave 1: SelectTile wired, brightness highlight, Ctrl+D/X/V,
+      BTreeSet multi-select.
 
 ### C. Rack containers (Instrument / Audio FX / MIDI FX racks)
-- [ ] **C1. `DeviceKind::Container`** — the reserved seam (device_rack.rs:14-20) gets its variant; browser
-      insertion reuses `MCmd::AddContainer` + `drop_container_on_rack`'s empty-container creation.
-- [ ] **C2. Ctrl+G groups selected devices** into a rack: reuses `wrap_in_container` (:962) / `wrap_channel`
-      (:1113). `Lemon Container` (container.rs) already plays slot chains through `os_engine::chain::Chain` with
-      wrap/retarget (`Moved::retarget`) — Audio FX Rack and Instrument Rack ride existing engine paths.
+- [x] **C1. `DeviceKind::Container`** — ✅ wave 1: variant implemented; browser insertion via
+      `MCmd::AddContainer` + `drop_container_on_rack`.
+- [x] **C2. Ctrl+G groups selected devices** into a rack — ✅ wave 1 (wrap_in_container/wrap_channel).
 - [ ] **C3. MIDI FX Rack waits for the M9 note-path milestone** — MIDI FX is hosted for UI only; the engine never
       calls its `process()`, so a MIDI FX rack can't pass notes through until that lands.
 
 ### D. Playlist track operations
-- [ ] **D1. Delete deletes selected tracks.** Delete currently kills clips only; track delete is menu-only
-      `Cmd::TrackDelete` → `delete_track()` (playlist.rs:2243, already remaps clips/lanes/linear lanes). New
-      `Cmd::DeleteTracks` collecting `track_selected` rows (pattern: `duplicate_tracks`), deleted bottom-up under
-      one snapshot; guard the Delete key arm behind `track_anchor.is_some()` so clip-Delete is preserved.
-- [ ] **D2. Shift+wheel moves the whole selection.** `shift_tracks` (playlist.rs:2142, routed from app.rs:7845)
-      ignores selection today; add an anchored-range branch moving the block via repeated `swap_tracks`, shifting
-      `track`/`track_anchor` together (Shift+Up/Down gets grouped movement free). ⚠ Don't touch `track_links.rs`
-      — it models mixer/channel links, not visual grouping.
-- [ ] **D3. Ctrl+G groups tracks.** FLP model already supports it: `Track.grouped` ("grouped with track above",
-      os-model lib.rs:2114), leader = nearest ungrouped track above; `Cmd::TrackGroup`/`GroupCollapse` exist,
-      Ctrl+G is unbound (Shift+G/Alt+G are clip grouping). `Cmd::TrackGroupSel` marks each selected lane except
-      its run's leader `grouped = true`; `TrackUngroupSel` on Alt+G.
+- [x] **D1. Delete deletes selected tracks.** ✅ wave 1: `Cmd::DeleteTracks`, bottom-up, one undo snapshot;
+      clip-Delete preserved when no track range is selected.
+- [x] **D2. Shift+wheel moves the whole selection.** ✅ wave 1: anchored-range branch in `shift_tracks`
+      (block move via repeated `swap_tracks`, Shift+Up/Down included). ⚠ `track_links.rs` untouched (mixer links).
+- [x] **D3. Ctrl+G groups tracks / Alt+G ungroups.** ✅ wave 1: `Cmd::TrackGroupSel`/`TrackUngroupSel`
+      on the existing `Track.grouped` leader semantics, FLP round-trip compatible.
 
 ### E. Launcher paint bugs (need a runtime debug pass to confirm)
-- [ ] **E1. Browser context menus behind the browser.** Paint z-order is actually correct (browser at
-      views/mod.rs:203, popups after at :268/:276); browser menus share `s.playlist.popup` (browser.rs:637, :44)
-      painted by `views::playlist::paint_overlays`. Suspected: partial-repaint/keep interaction + the overlay
-      paint gated/duplicated across four call sites. Fix: single unconditional popup-paint site + `overlay_on`
-      lifecycle cleanup + `partial_repaint_matches_full` regression test (harness app.rs:12294).
-- [ ] **E2. Toolbar vanishes on launcher clicks.** Entering the launcher and launcher clicks issue full
-      `invalidate()`s; toolbar paints *after* windows so paint-order is excluded; hover restores it (partial
-      paint). Ranked suspects + decisive test recipe in the audit doc.
-- [ ] Incidental: duplicate client fill at views/launcher.rs:160-161; launcher missing the `window_body` swallow
-      hit that playlist has (views/playlist.rs:65).
+- [x] **E1. Browser context menus behind the browser.** ✅ wave 2 (fd73cb54): consolidated popup-paint site +
+      `overlay_on` lifecycle cleanup; regression test `browser_menu_survives_launcher_repaints`.
+- [x] **E2. Toolbar vanishes on launcher clicks.** ✅ wave 2: toolbar-band clip-leak fix; regression tests
+      `launcher_click_repaint_matches_full` + launcher open/click partial-repaint parity.
+- [x] Incidental: duplicate client fill at views/launcher.rs and the launcher's missing `window_body` swallow
+      hit — ✅ wave 2.
 
 ### F. Clip launcher — audio clips × Tesla (added 2026-11-09)
-- [ ] **Dragging samples/audio into empty launcher cells still doesn't work.** The path exists
-      (`app.rs:4784 App::drop_file` → `app.rs:4841` → `launcher::add_audio` `launcher.rs:1475`, wired from the
-      OS drop at `launcher.rs:2116`) — debug why drops onto cells don't land: check the drag-drop target
-      registration for the launcher view (does `Win::ClipLauncher` receive WM_DROPFILES / the drop event at all,
-      or does the browser/another panel swallow it), whether the cell hit-test under the cursor runs while
-      dragging, and whether `drop_file`'s branch for launcher cells is reached. Add a test driving
-      `drop_file` with a launcher cell under the cursor.
-- [ ] **Double-clicking an audio clip cell opens it in Tesla inside the device-rack area.** While in the
-      Clip Launcher, a single click on an audio clip cell selects it; a double click opens that sample in the
-      Tesla audio editor in the panel area where the device rack goes (like Ableton shows Clip View at the
-      bottom) — mirroring the pattern-clip double click that opens the piano roll. Reuse the Edison-slot
-      hosting path (`app.rs:10299 edison_slots_open_as_tesla`, `plugins/tesla/README.md` "Opening Edison
-      slots") to host Tesla on the clip's audio channel; the clip's selection state should drive which sample
-      Tesla shows (and rename/recolour edits come back, like the arranger's audio clips). Clicking a non-audio
-      clip or a track header returns the device rack. Needs the launcher cell selection state + a
-      bottom-panel mode switch (DeviceRack | TeslaClipEditor) in the view layout.
-- [ ] **Clicking a track (header or row) in the launcher returns the device rack** from the Tesla view.
+- [x] **Dragging samples/audio into empty launcher cells.** ✅ wave 2 (fd73cb54): drop-into-cell fixed with a
+      drop_file regression test.
+- [x] **Double-clicking an audio clip cell opens it in Tesla inside the device-rack area.** ✅ wave 2: single
+      click selects the cell; double click hosts Tesla (Edison-slot path) on the clip's audio channel in the
+      rack area, with rename/recolour write-through — mirroring the pattern-clip double click → piano roll.
+- [x] **Clicking a track (header or row) in the launcher returns the device rack** from the Tesla view. ✅ wave 2.
 
 ## 🎯 Current Session (2026-11-09) — Rack shows the plugins' own UI; the launcher is Bitwig's
 - ✅ **Actual plugin UI in the device-rack tiles.** New `crates/os-app/src/rack_ui.rs`: a hosted plugin's name maps
