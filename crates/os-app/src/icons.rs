@@ -45,6 +45,8 @@ pub enum Icon {
     Browser,
     Project,
     Plug,
+    /// A wrench: a docked device's own editor as a floating window (Tabler's `tool`).
+    Wrench,
     Kick,
     Lock,
     Touch,
@@ -124,6 +126,7 @@ fn shape(icon: Icon) -> &'static TablerIcon {
         Icon::Project => &tb::FILE,
         Icon::Page => &tb::FILE_TEXT,
         Icon::Plug => &tb::PLUG,
+        Icon::Wrench => &tb::TOOL,
         Icon::Kick => &KICK,
         Icon::Lock => &LOCK,
         Icon::Touch => &tb::HAND_FINGER,

@@ -11,6 +11,15 @@
 //! ALT), a next action with its own timing, a name and a colour; a scene may override the launch settings of the
 //! clips it starts. Clips, scenes and track headers are renamed and coloured from their right-click menus.
 //!
+//! ## Recording into a cell
+//!
+//! A clip's menu records into its cell ([`record`]): Record is armed, the cell is the take's target (`Rec::slot`) and
+//! playback starts, so what is played lands in the cell's own clip. An empty cell gets a pattern and a clip of its own
+//! as the first note comes ([`take_pattern`], [`bind_take`]) and shows the clip while it is recorded; one that already
+//! holds a clip records into that clip's pattern. The clip's length is its pattern's (whole bars past the last note),
+//! so it loops like any other clip, and stopping the track or the transport ends the take (`launcher::stop`,
+//! `record::finish_slot_take`).
+//!
 //! ## Clips play independently
 //!
 //! Tracks do not share one pattern any more. While launcher clips run, the project the transport plays is
@@ -297,11 +306,15 @@ impl NextTiming {
     }
 }
 
-/// One clip: the pattern its slot plays (1-based, as `Project::current_pattern` is), the name it was given in the
-/// launcher, its own colour, and its launch parameters.
+/// One clip: the pattern its slot plays (1-based, as `Project::current_pattern` is) or the audio channel it plays, the
+/// name it was given in the launcher, its own colour, and its launch parameters.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Slot {
+    /// The pattern the cell plays; `0` when it holds audio only (`audio`).
     pub pattern: u16,
+    /// The `AudioClip` channel whose sample the cell plays (`ClipSource::Channel`, `playlist::audio_channel`): a
+    /// dropped sample. Its length is the sample's own (`playlist::source_len`), so it follows the tempo.
+    pub audio: Option<u16>,
     pub name: Option<String>,
     pub color: Option<os_model::Rgb>,
     /// The MAIN launch settings (a right-click cycles them).
@@ -388,6 +401,11 @@ pub struct Launcher {
     pub menu: Option<Menu>,
     /// The clip a mouse press launched, for the release gesture (`OnRelease`): (track, scene).
     pub pressed: Option<(u32, usize)>,
+    /// How far the grid's scene columns are scrolled sideways, in content px (0: the first column at the left of the
+    /// cells). The track column and the scene buttons stay put, so it moves the cells only (`views::launcher`).
+    pub scroll_x: f32,
+    /// How far the grid's track rows are scrolled up, in content px (0: the first row under the scene buttons).
+    pub scroll_y: f32,
     /// The transport tick [`advance`] last saw, so the wrap at the looping window's end counts as its grid line.
     last_tick: f64,
 }
@@ -423,6 +441,8 @@ pub enum Act {
     StopAll,
     /// Put the current pattern in the slot, or clear it when it already holds that pattern.
     Set(u32, usize),
+    /// Record into the clip at (track id, scene): what is played lands in the cell (`record::open_take`).
+    Record(u32, usize),
     /// A click on a track's row header: its lane is selected in the arrangement (so the device rack follows it).
     SelectTrack(u32),
     /// A right-click: open the context menu of a clip, a scene or a track.
@@ -501,18 +521,37 @@ pub fn channel_of(s: &State, track: u32) -> Option<u16> {
     s.project.tracks.iter().find(|t| t.id.0 == track)?.channel
 }
 
-/// A clip's name: the one it was given, else its pattern's name.
+/// A clip's name: the one it was given, else its pattern's (or its sample's) name.
 pub fn clip_name(s: &State, track: u32, scene: usize) -> String {
     match clip(s, track, scene) {
-        Some(sl) => sl.name.clone().unwrap_or_else(|| crate::playlist::source_name(s, os_model::ClipSource::Pattern(sl.pattern))),
+        Some(sl) => sl.name.clone().unwrap_or_else(|| crate::playlist::source_name(s, source(&sl))),
         None => String::new(),
     }
 }
 
-/// A clip's colour: its own, else its track's.
+/// What a cell plays, as the playlist names it: its sample's channel for an audio clip, else its pattern.
+pub fn source(slot: &Slot) -> ClipSource {
+    match slot.audio {
+        Some(ch) => ClipSource::Channel(ch),
+        None => ClipSource::Pattern(slot.pattern),
+    }
+}
+
+/// A clip's colour: its own, else its source's (a sample's tint), else its track's.
 pub fn clip_color(s: &State, track: u32, scene: usize) -> Option<os_model::Rgb> {
-    let own = clip(s, track, scene).and_then(|c| c.color);
-    own.or_else(|| lane_of(s, track).and_then(|lane| crate::playlist::track_color(s, lane)))
+    let Some(slot) = clip(s, track, scene) else { return None };
+    slot.color
+        .or_else(|| crate::playlist::clip_tint(s, source(&slot)))
+        .or_else(|| crate::playlist::source_color(s, source(&slot)))
+        .or_else(|| lane_of(s, track).and_then(|lane| crate::playlist::track_color(s, lane)))
+}
+
+/// A cell's own length in ticks: its sample's for an audio clip (`playlist::source_len`), else its pattern's.
+pub fn slot_len(s: &State, slot: &Slot) -> u64 {
+    match slot.audio {
+        Some(ch) => u64::from(crate::playlist::source_len(s, ClipSource::Channel(ch)).max(1)),
+        None => clip_len(s, slot.pattern),
+    }
 }
 
 /// A scene's colour.
@@ -566,6 +605,7 @@ pub fn menu_items(s: &State, target: MenuTarget) -> Vec<(&'static str, String, A
             };
             vec![
                 ("Set current pattern", String::new(), Act::Set(track, scene)),
+                ("Record into this clip", String::new(), Act::Record(track, scene)),
                 // Bitwig's Launch section: each row shows what it holds and a click walks it to the next value.
                 ("Quantize", sl.main.q.name().to_string(), Act::CycleLaunch(track, scene, 0)),
                 ("Play mode", sl.main.play.name().to_string(), Act::CycleLaunch(track, scene, 1)),
@@ -647,7 +687,7 @@ fn waiting(app: &App) -> bool {
     app.transport.playing() && !app.transport.paused()
 }
 
-/// The clip's length in ticks: its pattern's (`Project::pattern_length`).
+/// A pattern's length in ticks (`Project::pattern_length`).
 pub fn clip_len(s: &State, pattern: u16) -> u64 {
     u64::from(s.project.pattern_length(pattern).max(1))
 }
@@ -684,23 +724,26 @@ fn settings(s: &State, track: u32, scene: usize, alt: bool) -> Launch {
 }
 
 /// Puts (track, scene) on the air now, at tick `at`.
-fn play_now(app: &mut App, track: u32, scene: usize, pattern: u16, alt: bool, at: u64) {
+fn play_now(app: &mut App, track: u32, scene: usize, slot: &Slot, alt: bool, at: u64) {
     let previous = app.state.launcher.playing.get(&track).map(|p| p.scene);
     // Bitwig's Play Mode: where in itself the clip starts.
     let play = settings(&app.state, track, scene, alt).play;
-    let len = clip_len(&app.state, pattern);
+    let len = slot_len(&app.state, slot);
     let offset = legato_phase(app, track, play, len);
     let since = at.saturating_sub(offset);
     app.state.launcher.pending.remove(&track);
     app.state.launcher.playing.insert(track, Playing { scene, since, previous });
-    play_pattern(app, pattern);
+    play_cell(app, slot);
 }
 
-/// The clip's pattern becomes the current one, the launcher's mode takes over playback and the transport starts
-/// when it is stopped. The engine's project is rebuilt from the launcher's window (`shadow`).
-fn play_pattern(app: &mut App, pattern: u16) {
-    app.state.pattern = pattern;
-    app.state.project.current_pattern = Some(pattern);
+/// The clip goes on the air: a pattern clip's pattern becomes the current one (`if pattern > 0`: an audio cell has
+/// none), the launcher's mode takes over playback and the transport starts when it is stopped. The engine's project
+/// is rebuilt from the launcher's window (`shadow`).
+fn play_cell(app: &mut App, slot: &Slot) {
+    if slot.pattern > 0 {
+        app.state.pattern = slot.pattern;
+        app.state.project.current_pattern = Some(slot.pattern);
+    }
     if !app.transport.playing() {
         app.act(Action::Play);
     } else {
@@ -716,13 +759,18 @@ pub fn set(app: &mut App, track: u32, scene: usize, pattern: Option<u16>) {
     match pattern {
         Some(p) => {
             let old = clip(&app.state, track, scene);
+            // A cell holding a sample takes the pattern instead of it (`audio: None`).
             app.state.launcher.clips.insert(
                 (track, scene),
-                Slot { pattern: p, ..old.unwrap_or_default() },
+                Slot { pattern: p, audio: None, ..old.unwrap_or_default() },
             );
         }
         None => {
             app.state.launcher.clips.remove(&(track, scene));
+            // A cell a take records into is no clip any more: the take goes with it.
+            if app.state.rec.slot == Some((track, scene)) {
+                app.state.rec.slot = None;
+            }
         }
     }
     // A cleared or replaced slot cannot keep playing.
@@ -730,6 +778,57 @@ pub fn set(app: &mut App, track: u32, scene: usize, pattern: Option<u16>) {
         app.state.launcher.playing.remove(&track);
     }
     app.invalidate();
+}
+
+/// Arms a cell for recording (`Act::Record`): Record is armed, the cell is the take's target and playback starts when
+/// it is stopped, so what is played lands in the cell's clip. A cell with a clip records into that clip's pattern
+/// (over it, as the record options say); an empty one gets a pattern and a clip of its own when the first note comes
+/// ([`take_pattern`], `record::open_take`).
+///
+/// Stopping the transport (or the track, `stop`) ends the take: the clip keeps what it captured, and its length is its
+/// pattern's (whole bars past the last note), so it loops at that length like any other clip.
+pub fn record(app: &mut App, track: u32, scene: usize) {
+    app.state.launcher.menu = None;
+    app.state.launcher.pressed = None;
+    app.state.rec.slot = Some((track, scene));
+    app.state.rec.armed = true;
+    if !app.transport.playing() {
+        app.play_counted_if_armed();
+    }
+    app.invalidate();
+}
+
+/// The pattern a cell's take records into, and whether it was made for the take: the clip's own pattern, or a new empty
+/// one the cell is bound to (so the clip shows on the grid while it is recorded). An empty take leaves the cell empty
+/// again (`record::finish_slot_take`).
+///
+/// A pattern number past every one the project has keeps the take out of the project's own patterns (its notes stay
+/// visible as a clip's, not swapped into the channel rack's pattern).
+pub fn take_pattern(s: &State, track: u32, scene: usize) -> (u16, bool) {
+    // An audio clip has no pattern to record into: the take makes one and the cell takes it instead of the sample.
+    if let Some(sl) = clip(s, track, scene).filter(|sl| sl.audio.is_none()) {
+        return (sl.pattern, false);
+    }
+    (next_pattern(s), true)
+}
+
+/// A pattern number no pattern has: past every one the project has.
+pub fn next_pattern(s: &State) -> u16 {
+    s.project.patterns.iter().map(|p| p.number).max().unwrap_or(0).saturating_add(1).max(1)
+}
+
+/// Makes the pattern [`take_pattern`] named for a cell the take records into, and binds the cell to it.
+pub fn bind_take(s: &mut State, track: u32, scene: usize, pattern: u16) {
+    if !s.project.patterns.iter().any(|p| p.number == pattern) {
+        s.project.patterns.push(os_model::Pattern { number: pattern, ..Default::default() });
+    }
+    s.launcher.clips.insert((track, scene), Slot { pattern, ..Default::default() });
+    s.launcher.playing.remove(&track);
+}
+
+/// Whether a cell is the one a take records into.
+pub fn recording(s: &State, track: u32, scene: usize) -> bool {
+    s.rec.slot == Some((track, scene))
 }
 
 /// Launches (track, scene) with the clip's MAIN launch settings: it waits for the next grid line of its
@@ -755,7 +854,7 @@ fn launch_with(app: &mut App, track: u32, scene: usize, alt: bool) {
         app.invalidate();
         return;
     }
-    play_now(app, track, scene, slot.pattern, alt, app.transport.tick().max(0.0) as u64);
+    play_now(app, track, scene, &slot, alt, app.transport.tick().max(0.0) as u64);
 }
 
 /// The press on a clip was released: Bitwig's "on Release". `Continue` leaves it playing, `Stop` stops the track,
@@ -775,8 +874,12 @@ pub fn release(app: &mut App, track: u32, scene: usize) {
     app.invalidate();
 }
 
-/// Stops a track's clip, and drops one it was waiting to launch.
+/// Stops a track's clip, and drops one it was waiting to launch. Recording into one of its cells ends with it (the
+/// clip keeps what the take captured).
 pub fn stop(app: &mut App, track: u32) {
+    if app.state.rec.slot.is_some_and(|(t, _)| t == track) {
+        app.end_take();
+    }
     app.state.launcher.playing.remove(&track);
     app.state.launcher.pending.remove(&track);
     app.invalidate();
@@ -790,7 +893,7 @@ fn return_to_last(app: &mut App, track: u32) {
             let at = app.transport.tick().max(0.0) as u64;
             let old = playing(&app.state, track);
             app.state.launcher.playing.insert(track, Playing { scene: sc, since: at, previous: old });
-            play_pattern(app, sl.pattern);
+            play_cell(app, &sl);
         }
         None => stop(app, track),
     }
@@ -800,9 +903,9 @@ fn return_to_last(app: &mut App, track: u32) {
 /// scene's launch settings apply when it overrides them.
 pub fn launch_scene(app: &mut App, scene: usize) {
     let cols = columns(&app.state);
-    let clips: Vec<(u32, u16)> = cols
+    let clips: Vec<(u32, Slot)> = cols
         .iter()
-        .filter_map(|c| clip(&app.state, c.id, scene).map(|slot| (c.id, slot.pattern)))
+        .filter_map(|c| clip(&app.state, c.id, scene).map(|slot| (c.id, slot)))
         .collect();
     if clips.is_empty() {
         app.invalidate();
@@ -811,28 +914,31 @@ pub fn launch_scene(app: &mut App, scene: usize) {
     let l = settings(&app.state, clips[0].0, scene, false);
     if waiting(app) {
         let at = next_line(app.transport.tick(), grid_step(&app.state, l));
-        for (track, pattern) in clips {
-            app.state.launcher.pending.insert(track, Pending { scene, pattern, at, alt: false });
+        for (track, slot) in clips {
+            app.state.launcher.pending.insert(track, Pending { scene, pattern: slot.pattern, at, alt: false });
         }
         app.invalidate();
         return;
     }
     let at = app.transport.tick().max(0.0) as u64;
-    let mut first: Option<u16> = None;
-    for (track, pattern) in clips {
+    let mut first: Option<Slot> = None;
+    for (track, slot) in clips {
         let previous = playing(&app.state, track);
         app.state.launcher.pending.remove(&track);
         app.state.launcher.playing.insert(track, Playing { scene, since: at, previous });
-        first.get_or_insert(pattern);
+        first.get_or_insert(slot);
     }
     match first {
-        Some(pattern) => play_pattern(app, pattern),
+        Some(slot) => play_cell(app, &slot),
         None => app.invalidate(),
     }
 }
 
-/// Stops every track, and drops every queued launch.
+/// Stops every track, and drops every queued launch (a take recording into a cell ends with them).
 pub fn stop_all(app: &mut App) {
+    if app.state.rec.slot.is_some() {
+        app.end_take();
+    }
     app.state.launcher.playing.clear();
     app.state.launcher.pending.clear();
     app.invalidate();
@@ -885,7 +991,8 @@ fn advance_at(app: &mut App, tick: f64, running: bool) -> bool {
         app.state.launcher.playing.insert(track, Playing { scene: p.scene, since: at, previous });
         pattern = Some(p.pattern);
     }
-    if let Some(pattern) = pattern {
+    // An audio cell has no pattern to make current (its `pattern` is 0).
+    if let Some(pattern) = pattern.filter(|&p| p > 0) {
         app.state.pattern = pattern;
         app.state.project.current_pattern = Some(pattern);
     }
@@ -906,7 +1013,7 @@ fn next_actions(app: &mut App, tick: f64) -> bool {
             if sl.next == NextAction::None {
                 return None;
             }
-            let len = clip_len(&app.state, sl.pattern);
+            let len = slot_len(&app.state, &sl);
             let at = match sl.next_timing {
                 NextTiming::Loops(n) => p.since + len * u64::from(n.max(1)),
                 NextTiming::After(t) => p.since + t.max(1),
@@ -1051,7 +1158,7 @@ fn follow(app: &mut App, track: u32, current: usize, how: Follow) {
         Some((sc, sl)) => {
             let previous = playing(&app.state, track);
             app.state.launcher.playing.insert(track, Playing { scene: sc, since: at, previous });
-            play_pattern(app, sl.pattern);
+            play_cell(app, &sl);
         }
         None => stop(app, track),
     }
@@ -1099,7 +1206,7 @@ pub fn window(s: &State) -> u64 {
     let mut l = bar;
     for (track, p) in &s.launcher.playing {
         if let Some(sl) = clip(s, *track, p.scene) {
-            l = lcm(l, clip_len(s, sl.pattern));
+            l = lcm(l, slot_len(s, &sl));
         }
     }
     l.min(bar * u64::from(MAX_WINDOW_BARS))
@@ -1128,12 +1235,23 @@ pub fn shadow(s: &State, base: &Project) -> Option<Project> {
     // Number the shadow patterns past every pattern the project has (they must not collide), and build them off the
     // project's own patterns before the arrangement is touched.
     let mut next_no = p.patterns.iter().map(|q| q.number).max().unwrap_or(0).saturating_add(1).max(1);
-    let mut shadows: Vec<(u16, u16, os_model::Pattern, u64, u64)> = Vec::new();
+    // What a playing track puts on its lane: a shadow pattern (with the number it was given) or the sample the cell
+    // plays itself.
+    enum Lane {
+        Pattern(u16, os_model::Pattern),
+        Audio(u16),
+    }
+    let mut shadows: Vec<(u16, u64, u64, Lane)> = Vec::new();
     for (track, now) in s.launcher.playing.clone() {
         let Some(sl) = clip(s, track, now.scene) else { continue };
         let Some(lane) = lane_of(s, track) else { continue };
+        let len = slot_len(s, &sl);
+        // An audio clip is the sample itself: its channel's clip, as the arranger holds it (`ClipSource::Channel`).
+        if let Some(ch) = sl.audio {
+            shadows.push((lane, now.since, len, Lane::Audio(ch)));
+            continue;
+        }
         let channel = channel_of(s, track);
-        let len = clip_len(s, sl.pattern);
         let Some(src) = p.patterns.iter().find(|pat| pat.number == sl.pattern) else { continue };
         let trimmed: Vec<os_model::Note> = src
             .notes
@@ -1150,7 +1268,7 @@ pub fn shadow(s: &State, base: &Project) -> Option<Project> {
         pat.number = no;
         pat.notes = trimmed;
         pat.length = Some(len as u32);
-        shadows.push((lane, no, pat, now.since, len));
+        shadows.push((lane, now.since, len, Lane::Pattern(no, pat)));
     }
     if shadows.is_empty() {
         return None;
@@ -1164,16 +1282,26 @@ pub fn shadow(s: &State, base: &Project) -> Option<Project> {
             arr.tracks.push(os_model::PlaylistTrack::new(n));
         }
     }
-    for (lane, no, pat, since, len) in shadows {
+    for (lane, since, len, what) in shadows {
         // The arrangement's own clips leave this lane: the launcher owns it while its clip plays.
         arr.clips.retain(|c| c.track != lane);
-        p.patterns.push(pat);
+        let source = match what {
+            Lane::Pattern(no, pat) => {
+                p.patterns.push(pat);
+                ClipSource::Pattern(no)
+            }
+            Lane::Audio(ch) => ClipSource::Channel(ch),
+        };
         // From the tick it was launched at, one clip per loop, over the window.
         let mut at = since % w;
         while at < w {
             let length = (w - at).min(len) as u32;
-            let mut clip = Clip::new(at as u32, length, lane, ClipSource::Pattern(no));
+            let mut clip = Clip::new(at as u32, length, lane, source);
             clip.id = os_model::Id::NONE;
+            if let ClipSource::Channel(_) = source {
+                // Gain 1.0, as `playlist::place` gives a new audio clip (spec: flp/events/playlist.md, byte 52).
+                clip.set_gain(1.0);
+            }
             arr.clips.push(clip);
             at += len;
         }
@@ -1210,8 +1338,15 @@ pub fn run(app: &mut App, act: Act) {
                 .launcher_click
                 .is_some_and(|((t, sc), at)| t == track && sc == scene && at.elapsed().as_millis() < 450);
             app.launcher_click = if double { None } else { Some(((track, scene), now)) };
-            if double && open(app, track, scene) {
-                return;
+            if double {
+                // An empty slot gets its clip from the double click itself (Bitwig's way of making one), then opens
+                // in the piano roll to be filled.
+                if clip(&app.state, track, scene).is_none() {
+                    make_clip(app, track, scene);
+                }
+                if open(app, track, scene) {
+                    return;
+                }
             }
             app.state.launcher.pressed = Some((track, scene));
             launch(app, track, scene)
@@ -1227,8 +1362,10 @@ pub fn run(app: &mut App, act: Act) {
             set(app, track, scene, next);
         }
         Act::SelectTrack(track) => {
+            // The row's lane is selected in the arrangement; Shift+click extends the selection from the last track
+            // clicked (the playlist's own Shift+click range), so several rows are highlighted together.
             if let Some(lane) = lane_of(&app.state, track) {
-                app.state.playlist.track = lane;
+                crate::playlist::select_track(&mut app.state, lane, app.shift);
             }
             app.invalidate();
         }
@@ -1241,6 +1378,7 @@ pub fn run(app: &mut App, act: Act) {
             app.invalidate();
         }
         Act::Clear(track, scene) => set(app, track, scene, None),
+        Act::Record(track, scene) => record(app, track, scene),
         Act::RenameClip(track, scene) => rename(app, crate::playlist::EditTarget::LauncherClip(track, scene)),
         Act::RenameScene(scene) => rename(app, crate::playlist::EditTarget::LauncherScene(scene)),
         Act::RenameTrack(track) => {
@@ -1321,8 +1459,39 @@ fn rename(app: &mut App, target: crate::playlist::EditTarget) {
 
 /// Opens (track, scene)'s clip in the piano roll: its pattern becomes the current one and the window comes up. False
 /// when the slot is empty.
+/// Makes an empty clip in a cell — a new pattern of its own — as a double click on an empty slot does, so the grid
+/// makes clips without the menu.
+pub fn make_clip(app: &mut App, track: u32, scene: usize) {
+    let no = next_pattern(&app.state);
+    if !app.state.project.patterns.iter().any(|p| p.number == no) {
+        app.state.project.patterns.push(os_model::Pattern { number: no, ..Default::default() });
+    }
+    app.state.launcher.clips.insert((track, scene), Slot { pattern: no, ..Default::default() });
+    app.invalidate();
+}
+
+/// Drops the sample at `path` into a cell (`App::drop_file`): an audio channel playing it (`playlist::audio_channel`)
+/// and a clip in the cell that plays it, looped at the sample's own length. Returns what to tell the user.
+pub fn add_audio(app: &mut App, path: &str, track: u32, scene: usize) -> String {
+    let Some(ch) = crate::playlist::audio_channel(&mut app.state, path) else {
+        return format!("Cannot read {path} as audio");
+    };
+    let src = ClipSource::Channel(ch);
+    let name = crate::playlist::source_name(&app.state, src);
+    app.state.launcher.clips.insert((track, scene), Slot { pattern: 0, audio: Some(ch), name: Some(name.clone()), ..Default::default() });
+    // The cell may have been the one playing: its track plays the sample now.
+    if app.state.launcher.playing.contains_key(&track) {
+        let p = crate::rack::play_project(&app.state);
+        app.transport.update(&p);
+    }
+    app.state.piano.dirty = true;
+    app.invalidate();
+    format!("{name} in the launcher cell")
+}
+
 pub fn open(app: &mut App, track: u32, scene: usize) -> bool {
-    let Some(slot) = clip(&app.state, track, scene) else { return false };
+    // An audio clip has no pattern to edit (it plays on as it was).
+    let Some(slot) = clip(&app.state, track, scene).filter(|sl| sl.pattern > 0) else { return false };
     app.state.launcher.pending.remove(&track);
     app.state.pattern = slot.pattern;
     app.state.project.current_pattern = Some(slot.pattern);
@@ -1345,6 +1514,29 @@ mod tests {
         crate::playlist::run(&mut app, Cmd::TrackMode(0, Mode::LinearMidi));
         crate::playlist::run(&mut app, Cmd::TrackMode(1, Mode::LinearMidi));
         app
+    }
+
+    /// A click on a track row selects its lane in the arrangement; with Shift held it selects every lane between the
+    /// row clicked last and this one, the same range the arrangement's headers highlight.
+    #[test]
+    fn shift_click_a_track_row_selects_a_range_of_tracks() {
+        let mut app = app();
+        let cols = columns(&app.state);
+        assert!(cols.len() >= 2, "two tracks to range over");
+        let (a, b) = (cols[0].clone(), cols[1].clone());
+        assert_ne!(a.lane, b.lane, "two lanes to range over");
+        run(&mut app, Act::SelectTrack(a.id));
+        assert_eq!(app.state.playlist.track, a.lane);
+        assert!(!crate::playlist::track_selected(&app.state, b.lane), "one row selected alone");
+        app.shift = true;
+        run(&mut app, Act::SelectTrack(b.id));
+        assert_eq!(app.state.playlist.track, b.lane, "the row clicked is the active track");
+        assert!(crate::playlist::track_selected(&app.state, a.lane), "the anchor's row stays selected");
+        assert!(crate::playlist::track_selected(&app.state, b.lane), "and so does the one clicked");
+        // Without Shift the range collapses to the row clicked.
+        app.shift = false;
+        run(&mut app, Act::SelectTrack(a.id));
+        assert!(!crate::playlist::track_selected(&app.state, b.lane));
     }
 
     /// Gives `pattern` a one-step note on `channel` (so a clip of it has something to play).
@@ -1587,6 +1779,7 @@ mod tests {
             labels,
             [
                 "Set current pattern",
+                "Record into this clip",
                 "Quantize",
                 "Play mode",
                 "On release",
@@ -1862,10 +2055,212 @@ mod tests {
         assert!(app.state.shown(crate::app::Win::PianoRoll), "the second click opens it");
         assert_eq!(app.state.pattern, 5, "the clip's own pattern");
         assert_eq!(app.state.project.current_pattern, Some(5));
-        app.state.hide(crate::app::Win::PianoRoll);
-        run(&mut app, Act::Launch(id, 6));
-        run(&mut app, Act::Launch(id, 6));
+    }
+
+    /// An empty slot gets its clip from a double click (not the menu), and opens to be filled.
+    #[test]
+    fn a_double_click_on_an_empty_slot_makes_its_clip() {
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = app();
+        app.state.z = vec![crate::app::Win::Playlist];
+        app.key(&Key::Named(NamedKey::Tab), false, false);
+        let id = columns(&app.state)[0].id;
+        let before = app.state.project.patterns.len();
+        app.paint(&mut c, None);
+        let cell = app
+            .hits
+            .iter()
+            .find(|h| h.action == Action::Launcher(Act::Launch(id, 3)))
+            .expect("the slot is painted")
+            .rect;
+        let at = (cell.cx(), cell.cy());
+        app.mouse_move(at.0, at.1);
+        app.mouse_down();
+        app.mouse_up();
+        assert!(clip(&app.state, id, 3).is_none(), "one click makes nothing");
         assert!(!app.state.shown(crate::app::Win::PianoRoll));
+        app.mouse_down();
+        app.mouse_up();
+        let sl = clip(&app.state, id, 3).expect("the double click made the clip");
+        assert_eq!(app.state.project.patterns.len(), before + 1, "a pattern of its own");
+        assert!(sl.pattern > 0 && app.state.project.patterns.iter().any(|p| p.number == sl.pattern));
+        assert!(app.state.shown(crate::app::Win::PianoRoll), "and it opens to be filled");
+        assert_eq!(app.state.pattern, sl.pattern);
+    }
+
+    /// A sample dropped on a cell becomes an audio clip there: it plays from the cell's lane, looped at the sample's
+    /// own length, and it is no pattern.
+    #[test]
+    fn a_sample_dropped_on_a_cell_plays_from_it() {
+        let dir = std::env::temp_dir().join(format!("ls_launcher_audio_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("Loop.wav");
+        let tone = tesla::sample::Sample::from_channels(44100, vec![vec![0.25; 4410], vec![-0.25; 4410]], tesla::sample::Format::Int16);
+        std::fs::write(&file, tesla::wav::write(&tone, tesla::wav::Depth::Own)).unwrap();
+        let path = file.to_string_lossy().into_owned();
+
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = app();
+        app.state.z = vec![crate::app::Win::Playlist];
+        app.key(&Key::Named(NamedKey::Tab), false, false);
+        let id = columns(&app.state)[0].id;
+        let patterns = app.state.project.patterns.len();
+        app.paint(&mut c, None);
+        let cell = app
+            .hits
+            .iter()
+            .find(|h| h.action == Action::Launcher(Act::Launch(id, 2)))
+            .expect("the slot is painted")
+            .rect;
+        app.mouse_move(cell.cx(), cell.cy());
+        app.drop_file(std::path::PathBuf::from(&path));
+        let sl = clip(&app.state, id, 2).expect("the drop made a clip");
+        let ch = sl.audio.expect("an audio clip");
+        assert_eq!(sl.pattern, 0, "the sample is the clip, there is no pattern");
+        assert_eq!(app.state.project.patterns.len(), patterns);
+        assert_eq!(clip_name(&app.state, id, 2), "Loop", "named after the file");
+        assert_eq!(slot_len(&app.state, &sl), u64::from(crate::playlist::source_len(&app.state, ClipSource::Channel(ch))));
+        assert!(!open(&mut app, id, 2), "there is no pattern to edit");
+        launch(&mut app, id, 2);
+        assert_eq!(playing(&app.state, id), Some(2));
+        let p = shadow(&app.state, &app.state.project).expect("the sample plays");
+        let lane = lane_of(&app.state, id).unwrap();
+        assert!(
+            p.arrangements.iter().flat_map(|a| &a.clips).any(|c| c.track == lane && c.source == ClipSource::Channel(ch)),
+            "the cell's lane holds the sample"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A cell records (`Act::Record`): arming one starts playback, and what is played lands in the cell's own clip —
+    /// an empty cell gets a pattern and a clip of its own as the take opens, and the clip's length is the bars it
+    /// captured, so it loops like any other clip. A cell that already holds a clip records into that clip's pattern.
+    #[test]
+    fn a_cell_records_what_the_armed_track_plays() {
+        use crate::record::{Extra, Opt};
+        use crate::step_edit::Src;
+        crate::prefs::set_check(Opt::Notes.check(), true);
+        crate::prefs::set_check(Opt::Precount.check(), false);
+        crate::prefs::set_check(Opt::QuantizeStart.check(), false);
+        crate::prefs::set_check(Opt::QuantizeEnd.check(), false);
+        let mut app = app();
+        let id = columns(&app.state)[0].id;
+        let channel = channel_of(&app.state, id).expect("the track's channel");
+        let bar = app.state.project.bar_ticks();
+        run(&mut app, Act::Record(id, 2));
+        assert!(recording(&app.state, id, 2) && app.state.rec.armed, "the cell is the take's target");
+        assert!(app.transport.playing(), "playback starts");
+        app.state.rec.count = None;
+        // A note at the take's start, let go a beat later.
+        app.transport.pretend_at(0.0, false);
+        app.record_tick();
+        // No channel given: the cell's track says which one (a clip plays its track's channel's notes).
+        let src = Src::Midi(60);
+        app.record_down_with(src, 60, 100, Extra::default());
+        app.transport.pretend_at(96.0, false);
+        app.record_tick();
+        app.record_up_with(src, None);
+        app.transport.stop();
+        app.record_tick();
+        let sl = clip(&app.state, id, 2).expect("the take made the cell's clip");
+        let notes = app.state.project.pattern(sl.pattern).expect("its pattern").notes.clone();
+        assert_eq!(notes.len(), 1, "the note landed in the cell");
+        assert_eq!((notes[0].position, notes[0].length, notes[0].key), (0, 96, 60), "at the clip's start");
+        assert_eq!(notes[0].channel, channel, "the take's track's channel, whatever is selected");
+        assert_eq!(app.state.project.pattern_length(sl.pattern), bar, "one bar: whole bars past the note");
+        assert!(!recording(&app.state, id, 2), "the take ended with the stop");
+        assert_eq!(app.state.launcher.playing.get(&id), None, "the cell is not on the air yet");
+
+        // A cell that already holds a clip records into that clip's own pattern (over it): no second pattern is made.
+        let patterns = app.state.project.patterns.len();
+        run(&mut app, Act::Record(id, 2));
+        app.state.rec.count = None;
+        app.transport.pretend_at(0.0, false);
+        app.record_tick();
+        app.record_down_with(src, 64, 100, Extra { channel: Some(channel), ..Default::default() });
+        app.transport.pretend_at(96.0, false);
+        app.record_tick();
+        app.record_up_with(src, None);
+        app.transport.stop();
+        app.record_tick();
+        assert_eq!(clip(&app.state, id, 2).map(|c| c.pattern), Some(sl.pattern), "the same clip");
+        assert_eq!(app.state.project.patterns.len(), patterns, "no pattern was made for it");
+        let notes = app.state.project.pattern(sl.pattern).expect("its pattern").notes.clone();
+        assert_eq!(notes.len(), 1, "the new take replaced the old one: {notes:?}");
+        assert_eq!(notes[0].key, 64);
+    }
+
+    /// The grid keeps a least column and row size and scrolls what does not fit: a narrow window scrolls its scene
+    /// columns sideways and a set of many tracks scrolls its rows, so every cell is reachable at any window size —
+    /// and a cell scrolled out of the grid answers nowhere, so it never takes a click meant for the track column.
+    #[test]
+    fn the_grid_scrolls_to_reach_the_tracks_and_scenes_that_do_not_fit() {
+        use crate::views::launcher::{self as view, MIN_COL, MIN_ROW};
+        // A window too narrow for eight scene columns at their least width, and with more tracks than rows fit.
+        let Ok(mut c) = os_ui::Canvas::new(760, 520, 1.0) else { return };
+        let mut app = app();
+        app.state.z = vec![crate::app::Win::Playlist];
+        app.key(&Key::Named(NamedKey::Tab), false, false);
+        app.state.device_rack_collapsed = true;
+        for _ in 0..20 {
+            crate::playlist::run(&mut app, crate::playlist::Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi));
+        }
+        let cols = columns(&app.state);
+        assert!(cols.len() > 10, "enough tracks to outgrow the rows ({} tracks)", cols.len());
+        // The screen is the canvas's size, set by the paint (`App::paint_region`).
+        app.paint(&mut c, None);
+        let client = view::client_rect(&app.state);
+        let g = view::geom(&app.state, client);
+        assert!(g.scene_w >= MIN_COL, "the scene columns keep their least width ({})", g.scene_w);
+        assert!(g.row_h >= MIN_ROW, "the track rows keep their least height ({})", g.row_h);
+        assert!(g.max_sx() > 0.0, "the scene columns overflow a window this narrow");
+        assert!(g.max_sy() > 0.0, "the track rows overflow it too");
+
+        let at = (client.cx(), g.head().bottom() + 40.0);
+        let cell = |app: &App, id: u32, scene: usize| {
+            app.hits
+                .iter()
+                .find(|h| h.action == Action::Launcher(Act::Launch(id, scene)))
+                .map(|h| h.rect)
+        };
+        let (first, last) = (cols[0].id, cols[cols.len() - 1].id);
+        assert!(cell(&app, first, 0).is_some(), "the first track shows");
+        assert!(cell(&app, last, 0).is_none(), "the last track is below the window");
+        assert!(
+            cell(&app, first, SCENES - 1).is_none_or(|r| r.right() <= client.right() + 0.5),
+            "nor is the last scene"
+        );
+
+        // The wheel scrolls the rows: the last track comes into view, and no cell answers over the track column.
+        assert!(view::wheel(&mut app.state, at.0, at.1, 0.0, -40.0, false), "the grid takes the wheel");
+        assert!(app.state.launcher.scroll_y > 0.0, "scrolled down");
+        app.paint(&mut c, None);
+        let row = cell(&app, last, 0).expect("scrolled to the last track");
+        assert!(row.bottom() <= client.bottom() + 0.5, "inside the grid: {row:?} {client:?}");
+        assert!(cell(&app, first, 0).is_none(), "the first track scrolled away");
+        for h in app.hits.iter().filter(|h| matches!(h.action, Action::Launcher(Act::Launch(..)))) {
+            assert!(h.rect.x >= client.x + g.label_w - 0.5, "no cell over the track column: {:?}", h.rect);
+        }
+
+        // Sideways (a sideways wheel) the scene columns follow, up to their end.
+        assert!(view::wheel(&mut app.state, at.0, at.1, -40.0, 0.0, false));
+        assert_eq!(app.state.launcher.scroll_x, g.max_sx(), "clamped at the last column");
+        app.paint(&mut c, None);
+        let last_scene = cell(&app, last, SCENES - 1).expect("the last scene scrolled in");
+        assert!(last_scene.x >= client.x + g.label_w - 0.5 && last_scene.right() <= client.right() + 0.5, "{last_scene:?}");
+        // And back: the first column stops at the left of the cells.
+        assert!(view::wheel(&mut app.state, at.0, at.1, 40.0, 0.0, false));
+        assert_eq!(app.state.launcher.scroll_x, 0.0, "clamped at the first column");
+        assert!(!view::wheel(&mut app.state, client.x - 5.0, client.y + 40.0, 0.0, -4.0, false), "off the grid the wheel is not the launcher's");
+
+        // Through the real dispatch (`App::wheel` → `wheel_act`), not just the helper.
+        app.state.launcher.scroll_x = 0.0;
+        app.state.launcher.scroll_y = 0.0;
+        app.mouse_move(at.0, at.1);
+        app.wheel(0.0, -1.0, false, false);
+        assert!(app.state.launcher.scroll_y > 0.0, "the wheel over the grid scrolls its rows");
+        app.wheel(0.0, -1.0, true, false);
+        assert!(app.state.launcher.scroll_x > 0.0, "Shift+wheel scrolls the scene columns");
     }
 
     /// The columns follow the mixer: one per track that has a lane, ordered by its mixer strip.

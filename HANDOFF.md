@@ -202,7 +202,18 @@ selector rows `RackAct::ParamTap`. Tile widths follow each editor (`device_rack:
   arrangement lanes hold each clip's pattern (that track's channel's notes only), repeated at the
   clip's own length, and `App::selection_loop` loops the common multiple of those lengths
   (`launcher::window`). The re-alignment at the window's end is the one compromise — see
-  `docs/clip-launcher.md` §1.1.
+  `docs/clip-launcher.md` §1.1. The grid keeps a least column (96 px) and row (22 px) size and
+  scrolls the rest: wheel for the track rows, Shift+wheel for the scene columns, with the scene
+  buttons and the track column pinned (`views::launcher::geom` / `wheel`, `Launcher::scroll_x` /
+  `scroll_y`). A cell's menu records into it (`Act::Record` → `launcher::record`): `Rec::slot`
+  makes the take write into the cell's own pattern from the take's start, an empty cell gets its
+  pattern and clip as the first note comes, and the clip loops at its pattern's length (notes
+  only — audio, across-loop takes and comping are open).
+  **A double click** on an empty cell makes its clip (a new pattern, `launcher::make_clip`) and
+  opens it in the piano roll. **A sample dropped on a cell** (`App::drop_file` →
+  `launcher::add_audio`) becomes that clip: an `AudioClip` channel (`playlist::audio_channel`,
+  shared with the arranger's drop) whose sample plays from the cell's lane, looped at the
+  sample's own length (`Slot::audio`, `pattern` 0, peaks drawn behind the name).
 
 - Audio FX chain already works (`crates/os-engine/src/engine/mix.rs:31`, insert effects in
   slot order before the fader).

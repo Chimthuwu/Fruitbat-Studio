@@ -1136,8 +1136,13 @@ pub struct State {
     /// The device tile being dragged (its kind), and the gap it would drop at (a chain index).
     pub device_rack_drag: Option<crate::device_rack::DeviceKind>,
     pub device_rack_drop: Option<usize>,
-    /// The selected tile index in the device rack, if any.
-    pub device_rack_sel: Option<usize>,
+    /// The device rack's selected tiles (their chain indices): a header click selects (Shift extends a range,
+    /// the playlist's track-anchor pattern), Ctrl+D / X / V / G act on the selection.
+    pub device_rack_sels: std::collections::BTreeSet<usize>,
+    /// The last plain click's tile: a Shift+click selects every tile from it (`device_rack::select_tile`).
+    pub device_rack_anchor: Option<usize>,
+    /// The device cut with Ctrl+X (`crate::device_rack::Clip`), pasted with Ctrl+V.
+    pub device_rack_clip: Option<crate::device_rack::Clip>,
     /// A MIDI track's MIDI FX slots (`crate::midi_fx`), by track id. In memory for now: the `.flp` records them
     /// with the engine's MIDI FX milestone.
     pub midi_fx: crate::midi_fx::Slots,
@@ -1598,7 +1603,9 @@ impl App {
                 launcher_open: false,
                 device_rack_drag: None,
                 device_rack_drop: None,
-                device_rack_sel: None,
+                device_rack_sels: Default::default(),
+                device_rack_anchor: None,
+                device_rack_clip: None,
                 midi_fx: Default::default(),
                 browser_marquee: Default::default(),
                 browser_favs: crate::browser::load_favs(),
@@ -4826,8 +4833,23 @@ impl App {
             self.sample_to_rack(path.to_string_lossy().into_owned(), y);
             return;
         }
+        // A sample dropped on a launcher cell plays from that clip (`launcher::add_audio`).
+        if let Some((track, scene)) = self
+            .hits
+            .iter()
+            .rev()
+            .find_map(|h| match h.action {
+                Action::Launcher(crate::launcher::Act::Launch(track, scene)) if h.rect.contains(x, y) => Some((track, scene)),
+                _ => None,
+            })
+            && self.state.launcher_open
+        {
+            let name = path.to_string_lossy().into_owned();
+            self.state.message = Some(crate::launcher::add_audio(self, &name, track, scene));
+            return self.invalidate();
+        }
         let Some(grid) = self.pl_grid.filter(|g| g.contains(x, y)) else {
-            self.state.message = Some("Drop audio files on the arranger to add audio clips".into());
+            self.state.message = Some("Drop audio files on the arranger or a launcher cell to add audio clips".into());
             return self.invalidate();
         };
         let s = &mut self.state;
@@ -7569,6 +7591,15 @@ impl App {
             }
         }
         let area = self.top_hit(x, y).map(|h| h.action.clone());
+        // The clip launcher's grid (Tab in the Playlist window): the wheel scrolls its track rows, sideways (Shift)
+        // its scene columns, so the cells a small window cannot show are reachable.
+        if self.state.launcher_open
+            && self.state.shown(Win::Playlist)
+            && crate::views::launcher::wheel(&mut self.state, x, y, dx, dy, shift)
+        {
+            self.invalidate();
+            return Some(Win::Playlist);
+        }
         if matches!(area, Some(Action::BrowserList | Action::BrowserRow(_) | Action::BrowserTab(_))) {
             self.browser_wheel(dy + dx);
             return None;
@@ -7943,8 +7974,9 @@ impl App {
             return;
         }
         // The device rack's keys when a tile is selected (main window in front, no dialog, no playlist edit):
-        // arrows move the selection across the device chain, Delete / Backspace remove the selected effect.
-        if self.state.device_rack_sel.is_some()
+        // arrows move the selection across the device chain, Delete / Backspace remove the selected devices,
+        // and Ctrl+D / Ctrl+X / Ctrl+V / Ctrl+G duplicate, cut, paste and group them (§7, the spec keys).
+        if !self.state.device_rack_sels.is_empty()
             && self.state.playlist.edit.is_none()
             && self.state.menu_open.is_none()
             && crate::device_rack::visible(&self.state)
@@ -7952,19 +7984,17 @@ impl App {
             // The rack's keys; anything else falls through to the global shortcuts (Ctrl+T, F-keys, ...).
             let handled = match key {
                 Key::Named(NamedKey::ArrowLeft) => {
-                    if let Some(i) = self.state.device_rack_sel {
-                        let i = i.saturating_sub(1);
-                        *crate::device_rack::rack_sel_mut(&mut self.state) = Some(i);
+                    if let Some(i) = crate::device_rack::rack_sel(&self.state) {
+                        crate::device_rack::set_sel(&mut self.state, i.saturating_sub(1));
                         true
                     } else {
                         false
                     }
                 }
                 Key::Named(NamedKey::ArrowRight) => {
-                    if let Some(i) = self.state.device_rack_sel {
+                    if let Some(i) = crate::device_rack::rack_sel(&self.state) {
                         let chain = crate::device_rack::rack_chain(&self.state);
-                        let i = (i + 1).min(chain.len().saturating_sub(1));
-                        *crate::device_rack::rack_sel_mut(&mut self.state) = Some(i);
+                        crate::device_rack::set_sel(&mut self.state, (i + 1).min(chain.len().saturating_sub(1)));
                         true
                     } else {
                         false
@@ -7976,6 +8006,7 @@ impl App {
                     crate::device_rack::delete_selected(self);
                     true
                 }
+                Key::Character(c) if ctrl && !alt => crate::device_rack::key(self, c),
                 _ => false,
             };
             if handled {
@@ -18999,7 +19030,7 @@ mod tests {
         let t0: Vec<u32> = on_track(&app, 0).iter().map(|c| c.position).collect();
         assert_eq!(t0.len(), 2, "{t0:?}");
         assert!(t0.contains(&(5 * bar)), "{t0:?}");
-        app.key(&Key::Character("d".into()), true, false);
+        deselect(&mut app);
         frame(&mut app, &mut c, None);
 
         // Right-drag in the ruler selects time; Ctrl+Insert inserts that much space.
@@ -19375,6 +19406,13 @@ mod tests {
     /// selection, Shift+G / Alt+G / Alt+U clip groups (lowest free number, move together, duplicates get their own
     /// group, ungroup deselects, saved), Right-Shift+drag slice in Draw, Shift+Tab snap cycle, Ctrl+Insert without a
     /// time selection, Ctrl+P / Ctrl+Shift+P switch performance mode, F5 raises, the view saved in the project (event 242).
+    /// Ctrl+Shift+D: deselect the playlist's clips (Ctrl+D duplicates the selected track since 2026-11-09).
+    fn deselect(app: &mut App) {
+        app.shift = true;
+        app.key(&winit::keyboard::Key::Character("d".into()), true, false);
+        app.shift = false;
+    }
+
     #[test]
     fn playlist_keybinds() {
         use crate::playlist::{self as pl, Snap};
@@ -19433,7 +19471,7 @@ mod tests {
         app.shift = false;
         let groups: Vec<u16> = pl::clips(&app.state).iter().map(|c| c.group()).collect();
         assert!(groups[0] != 0 && groups[0] == groups[1], "{groups:?}");
-        app.key(&Key::Character("d".into()), true, false);
+        deselect(&mut app);
         drag(&mut app, &mut c, at(0, 0), (g.x_of(2.0 * bar as f32) + 10.0, g.y_of(0) + 30.0));
         assert_eq!((on_track(&app, 0)[0].position, on_track(&app, 1)[0].position), (2 * bar, 3 * bar), "the group moved together");
         assert_eq!(app.state.playlist.sel.len(), 2, "clicking a grouped clip selects its group");
@@ -19449,7 +19487,7 @@ mod tests {
         let saved: Vec<u16> = back.arrangement().unwrap().clips.iter().map(|c| c.group()).collect();
         assert_eq!(saved.iter().filter(|&&g| g == orig.group()).count(), 2, "{saved:?}");
         // Alt+G and Alt+U take groups apart.
-        app.key(&Key::Character("d".into()), true, false);
+        deselect(&mut app);
         app.state.playlist.last_clip = None; // not a double click
         drag(&mut app, &mut c, at(2 * bar, 0), at(2 * bar, 0));
         app.key(&Key::Character("g".into()), false, true);
@@ -19467,7 +19505,7 @@ mod tests {
         app.key(&Key::Character("a".into()), true, false);
         app.key(&Key::Character("u".into()), false, true);
         assert!(pl::clips(&app.state).iter().all(|c| c.group() == 0));
-        app.key(&Key::Character("d".into()), true, false);
+        deselect(&mut app);
 
         // End zooms on the selection (all clips when none is selected).
         app.state.playlist.sel = vec![pl::clips(&app.state).iter().position(|c| c.track == 0 && c.position == 2 * bar).unwrap()];

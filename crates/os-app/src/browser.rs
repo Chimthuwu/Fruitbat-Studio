@@ -590,7 +590,12 @@ impl App {
             // (spec: plugins/patcher/README.md §3.3 "Shift+drop").
             Item::Container => {
                 let shift = self.shift;
-                let msg = if win == Some(Win::Mixer) {
+                // The device rack takes the container entry first: dropped over its panel it makes an empty
+                // container in the rack track's strip (its container device, model/track-model.md §7).
+                let rack = crate::views::device_rack::panel_rect(&self.state, self.state.screen.0, self.state.screen.1);
+                let msg = if crate::device_rack::visible(&self.state) && rack.contains(x, y) {
+                    self.drop_container_on_rack_strip(None)
+                } else if win == Some(Win::Mixer) {
                     let slot = match self.top_hit(x, y).map(|h| &h.action) {
                         Some(Action::Mix(crate::mixer::MHit::SlotName(k) | crate::mixer::MHit::SlotArrow(k))) => Some(*k),
                         _ => None,

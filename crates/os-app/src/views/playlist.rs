@@ -1090,7 +1090,7 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
     // A member takes its group track's colour, so the block reads as one.
     let colored = pl::track_info(s, leader.unwrap_or(row)).and_then(|i| i.color).map(rgb);
     let base = colored.unwrap_or(t.track_header);
-    let base = if s.playlist.track == row { base.shade(0.1) } else { base };
+    let base = if pl::track_selected(s, row) { base.shade(0.1) } else { base };
     let base = if on { base } else { base.mix(t.grid_gap, 0.4) };
     let (bx, bw) = if member { (x + INDENT, w - INDENT) } else { (x, w) };
     let gap = if strip { 1.0 } else { 3.0 };
@@ -1113,7 +1113,11 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
         let left = if lead { hr.x + k } else { hr.x };
         ui.c.fill_rect(Rect::new(left, hr.bottom() - k, hr.right() - left, k), bottom);
     }
-    ui.hit(hr, Action::PlHeader(row), "Track (double-click: rename, right-click: menu, Shift+wheel: move)");
+    ui.hit(
+        hr,
+        Action::PlHeader(row),
+        "Track (Shift+click: select a range of tracks, double-click: rename, right-click: menu, Shift+wheel: move)",
+    );
     if strip {
         return;
     }

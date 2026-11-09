@@ -58,6 +58,12 @@ pub struct Hosted {
     pub stand_in: bool,
     /// Its attention count, read without locking it (`os_host::Attention`); `None`: looked at on every tick.
     pub attention: Option<Arc<os_host::Attention>>,
+    /// Its parameter list, read once when a device rack tile first shows it: it does not change while the instance is
+    /// hosted, and asking a big instrument for every parameter's info on every tick (Vital: ~900) held its lock for
+    /// milliseconds at a time, which the audio thread then waited on (distorted, high load). `None` until asked.
+    infos: std::sync::OnceLock<Vec<os_host::ParamInfo>>,
+    /// When a tile last re-read its values (`Hosted::rack_due`).
+    rack_seen: Look,
     /// The count and time `idle` last looked at it (`Hosted::due`).
     seen: Look,
     /// Its window opens detached: set when the user adds it while "Open new plugin windows floating" is on (`Plugins::added`),
@@ -95,6 +101,9 @@ impl Look {
 
 /// An instance whose count did not move is still looked at this often (anything a plugin did not report).
 const LOOK_EVERY: Duration = Duration::from_millis(250);
+/// How often a device rack tile re-reads its instance's values when the instance reports nothing (25 a second: smooth
+/// enough to watch a knob move, far from the 60 a second that cost big instruments their lock).
+const RACK_EVERY: Duration = Duration::from_millis(40);
 
 
 /// How long a whole-state read waits for its moment (`lock_between_blocks`): two blocks of 256 frames and more.
@@ -163,6 +172,8 @@ impl Hosted {
             keep_file_state: false,
             stand_in: false,
             attention,
+            infos: std::sync::OnceLock::new(),
+            rack_seen: Look::never(),
             seen: Look::never(),
             detached: false,
             #[cfg(plugin_windows)]
@@ -184,6 +195,31 @@ impl Hosted {
     /// ([`lock_between_blocks`]).
     pub fn lock_between_blocks(&self) -> Option<std::sync::MutexGuard<'_, dyn os_host::Plugin + 'static>> {
         lock_between_blocks(&self.plugin, self.meter.as_deref(), STATE_WAIT)
+    }
+
+    /// Locks the instance for one of the UI's per-tick reads (`lock_for_tick`): `None` skips this tick instead of
+    /// making the audio thread wait for the lock.
+    pub fn lock_for_tick(&self) -> Option<std::sync::MutexGuard<'_, dyn os_host::Plugin + 'static>> {
+        lock_for_tick(&self.plugin, self.meter.as_deref())
+    }
+
+    /// The instance's parameter list, read the first time it is asked for and kept: its shape does not change while
+    /// the instance is hosted, so a tile re-reading it every tick would only cost the audio thread its lock.
+    fn param_infos<'a>(&'a self, p: &mut std::sync::MutexGuard<'a, dyn os_host::Plugin + 'static>) -> &'a [os_host::ParamInfo] {
+        self.infos.get_or_init(|| (0..p.param_count()).filter_map(|i| p.param_info(i)).collect())
+    }
+
+    /// Whether a device rack tile should re-read this instance's values now: it asked for attention (a parameter moved
+    /// in its own window) since the last read, or [`RACK_EVERY`] passed. Not every tick: a tile mirrors the plugin, and
+    /// reading a big instrument's ~900 values 60 times a second kept its lock from the audio thread (Vital).
+    fn rack_due(&mut self) -> bool {
+        let now = Instant::now();
+        let count = self.attention.as_ref().map_or(0, |a| a.count());
+        if count == self.rack_seen.count && now.duration_since(self.rack_seen.at) < RACK_EVERY {
+            return false;
+        }
+        self.rack_seen = Look { count, at: now };
+        true
     }
 
     /// Whether a per-tick job last done at `last` should lock the instance now, and the look to remember if it does:
@@ -1057,10 +1093,13 @@ impl Plugins {
     /// value that did not move, so a steady parameter costs no text call). One lock for the whole tile.
     pub fn rack_controls(&self, key: usize, prev: &[crate::device_rack::RackParam]) -> Vec<crate::device_rack::RackParam> {
         use crate::device_rack::RackParam;
-        let Some(mut p) = self.hosted.get(&key).and_then(|h| h.plugin.lock().ok()) else { return Vec::new() };
-        let infos: Vec<os_host::ParamInfo> = (0..p.param_count()).filter_map(|i| p.param_info(i)).collect();
-        infos
-            .into_iter()
+        let Some(h) = self.hosted.get(&key) else { return Vec::new() };
+        // Read between two of the instance's blocks, and skip the tick when it is busy: making a playing instrument
+        // wait for its own lock (what the plain `lock()` did) distorted its audio while the rack showed its tile.
+        // `prev` keeps the tile showing what it had until the next tick gets through.
+        let Some(mut p) = h.lock_for_tick() else { return prev.to_vec() };
+        h.param_infos(&mut p)
+            .iter()
             .filter(|i| !i.read_only && !i.bypass && !i.hidden)
             .map(|i| {
                 let value = p.param_value(i.id).unwrap_or(i.default);
@@ -1072,9 +1111,32 @@ impl Plugins {
                         .unwrap_or_else(|| format!("{:.0}%", value * 100.0)),
                 };
                 let plain = i.min + (i.max - i.min) * value;
-                RackParam { id: i.id, name: i.name, group: i.group, value, plain, min: i.min, max: i.max, text, toggle: i.steps == 1 }
+                RackParam {
+                    id: i.id,
+                    name: i.name.clone(),
+                    group: i.group.clone(),
+                    value,
+                    plain,
+                    min: i.min,
+                    max: i.max,
+                    text,
+                    toggle: i.steps == 1,
+                }
             })
             .collect()
+    }
+
+    /// The plugin's text for parameter `id` at `value` ("-6.0 dB"): what a tile control the user just moved shows,
+    /// read for that one parameter instead of the whole list.
+    pub fn param_text(&self, key: usize, id: u32, value: f64) -> Option<String> {
+        let h = self.hosted.get(&key)?;
+        let p = h.lock_for_tick()?;
+        p.param_text(id, value).filter(|t| !t.is_empty())
+    }
+
+    /// Whether the device rack tile of `key` should re-read its instance's values this tick (`Hosted::rack_due`).
+    pub fn rack_due(&mut self, key: usize) -> bool {
+        self.hosted.get_mut(&key).is_some_and(Hosted::rack_due)
     }
 
     pub fn param_value(&self, key: usize, id: u32) -> Option<f64> {
@@ -4320,6 +4382,97 @@ mod tests {
         assert!(untracked.attention.is_none());
         let seen = untracked.due(Look::never()).unwrap();
         assert!(untracked.due(seen).is_some(), "no count: every tick");
+    }
+
+    /// An instance with `n` parameters whose parameter list is counted as it is read: a device rack tile asks for it
+    /// once and keeps it, however often the tile refreshes (Vital's ~900 parameters read every tick held its lock).
+    struct Listing(os_host::Descriptor, usize, Arc<std::sync::atomic::AtomicUsize>);
+    impl os_engine::Instrument for Listing {
+        fn note_on(&mut self, _: u32, _: u8, _: f32) {}
+        fn note_off(&mut self, _: u32, _: u8) {}
+        fn process(&mut self, _: u32, _: &mut [f32], _: &mut [f32]) {}
+    }
+    impl os_engine::HostedEffect for Listing {
+        fn process_fx(&mut self, _: u32, _: &mut [f32], _: &mut [f32]) {}
+    }
+    impl os_host::Plugin for Listing {
+        fn desc(&self) -> &os_host::Descriptor {
+            &self.0
+        }
+        fn activate(&mut self, _: u32) -> bool {
+            true
+        }
+        fn idle(&mut self) {}
+        fn has_editor(&self) -> bool {
+            false
+        }
+        fn editor_open(&self) -> bool {
+            false
+        }
+        fn open_editor(&mut self, _: *mut c_void, _: f32) -> Result<(u32, u32), String> {
+            Err(String::new())
+        }
+        fn editor_size(&self) -> Option<(u32, u32)> {
+            None
+        }
+        fn close_editor(&mut self) {}
+        fn save_state(&self) -> Option<Vec<u8>> {
+            None
+        }
+        fn load_state(&mut self, _: &[u8]) -> bool {
+            false
+        }
+        fn param_count(&self) -> usize {
+            self.1
+        }
+        fn param_info(&self, i: usize) -> Option<os_host::ParamInfo> {
+            self.2.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Some(os_host::ParamInfo {
+                id: i as u32,
+                name: format!("P{i}"),
+                unit: String::new(),
+                group: String::new(),
+                min: 0.0,
+                max: 1.0,
+                default: 0.25,
+                steps: 0,
+                automatable: true,
+                read_only: false,
+                hidden: false,
+                bypass: false,
+                enumerated: false,
+            })
+        }
+        fn param_value(&self, _: u32) -> Option<f64> {
+            Some(0.25)
+        }
+        fn param_text(&self, _: u32, value: f64) -> Option<String> {
+            Some(format!("{value:.2}"))
+        }
+    }
+
+    /// A tile's parameter list is read from the instance once and kept: refreshing the tile reads the values, never
+    /// the list again.
+    #[test]
+    fn a_tiles_parameter_list_is_read_once() {
+        use std::sync::atomic::Ordering;
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let plugin: SharedPlugin = Arc::new(Mutex::new(Listing(builtin()[0].desc.clone(), 8, reads.clone())));
+        let mut pl = Plugins { scale: 1.0, rate: 48000, ..Plugins::default() };
+        pl.hosted.insert(1, Hosted::new(plugin));
+        let first = pl.rack_controls(1, &[]);
+        assert_eq!(first.len(), 8, "every shown parameter is in the tile");
+        let once = reads.load(Ordering::Relaxed);
+        assert_eq!(once, 8, "the list read once, parameter by parameter");
+        let again = pl.rack_controls(1, &first);
+        assert_eq!(again.len(), 8);
+        assert_eq!(reads.load(Ordering::Relaxed), once, "the list is kept between refreshes");
+        assert_eq!(again[0].text, first[0].text, "an unchanged value keeps the text it had");
+        // The tile is left alone between reads, then re-read once its interval passes.
+        assert!(pl.rack_due(1), "read at once with nothing yet");
+        assert!(!pl.rack_due(1), "left alone between reads");
+        std::thread::sleep(RACK_EVERY + Duration::from_millis(5));
+        assert!(pl.rack_due(1), "re-read after the interval");
     }
 
     /// A removed instance the engine still plays is destroyed on the UI thread once the engine lets go of it on its own

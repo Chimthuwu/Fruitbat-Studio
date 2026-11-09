@@ -11,6 +11,7 @@ use os_ui::{Color, Rect, kit};
 
 use crate::app::{Action, State};
 use crate::device_rack::{self, Device, DeviceKind, RackParam, HEADER_H, RackAct, TILE_W};
+use crate::icons::{self, Icon};
 use crate::views::{Ui, fnt};
 
 /// The rack's panel rect in the window: the full width, its height at the bottom edge (`device_rack::height`).
@@ -167,7 +168,7 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
     let overflow = crate::views::device_rack::content_w(s) > r.w
         && !s.device_rack_collapsed
         && r.h > HEADER_H;
-    let mut bx = r.right() - 198.0 - 56.0 * f32::from(overflow);
+    let mut bx = r.right() - 228.0 - 56.0 * f32::from(overflow);
     if overflow {
         let (at_start,) = (s.device_rack_scroll_x <= 0.5,);
         let steppers = [
@@ -227,6 +228,22 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
             "Collapse the device rack to its header"
         },
     );
+    bx += 66.0;
+    // The wrench: every device in the chain shows its editor in its own floating window (lit green while they are
+    // out), or the windows close and the tiles draw the editors again.
+    let windows = !s.device_rack_float.is_empty();
+    header_icon_button(
+        ui,
+        Rect::new(bx, head.y + 2.0, 24.0, 17.0),
+        Icon::Wrench,
+        windows,
+        Action::DeviceRack(RackAct::ToggleEditors),
+        if windows {
+            "Close the devices' floating editor windows and draw them in their tiles"
+        } else {
+            "Show every docked device's editor in its own floating window"
+        },
+    );
 
     if s.device_rack_collapsed {
         return;
@@ -244,7 +261,7 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
     let mut gx = r.x;
     for (i, (d, tile)) in tiles.iter().enumerate() {
         gap_button(ui, gx, tile.y, slot_after(i), tile.h);
-        tile_paint(ui, s, d.clone(), *tile);
+        tile_paint(ui, s, i, d.clone(), *tile);
         gx = tile.right();
     }
     gap_button(ui, gx, r.y + HEADER_H, None, tiles.first().map_or(r.h - HEADER_H, |(_, t)| t.h));
@@ -260,31 +277,35 @@ fn gap_button(ui: &mut Ui, x: f32, y: f32, slot: Option<u8>, h: f32) {
     ui.c.text(fnt(14.0), b.x + 4.0, b.y + 1.0, t.text, "+");
 }
 
-/// A device tile: a header (name, enable light, menu) over a body of the device's own controls.
-fn tile_paint(ui: &mut Ui, s: &State, d: Device, tile: Rect) {
+/// A device tile: a header (name, enable light, wrench, menu) over a body of the device's own controls. A
+/// selected tile's header is brighter: the header bar is clickable and selects (§7).
+fn tile_paint(ui: &mut Ui, s: &State, i: usize, d: Device, tile: Rect) {
     let t = ui.t;
+    let selected = device_rack::tile_selected(s, i);
     // The tile: a raised surface with a hairline between header and body.
     ui.c.fill_rect(tile, t.s(0x222629));
     ui.c.stroke_rrect(tile, 0.0, 1.0, t.splitter_dark);
     let head = Rect::new(tile.x, tile.y, tile.w, HEADER_H);
     // The kind's gradient behind the header's content, veiled so the LED and name stay readable (the pairs are
-    // constants in `device_rack` so user theming can rewire them later).
+    // constants in `device_rack` so user theming can rewire them later). The selected tile's veil is lighter,
+    // so its bar reads slightly brighter.
     let (top, bottom) = device_rack::header_gradient(d.kind);
     ui.c.fill_rect_gradient(head, t.s(top), t.s(bottom), 0.0);
-    ui.c.fill_rect(head, os_ui::Color::rgb(0).with_alpha(110));
+    ui.c.fill_rect(head, os_ui::Color::rgb(0).with_alpha(if selected { 60 } else { 110 }));
     ui.c.fill_rect(
         Rect::new(tile.x, tile.bottom() - 1.0, tile.w, 1.0),
         t.splitter_dark,
     );
-    // Drag the header left/right to reorder (FX tiles swap mixer slots); the LED and menu below win their clicks.
-    if d.key.is_some() {
-        ui.hit(head, Action::DeviceRack(RackAct::TilePress(d.kind)), "Drag to reorder this device");
+    // The header selects the tile (Shift+click extends a range); the press also starts the drag, so the bar
+    // still drags left/right to reorder (FX tiles swap mixer slots). The LED and buttons below win their clicks.
+    if d.key.is_some() || matches!(d.kind, DeviceKind::Container { .. }) {
+        ui.hit(head, Action::DeviceRack(RackAct::SelectTile(i)), if selected { "Selected: click another tile to select it, Shift+click to extend the selection" } else { "Click to select this device, Shift+click to extend the selection; drag to reorder" });
     }
     // The enable light: a click switches the device (the channel or the mixer slot).
     let (cx, cy) = (tile.x + 12.0, head.cy());
     crate::views::led(ui, cx, cy, d.on);
     let led = Rect::new(cx - 7.0, cy - 7.0, 14.0, 14.0);
-    if d.key.is_some() {
+    if d.key.is_some() || matches!(d.kind, DeviceKind::Container { .. }) {
         ui.hit(
             led,
             Action::DeviceRack(RackAct::ToggleOn(d.kind)),
@@ -295,16 +316,44 @@ fn tile_paint(ui: &mut Ui, s: &State, d: Device, tile: Rect) {
             },
         );
     }
-    // The name, then the header menu.
+    // The name, then the header's wrench and menu.
     ui.c.text_clip(
         fnt(14.0),
         tile.x + 24.0,
         head.y + 3.0,
-        tile.w - 24.0 - 44.0,
+        tile.w - 24.0 - 64.0,
         t.text,
         &d.name,
     );
     let menu = Rect::new(tile.right() - 22.0, head.y + 4.0, 17.0, 15.0);
+    let wrench = Rect::new(menu.x - 22.0, head.y + 2.0, 19.0, 19.0);
+    // The wrench: pop the device's editor out to its own floating window (or dock it back, lit while it is
+    // out); a container tile's wrench opens its container window (the docked Win::Container) instead.
+    match d.kind {
+        DeviceKind::Container { t: ct, k: ck } => {
+            header_icon_button(
+                ui,
+                wrench,
+                Icon::Wrench,
+                false,
+                Action::DeviceRack(RackAct::OpenContainer { t: ct, k: ck }),
+                "Open the container",
+            );
+        }
+        _ if d.key.is_some() => {
+            let key = d.key.unwrap();
+            let floated = s.device_rack_float.contains(&key);
+            header_icon_button(
+                ui,
+                wrench,
+                Icon::Wrench,
+                floated,
+                Action::DeviceRack(if floated { RackAct::Dock(key) } else { RackAct::PopOut(key) }),
+                if floated { "Dock this device's editor in its tile" } else { "Pop this device's editor out to its own window" },
+            );
+        }
+        _ => {}
+    }
     if d.key.is_some()
         && ui.hit(
             menu,
@@ -324,9 +373,41 @@ fn tile_paint(ui: &mut Ui, s: &State, d: Device, tile: Rect) {
         let _ = ui.hit(body, Action::DeviceRack(RackAct::AddAt(None)), "Choose this track's instrument");
         return;
     }
+    // A container tile: its body lists its members; a click opens the container window (its wrench above does).
+    if let DeviceKind::Container { t: ct, k: ck } = d.kind {
+        container_body(ui, s, body, ct, ck);
+        return;
+    }
     // The device's own controls, drawn here rather than by an embedded native window (see
     // `device_rack::sync_embed`): the same names, sections and value texts its editor shows.
     controls(ui, s, &d, body);
+}
+
+/// A container tile's body: the members in chain order ("1. Lemon Limiter"), and the empty container's hint.
+/// A click (like the wrench) opens the container window, whose list edits the members.
+fn container_body(ui: &mut Ui, s: &State, body: Rect, t: u16, k: u8) {
+    let th = ui.t;
+    ui.c.fill_rect(body, th.s(0x131718));
+    ui.c.stroke_rrect(body.inset(1.0), 2.0, 1.0, th.splitter_dark);
+    ui.hit(body, Action::DeviceRack(RackAct::OpenContainer { t, k }), "Open the container");
+    let members = crate::container::members(s, t, k).unwrap_or_default();
+    if members.is_empty() {
+        ui.c.text(fnt(13.0), body.x + 10.0, body.y + 9.0, th.text_dim, "Empty container.");
+        ui.c.text(fnt(13.0), body.x + 10.0, body.y + 29.0, th.text_dim, "Open it to add effects.");
+        return;
+    }
+    ui.c.push_clip(body);
+    for (i, m) in members.iter().take(8).enumerate() {
+        let y = body.y + 9.0 + i as f32 * 19.0;
+        if y > body.bottom() - 16.0 {
+            break;
+        }
+        ui.c.text_clip(fnt(13.0), body.x + 10.0, y, body.w - 20.0, th.text, &format!("{}. {}", i + 1, m.shown()));
+    }
+    if members.len() > 8 {
+        ui.c.text_clip(fnt(12.0), body.x + 10.0, body.bottom() - 20.0, body.w - 20.0, th.text_dim, &format!("+{} more", members.len() - 8));
+    }
+    ui.c.pop_clip();
 }
 
 /// One control cell: the name above, the dial (or the switch), the value below.
@@ -427,6 +508,9 @@ fn controls(ui: &mut Ui, s: &State, d: &Device, body: Rect) {
     let max = scroll_max(body, params);
     let scroll = s.device_rack_tile_scroll.get(&key).copied().unwrap_or(0.0).clamp(0.0, max);
     let g = grid(body, params, scroll);
+    // Scrolled controls are clipped to the body: the row the body's top edge cuts through must not paint over the
+    // tile's header (its switches and value texts used to sit on the header bar).
+    ui.c.push_clip(body);
     for (r, name) in &g.sections {
         if r.bottom() <= body.y + 2.0 || r.y >= body.bottom() - 2.0 {
             continue;
@@ -436,10 +520,10 @@ fn controls(ui: &mut Ui, s: &State, d: &Device, body: Rect) {
     }
     for (i, cell) in &g.cells {
         // A cell scrolled past the body is not drawn (and its hit goes with it).
-        if cell.bottom() <= body.y + 2.0 || cell.y >= body.bottom() - 2.0 {
+        if cell.bottom() <= body.y || cell.y >= body.bottom() {
             continue;
         }
-        cell_paint(ui, key, &params[*i], *cell);
+        cell_paint(ui, key, &params[*i], *cell, body);
     }
     // The scroll bar: how much of the control list the body is showing, and where.
     if max > 0.0 {
@@ -449,10 +533,12 @@ fn controls(ui: &mut Ui, s: &State, d: &Device, body: Rect) {
         let top = track.y + (track.h - len) * (scroll / max);
         ui.c.fill_rect(Rect::new(track.x, top, 3.0, len), t.s(0x4a5358));
     }
+    ui.c.pop_clip();
 }
 
-/// A tile body showing the device's own editor: the plugin's UI (`crate::rack_ui`) at its natural aspect, as large
-/// as the body holds it, centred, with every dial, switch and selector of it live on the hosted parameter it names.
+/// A tile body showing the device's own editor: the plugin's UI (`crate::rack_ui`) filling the body — stretched to
+/// the space the tile has, so no bars sit beside it — with every dial, switch and selector of it live on the hosted
+/// parameter it names.
 fn editor_body(ui: &mut Ui, s: &State, key: usize, editor: crate::rack_ui::Ui, body: Rect) {
     let t = ui.t;
     let params: &[crate::device_rack::RackParam] = s.device_rack_params.get(&key).map_or(&[], |v| v.as_slice());
@@ -460,20 +546,22 @@ fn editor_body(ui: &mut Ui, s: &State, key: usize, editor: crate::rack_ui::Ui, b
     if ew <= 0.0 || eh <= 0.0 {
         return;
     }
-    // Its largest size inside the body, never above 1:1 (a small editor is not blown up and blurred).
-    let k = ((body.w - 2.0 * PAD) / ew).min((body.h - 2.0 * PAD) / eh).clamp(0.12, 1.0);
+    // The editor fills the body: the container keeps its size, only the plugin's UI inside it grows to fill it (a
+    // 2 px inset keeps the tile's frame visible). No aspect fit, so no bars are left beside or under it.
+    let r = Rect::new(body.x + 2.0, body.y + 2.0, (body.w - 4.0).max(1.0), (body.h - 4.0).max(1.0));
+    // Rendered at the larger of the two stretches, so no glyph is drawn from fewer pixels than it covers; the blit
+    // takes it to the body's exact width and height.
+    let k = (r.w / ew).max(r.h / eh).clamp(0.12, 3.0);
     // Rendered at the app's scale times that: the editor's glyphs are rasterised at the size the tile shows them.
     let scale = ui.c.scale();
     let Some(img) = crate::rack_ui::image(s, key, editor.name(), params, k * scale) else {
         ui.c.text_clip(fnt(13.0), body.x + 10.0, body.y + 9.0, body.w - 20.0, t.text_dim, "This device's editor could not be drawn");
         return;
     };
-    let (w, h) = (img.w as f32 / scale, img.h as f32 / scale);
-    let r = Rect::new((body.x + (body.w - w) / 2.0).round(), (body.y + (body.h - h) / 2.0).round(), w, h);
     ui.c.image(r, img.w, img.h, &img.px);
     // The editor's controls, in the tile: a dial or fader drags its parameter, a switch or a selector row sets it.
-    let kx = w / ew;
-    let ky = h / eh;
+    let kx = r.w / ew;
+    let ky = r.h / eh;
     for (hr, id, v) in &img.hits {
         let cell = Rect::new(r.x + hr.x * kx, r.y + hr.y * ky, (hr.w * kx).max(2.0), (hr.h * ky).max(2.0));
         let p = params.iter().find(|p| p.id == *id);
@@ -487,11 +575,12 @@ fn editor_body(ui: &mut Ui, s: &State, key: usize, editor: crate::rack_ui::Ui, b
 }
 
 /// One control cell: its name, a dial (or a switch for a two-state parameter) and the plugin's own value text.
-fn cell_paint(ui: &mut Ui, key: usize, p: &RackParam, cell: Rect) {
+fn cell_paint(ui: &mut Ui, key: usize, p: &RackParam, cell: Rect, body: Rect) {
     let t = ui.t;
     let cx = cell.cx();
     ui.c.text_clip(fnt(11.0), cell.x + 2.0, cell.y + 1.0, CELL_W - 4.0, t.text_dim, &p.name);
-    let hit = Rect::new(cell.x + 4.0, cell.y + 18.0, CELL_W - 8.0, CELL_H - 20.0);
+    // Clamped to the body like the paint: a row the body's top edge cuts through does not take the header's clicks.
+    let hit = Rect::new(cell.x + 4.0, cell.y + 18.0, CELL_W - 8.0, CELL_H - 20.0).intersect(&body);
     // A switch flips on the press; a dial starts at its value and follows a vertical drag (the one set path,
     // `device_rack::set_param_value`).
     let v = if p.toggle { f64::from(p.value < 0.5) } else { p.value };
@@ -519,6 +608,29 @@ fn cell_paint(ui: &mut Ui, key: usize, p: &RackParam, cell: Rect) {
         );
     }
     ui.c.text_center(fnt(11.0), Rect::new(cell.x, cell.y + 47.0, CELL_W, 14.0), t.text_dim, &p.text);
+}
+
+/// A small flat header button with an icon only (the rack's wrench): a lit one is green (the devices' editor
+/// windows are out).
+fn header_icon_button(ui: &mut Ui, r: Rect, icon: Icon, on: bool, action: Action, hint: &'static str) {
+    let t = ui.t;
+    let hov = ui.hit(r, action, hint);
+    let base: Color = if on {
+        t.led(0x3d7803)
+    } else if hov {
+        t.s(0x2b3134)
+    } else {
+        t.s(0x26292c)
+    };
+    ui.c.fill_rrect(r, 2.0, base);
+    let ink = if on {
+        t.led(0xd7f7a6)
+    } else if hov {
+        t.glyph
+    } else {
+        t.text_dim
+    };
+    icons::draw(ui.c, icon, Rect::new(r.cx() - 7.0, r.cy() - 7.0, 14.0, 14.0), ink);
 }
 
 /// A small flat header button (the rack's Pin / Hide).

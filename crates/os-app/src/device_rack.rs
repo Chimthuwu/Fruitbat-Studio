@@ -14,7 +14,10 @@
 //! [`Device`] models a node in a signal-flow chain (track-model-plan.md §9). [`DeviceKind`] variants are:
 //! - `Instrument` — a MIDI track's channel plugin
 //! - `Effect` — a mixer strip insert slot
-//! - (future) `Container { children }` — a group device holding sub-nodes
+//! - `Container` — a container (Lemon Studio's Patcher, `crate::container`): a mixer slot holding a serial
+//!   chain of effects, or a channel whose instrument is such a chain. Its place (track and slot, or rack row
+//!   and [`crate::container::CHANNEL`]) names it; its members play through `os_engine::chain::Chain`, so the
+//!   tile rides the existing engine paths.
 //!
 //! [`chain`] returns the flat ordered list; the view layer can choose to render a device with children as a
 //! nested container rather than a flat tile.
@@ -24,8 +27,12 @@ use std::sync::OnceLock;
 
 use crate::app::{App, Drag, State};
 
-/// Least body height of the rack (its header and splitter aside), in logical px.
-pub const MIN_H: f32 = 96.0;
+/// The shortest the rack may be, in logical px: below this its tiles are too short to read their editor in, and a
+/// splitter drag down to the workspace edge (which used to be allowed) left a sliver of a panel.
+pub const MIN_H: f32 = 180.0;
+/// The tallest the rack may be. The splitter used to give it up to half the window, which on a 1080 px screen is
+/// 540 px of editor stretched out of shape and less workspace above it; the rack's own frame now stops at this.
+pub const MAX_H: f32 = 360.0;
 /// The height the rack opens at, and what a double click on its splitter gives back: tall enough for a MIDI FX
 /// editor (the tallest is 380 px, the commonest 302) to be drawn at nearly its own size.
 pub const DEFAULT_H: f32 = 336.0;
@@ -58,6 +65,11 @@ pub fn visible(s: &State) -> bool {
     s.project.linear_mode && s.show_device_rack
 }
 
+/// The rack's tallest height: [`MAX_H`], and never more than half the window on a short screen.
+pub fn max_h(s: &State) -> f32 {
+    MAX_H.min((s.screen.1 / 2.0).max(MIN_H))
+}
+
 /// The rack's height (logical px): 0 when hidden (Classic mode always), the header when collapsed.
 pub fn height(s: &State) -> f32 {
     if !visible(s) {
@@ -65,7 +77,7 @@ pub fn height(s: &State) -> f32 {
     } else if s.device_rack_collapsed {
         HEADER_H
     } else {
-        s.device_rack_h.clamp(MIN_H, (s.screen.1 / 2.0).max(MIN_H))
+        s.device_rack_h.clamp(MIN_H, max_h(s))
     }
 }
 
@@ -81,6 +93,10 @@ pub enum DeviceKind {
     /// A MIDI track's empty instrument slot: no channel plays the track yet — the "Add instrument"
     /// placeholder tile (the track is silent until one is picked).
     NoInstrument,
+    /// A container (Lemon Studio's Patcher, `crate::container`): mixer slot `k` of strip `t` holding a
+    /// serial chain of effects, or for `k` = [`crate::container::CHANNEL`] the channel `t`'s instrument
+    /// chain (its rack row's channel plays it).
+    Container { t: u16, k: u8 },
 }
 
 /// The tile header's gradient, top and bottom (0xRRGGBB), per device kind. Hard-coded until user theming grows
@@ -88,6 +104,7 @@ pub enum DeviceKind {
 pub const HEADER_GRAD_MIDI_FX: (u32, u32) = (0xb9a4ec, 0x8fc7f2); // lavender -> sky blue
 pub const HEADER_GRAD_INSTRUMENT: (u32, u32) = (0xb9e98b, 0xf6ec85); // lime -> yellow
 pub const HEADER_GRAD_FX: (u32, u32) = (0xf3f4f5, 0x9dc9ee); // white -> sky blue
+pub const HEADER_GRAD_CONTAINER: (u32, u32) = (0x9fe8c0, 0x8fc7f2); // mint -> sky blue
 
 /// The header's gradient for `kind` (top, bottom).
 pub fn header_gradient(kind: DeviceKind) -> (u32, u32) {
@@ -95,6 +112,7 @@ pub fn header_gradient(kind: DeviceKind) -> (u32, u32) {
         DeviceKind::MidiFx(_) => HEADER_GRAD_MIDI_FX,
         DeviceKind::Instrument(_) | DeviceKind::NoInstrument => HEADER_GRAD_INSTRUMENT,
         DeviceKind::Fx(..) => HEADER_GRAD_FX,
+        DeviceKind::Container { .. } => HEADER_GRAD_CONTAINER,
     }
 }
 
@@ -168,13 +186,26 @@ pub fn chain(s: &State, tr: &os_model::Track) -> Vec<Device> {
             || ch.plugin.as_deref().is_some_and(stored_builtin)
             || crate::project_plugins::wrapped_channel(ch)
                 .map_or(false, |r| stored_builtin(&r.name));
-        v.push(Device {
-            kind: DeviceKind::Instrument(row),
-            key: Some(row),
-            name: crate::rack::channel_name(s, row),
-            on: ch.enabled,
-            builtin,
-        });
+        // A channel whose instrument is a container chain (`Wrap in container` on the channel) is a container
+        // device, not an instrument: its members are the chain (crate::container, C1).
+        if crate::container::is_container_channel(ch) {
+            v.push(Device {
+                kind: DeviceKind::Container { t: row as u16, k: crate::container::CHANNEL },
+                key: None,
+                name: crate::container::title(s, row as u16, crate::container::CHANNEL)
+                    .unwrap_or_else(|| crate::container::CONTAINER.to_string()),
+                on: ch.enabled,
+                builtin: false,
+            });
+        } else {
+            v.push(Device {
+                kind: DeviceKind::Instrument(row),
+                key: Some(row),
+                name: crate::rack::channel_name(s, row),
+                on: ch.enabled,
+                builtin,
+            });
+        }
     } else if tr.kind == os_model::TrackKind::Midi {
         // The empty instrument slot: a placeholder tile whose click opens the device browser (§7 — a MIDI
         // track may be silent until an instrument is picked, e.g. the default sampler was removed).
@@ -189,6 +220,19 @@ pub fn chain(s: &State, tr: &os_model::Track) -> Vec<Device> {
     if let Some(m) = s.project.mixer.iter().find(|m| m.index == tr.mixer_strip) {
         for (k, slot) in m.slots.iter().enumerate() {
             let Some(sp) = slot else { continue };
+            // A container slot (the browser's container entry, or Wrap all in container): its own tile kind
+            // (C1) — its members play through the existing engine chain.
+            if sp.name == crate::container::CONTAINER {
+                v.push(Device {
+                    kind: DeviceKind::Container { t: m.index, k: k as u8 },
+                    key: None,
+                    name: crate::container::title(s, m.index, k as u8)
+                        .unwrap_or_else(|| crate::container::CONTAINER.to_string()),
+                    on: m.slot_on[k],
+                    builtin: false,
+                });
+                continue;
+            }
             v.push(Device {
                 kind: DeviceKind::Fx(m.index, k as u8),
                 key: Some(crate::plugins::fx_key(m.index, k as u8)),
@@ -209,15 +253,50 @@ pub fn rack_chain(s: &State) -> Vec<Device> {
     rack_track(s).map_or_else(Vec::new, |tr| chain(s, tr))
 }
 
-/// Returns the selected tile index in the rack, if any.
-#[allow(dead_code)] // The view layer will read it when tile selection is wired up.
+/// The last selected tile index in the rack, if any (the selection is a set, `State::device_rack_sels`; the
+/// keyboard and Delete act on the last one).
 pub fn rack_sel(s: &State) -> Option<usize> {
-    s.device_rack_sel
+    s.device_rack_sels.last().copied()
 }
 
-/// Returns a mutable reference to the selected tile index.
-pub fn rack_sel_mut(s: &mut State) -> &mut Option<usize> {
-    &mut s.device_rack_sel
+/// Whether chain tile `i` is selected (a header click paints it brighter).
+pub fn tile_selected(s: &State, i: usize) -> bool {
+    s.device_rack_sels.contains(&i)
+}
+
+/// Selects a tile by a header click: plain selects it alone, `extend` (a click with Shift held, the anchor
+/// being the last plain click) selects every tile from the anchor to `i` — the playlist's track headers'
+/// pattern (`playlist::select_track`).
+pub fn select_tile(s: &mut State, i: usize, extend: bool) {
+    let anchor = s.device_rack_anchor.or_else(|| s.device_rack_sels.last().copied());
+    if extend && let Some(a) = anchor {
+        for j in a.min(i)..=a.max(i) {
+            s.device_rack_sels.insert(j);
+        }
+        return;
+    }
+    s.device_rack_sels = BTreeSet::from([i]);
+    s.device_rack_anchor = None;
+}
+
+/// Sets the selection to just tile `i` (the arrow keys: a multi-selection collapses to the tile moved to).
+pub fn set_sel(s: &mut State, i: usize) {
+    s.device_rack_sels = BTreeSet::from([i]);
+    s.device_rack_anchor = None;
+}
+
+/// Clears the selection (a device removal does).
+pub fn clear_sel(s: &mut State) {
+    s.device_rack_sels.clear();
+    s.device_rack_anchor = None;
+}
+
+/// A cut device (Ctrl+X), pasted with Ctrl+V: an effect (its name, the plugin it came from, its saved state
+/// and slot switches) or a MIDI FX (its slot and index).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Clip {
+    Fx { name: String, index: usize, state: Vec<u8>, on: bool },
+    MidiFx { index: usize, on: bool },
 }
 
 /// Reorders the device at chain index `from` to chain index `to` in the rack's chain. The move stays within the
@@ -286,6 +365,7 @@ pub fn reorder(app: &mut App, from: usize, to: usize) -> Result<(), String> {
             Ok(())
         }
         DeviceKind::Instrument(_) | DeviceKind::NoInstrument => Ok(()),
+        DeviceKind::Container { .. } => Ok(()),
     }
 }
 
@@ -335,15 +415,21 @@ pub enum RackAct {
     TogglePin,
     /// The header's collapse toggle.
     ToggleCollapsed,
-    /// Select a device tile by its index in the chain.
-    #[allow(dead_code)] // Constructed by the view layer once tile selection is wired up.
+    /// Select a device tile by its index in the chain: a plain header click selects it alone, Shift+click
+    /// extends the selection to it (the anchor pattern of the playlist's track headers).
     SelectTile(usize),
+    /// A container tile's wrench (or body): open its container window (`crate::container`, the docked
+    /// `Win::Container`).
+    OpenContainer { t: u16, k: u8 },
     /// A device header's menu: open it for `key`'s device at the mouse.
     Menu(usize),
     /// Dismiss an open device menu.
     MenuClose,
     /// A device's Pop out: its editor leaves the tile for the floating window machinery.
     PopOut(usize),
+    /// The header's wrench: every device in the chain shows its editor in its own floating window (lit green while
+    /// they are out), or the windows close and the tiles draw the editors again.
+    ToggleEditors,
     /// A device's Dock: its editor comes back into its tile.
     Dock(usize),
     /// A device's enable light: switch the device on / off.
@@ -397,10 +483,10 @@ pub fn splitter_press(app: &mut App) {
 }
 
 /// The splitter dragged so that the rack (its splitter included) ends at `top`... its bottom stays at the window's
-/// bottom edge: the rack's height follows the pointer. Whole px, from [`MIN_H`] to half the window.
+/// bottom edge: the rack's height follows the pointer. Whole px, from [`MIN_H`] to [`max_h`].
 pub fn split_drag(app: &mut App, y: f32, dy: f32) {
     let s = &mut app.state;
-    let h = (y - dy).min(s.screen.1 / 2.0).max(MIN_H).round();
+    let h = (y - dy).clamp(MIN_H, max_h(s)).round();
     if h != s.device_rack_h {
         s.device_rack_h = h;
         s.device_rack_collapsed = false;
@@ -443,9 +529,25 @@ pub fn dock(app: &mut App, key: usize) {
     app.invalidate();
 }
 
+/// The header's wrench: every device in the chain shows its editor in its own floating window (the editors open
+/// where they were not yet open), or — when any editor is already out — they all dock back into their tiles.
+pub fn toggle_editors(app: &mut App) {
+    if app.state.device_rack_float.is_empty() {
+        let keys: Vec<usize> = rack_chain(&app.state).iter().filter_map(|d| d.key).collect();
+        for key in keys {
+            pop_out(app, key);
+        }
+    } else {
+        let floated: Vec<usize> = app.state.device_rack_float.iter().copied().collect();
+        for key in floated {
+            dock(app, key);
+        }
+    }
+    app.invalidate();
+}
+
 /// Runs a rack action.
-pub fn run(app: &mut App, act: RackAct) {
-    match act {
+pub fn run(app: &mut App, act: RackAct) {    match act {
         RackAct::Splitter => splitter_press(app),
         RackAct::TogglePin => toggle_pin(app),
         RackAct::ToggleCollapsed => {
@@ -453,7 +555,21 @@ pub fn run(app: &mut App, act: RackAct) {
             app.invalidate();
         }
         RackAct::SelectTile(idx) => {
-            *rack_sel_mut(&mut app.state) = Some(idx);
+            // A header click selects the tile (Shift extends a range, the playlist's track-header pattern);
+            // the press also starts the drag, as the old header press did, so a click still reorders.
+            let extend = app.shift;
+            if let Some(d) = rack_chain(&app.state).get(idx).cloned() {
+                select_tile(&mut app.state, idx, extend);
+                if !extend {
+                    app.state.device_rack_drag = Some(d.kind);
+                    app.state.device_rack_drop = None;
+                    app.drag = Some(Drag::DeviceRackTile { kind: d.kind, _x0: app.mouse.0 });
+                }
+            }
+            app.invalidate();
+        }
+        RackAct::OpenContainer { t, k } => {
+            crate::container::show(&mut app.state, t, k);
             app.invalidate();
         }
         RackAct::Menu(key) => {
@@ -465,6 +581,7 @@ pub fn run(app: &mut App, act: RackAct) {
             app.invalidate();
         }
         RackAct::PopOut(key) => pop_out(app, key),
+        RackAct::ToggleEditors => toggle_editors(app),
         RackAct::Dock(key) => dock(app, key),
         RackAct::ToggleOn(kind) => toggle_on(app, kind),
         RackAct::Add => {
@@ -544,6 +661,18 @@ fn toggle_on(app: &mut App, kind: DeviceKind) {
                 crate::midi_fx::toggle(s, id, slot);
             }
         }
+        // A container's enable light is its slot's (or the channel's) on/off: the container window's LED and
+        // the mixer's slot LED are the same switch.
+        DeviceKind::Container { t, k } => {
+            if k == crate::container::CHANNEL {
+                if let Some(ch) = s.project.channels.get_mut(usize::from(t)) {
+                    ch.enabled = !ch.enabled;
+                    s.piano.dirty = true;
+                }
+            } else if let Some(m) = crate::mixer::track_mut(s, t) {
+                m.slot_on[usize::from(k)] = !m.slot_on[usize::from(k)];
+            }
+        }
     }
     app.invalidate();
 }
@@ -554,6 +683,16 @@ pub fn set_param_value(app: &mut App, key: usize, id: u32, v: f64) {
     let v = v.clamp(0.0, 1.0);
     if app.plugins.set_param(key, id, v) {
         app.state.params.set_by_host(key, id, v);
+        // The tile's own control follows the drag at once: its value, and the plugin's text for it read for that one
+        // parameter (re-reading a big instrument's whole list per moved pixel costs the audio thread its lock: Vital).
+        let text = app.plugins.param_text(key, id, v);
+        if let Some(p) = app.state.device_rack_params.get_mut(&key).and_then(|ps| ps.iter_mut().find(|p| p.id == id)) {
+            p.value = v;
+            p.plain = p.min + (p.max - p.min) * v;
+            if let Some(text) = text {
+                p.text = text;
+            }
+        }
         app.invalidate();
     }
 }
@@ -640,30 +779,43 @@ pub fn tile_drop(app: &mut App, kind: DeviceKind, x: f32) {
             // A track holds one instrument: nothing to reorder it with (its channel is the track's); the
             // empty slot's placeholder is not draggable.
         }
+        DeviceKind::Container { .. } => {
+            // A container stays where its slot (or channel) is; its members reorder in its own window.
+        }
     }
     app.invalidate();
 }
 
-/// Deletes the selected device (Delete key): see [`remove_device`].
+/// Deletes the selected devices (Delete key): each selected tile goes through [`remove_device`].
 pub fn delete_selected(app: &mut App) {
-    let Some(i) = app.state.device_rack_sel else { return };
-    let Some(d) = rack_chain(&app.state).get(i).cloned() else { return };
-    remove_device(app, d.kind);
+    let sels: Vec<usize> = app.state.device_rack_sels.iter().copied().collect();
+    if sels.is_empty() {
+        return;
+    }
+    let chain = rack_chain(&app.state);
+    // Right to left: a removal changes nothing to the left of it.
+    for i in sels.iter().rev() {
+        let Some(d) = chain.get(*i).cloned() else { continue };
+        remove_device(app, d.kind);
+    }
+    clear_sel(&mut app.state);
 }
 
 /// Removes a device from its chain by the paths the rest of the app uses: an effect goes through the control
 /// plane's `RemoveEffect` (undoable), a MIDI FX through `midi_fx::remove`, the instrument deletes its channel (with
-/// the delete confirmation; its notes go with it) leaving the empty "Add instrument" slot.
+/// the delete confirmation; its notes go with it) leaving the empty "Add instrument" slot. A container (a slot's or
+/// a channel's) goes through its own kind's path: the slot's container is an effect to the control plane, a
+/// channel's container deletes its channel like an instrument does.
 pub fn remove_device(app: &mut App, kind: DeviceKind) {
     match kind {
-        DeviceKind::Fx(strip, slot) => {
-            let Some(id) = crate::mixer::track(&app.state, strip).map(|m| m.id.0) else { return };
-            let key = crate::plugins::fx_key(strip, slot);
-            app.plugins.drop_key(key);
-            app.state.device_rack_params.remove(&key);
-            let cmd = crate::control::command::Command::RemoveEffect { track: id, slot };
-            if let Err(e) = crate::control::apply(&mut app.state, &crate::control::By::User, None, vec![cmd]) {
-                app.state.message = Some(format!("Remove: {e}"));
+        DeviceKind::Fx(strip, slot) => remove_fx(app, strip, slot),
+        DeviceKind::Container { t: strip, k: slot } => {
+            if slot == crate::container::CHANNEL {
+                // A channel's container is the channel's instrument: removing it deletes the channel, as an
+                // instrument tile does (its notes go with it, the confirmation applies).
+                crate::rack::ask_delete(&mut app.state, vec![usize::from(strip)]);
+            } else {
+                remove_fx(app, strip, slot);
             }
         }
         DeviceKind::MidiFx(slot) => {
@@ -675,8 +827,225 @@ pub fn remove_device(app: &mut App, kind: DeviceKind) {
         DeviceKind::Instrument(row) => crate::rack::ask_delete(&mut app.state, vec![row]),
         DeviceKind::NoInstrument => {}
     }
-    app.state.device_rack_sel = None;
+    clear_sel(&mut app.state);
     app.invalidate();
+}
+
+/// Removes the effect (or the container) in slot `slot` of strip `strip` through the control plane's
+/// `RemoveEffect`: the same undoable path the mixer's Delete uses.
+fn remove_fx(app: &mut App, strip: u16, slot: u8) {
+    let Some(id) = crate::mixer::track(&app.state, strip).map(|m| m.id.0) else { return };
+    let key = crate::plugins::fx_key(strip, slot);
+    app.plugins.drop_key(key);
+    app.state.device_rack_params.remove(&key);
+    let cmd = crate::control::command::Command::RemoveEffect { track: id, slot };
+    if let Err(e) = crate::control::apply(&mut app.state, &crate::control::By::User, None, vec![cmd]) {
+        app.state.message = Some(format!("Remove: {e}"));
+    }
+}
+
+/// The rack's Ctrl keys while a tile is selected (app.rs's rack block): D duplicates the selected device, X
+/// cuts it, V pastes the cut device, G groups the selected effects into a container (§7's group device).
+pub fn key(app: &mut App, c: &str) -> bool {
+    match c.to_ascii_lowercase().as_str() {
+        "d" => duplicate_selected(app),
+        "x" => cut_selected(app),
+        "v" => paste_clip(app),
+        "g" => group_selected(app),
+        _ => false,
+    }
+}
+
+/// What a cut needs from an effect: its shown name, its plugin's index (for hosting), its saved state and
+/// whether its slot is on.
+fn clip_fx(app: &App, t: u16, k: u8) -> Option<(String, usize, Vec<u8>, bool)> {
+    let m = crate::mixer::track(&app.state, t)?;
+    let sp = m.slots[usize::from(k)].as_ref()?;
+    let name = crate::project_plugins::slot_title(sp);
+    let index = app.plugins.effects.iter().position(|a| a.desc.name == name || sp.name == a.desc.name)?;
+    let state = app
+        .plugins
+        .hosted
+        .get(&crate::plugins::fx_key(t, k))
+        .and_then(|h| h.plugin.lock().ok().and_then(|p| p.save_state()))
+        .unwrap_or_else(|| sp.state.clone());
+    Some((name, index, state, m.slot_on[usize::from(k)]))
+}
+
+/// Adds an effect `index` into slot `k` of strip `t`, hosting it from `state` (the cut device's saved state,
+/// not its defaults): [`MCmd::AddEffect`]'s own path, its request's state patched in.
+fn add_fx_with_state(app: &mut App, t: u16, k: u8, index: usize, state: Vec<u8>) {
+    let prev = app.state.selected_mixer;
+    app.state.selected_mixer = t;
+    crate::mixer::run(app, crate::mixer::MCmd::AddEffect(k, index));
+    // The slot's request now waits in `pending`; it starts from the cut state.
+    if let Some(r) = app.state.mixer.pending.last_mut() {
+        if let crate::mixer::FxReq::Create { state: st, .. } = r {
+            *st = Some(state);
+        }
+    }
+    app.state.selected_mixer = prev;
+}
+
+/// Ctrl+D: the selected device is duplicated — an effect into the first free slot after its own (with its
+/// state), a MIDI FX into the next free MIDI FX slot; the instrument and the containers are no-ops (a track
+/// holds one instrument, a container's members are its own).
+pub fn duplicate_selected(app: &mut App) -> bool {
+    let Some(sel) = rack_sel(&app.state) else { return false };
+    let Some(d) = rack_chain(&app.state).get(sel).cloned() else { return false };
+    match d.kind {
+        DeviceKind::Fx(t, k) => {
+            let Some((name, index, state, _on)) = clip_fx(app, t, k) else { return false };
+            let free = (k + 1..10).find(|&i| crate::mixer::track(&app.state, t).is_some_and(|m| m.slots[usize::from(i)].is_none()));
+            let Some(k2) = free else {
+                app.state.message = Some("No free slot after this device to duplicate into".into());
+                return true;
+            };
+            add_fx_with_state(app, t, k2, index, state);
+            app.state.message = Some(format!("{name} duplicated in slot {}", k2 + 1));
+            true
+        }
+        DeviceKind::MidiFx(k) => {
+            let Some(id) = rack_track(&app.state).map(|tr| tr.id.0) else { return false };
+            let Some(sl) = crate::midi_fx::slots(&app.state, id).get(k).cloned().flatten() else { return false };
+            let free = (0..crate::midi_fx::SLOTS).find(|&i| crate::midi_fx::slots(&app.state, id)[i].is_none());
+            let Some(i) = free else {
+                app.state.message = Some("No free MIDI FX slot to duplicate into".into());
+                return true;
+            };
+            crate::midi_fx::add(app, id, Some(i), sl.index);
+            app.state.message = Some(format!("{} duplicated", sl.name));
+            true
+        }
+        _ => {
+            app.state.message = Some("Only effects and MIDI FX can be duplicated".into());
+            true
+        }
+    }
+}
+
+/// Ctrl+X: the selected device is cut — copied (its state with it) and removed ([`remove_device`]).
+pub fn cut_selected(app: &mut App) -> bool {
+    let Some(sel) = rack_sel(&app.state) else { return false };
+    let Some(d) = rack_chain(&app.state).get(sel).cloned() else { return false };
+    let clip = match d.kind {
+        DeviceKind::Fx(t, k) => match clip_fx(app, t, k) {
+            Some((name, index, state, on)) => Clip::Fx { name, index, state, on },
+            None => return false,
+        },
+        DeviceKind::MidiFx(k) => {
+            let Some(id) = rack_track(&app.state).map(|tr| tr.id.0) else { return false };
+            let Some(sl) = crate::midi_fx::slots(&app.state, id).get(k).cloned().flatten() else { return false };
+            Clip::MidiFx { index: sl.index, on: sl.on }
+        }
+        _ => {
+            app.state.message = Some("Only effects and MIDI FX can be cut".into());
+            return true;
+        }
+    };
+    app.state.device_rack_clip = Some(clip);
+    app.state.message = Some(format!("{} cut", d.name));
+    remove_device(app, d.kind);
+    true
+}
+
+/// Ctrl+V: the cut device is pasted — an effect after the selected device's slot (else the strip's first free
+/// slot), from the state it was cut with; a MIDI FX into the next free MIDI FX slot.
+pub fn paste_clip(app: &mut App) -> bool {
+    let Some(clip) = app.state.device_rack_clip.clone() else {
+        app.state.message = Some("Nothing cut to paste".into());
+        return true;
+    };
+    match clip {
+        Clip::Fx { name, index, state, on } => {
+            let Some(t) = rack_track(&app.state).map(|tr| tr.mixer_strip) else { return false };
+            // After the selected device's slot when it is one of this strip's effects, else from the start.
+            let from = match rack_sel(&app.state).and_then(|i| rack_chain(&app.state).get(i).map(|d| d.kind)) {
+                Some(DeviceKind::Fx(t2, k)) if t2 == t => k + 1,
+                _ => 0,
+            };
+            let free = (from..10).find(|&i| crate::mixer::track(&app.state, t).is_some_and(|m| m.slots[usize::from(i)].is_none()));
+            let Some(k) = free else {
+                app.state.message = Some("No free slot of this track to paste into".into());
+                return true;
+            };
+            add_fx_with_state(app, t, k, index, state);
+            if !on
+                && let Some(m) = crate::mixer::track_mut(&mut app.state, t)
+            {
+                m.slot_on[usize::from(k)] = false;
+            }
+            app.state.message = Some(format!("{name} pasted in slot {}", k + 1));
+            true
+        }
+        Clip::MidiFx { index, on } => {
+            let Some(id) = rack_track(&app.state).map(|tr| tr.id.0) else { return false };
+            let Some(i) = (0..crate::midi_fx::SLOTS).find(|&i| crate::midi_fx::slots(&app.state, id)[i].is_none()) else {
+                app.state.message = Some("No free MIDI FX slot to paste into".into());
+                return true;
+            };
+            crate::midi_fx::add(app, id, Some(i), index);
+            if !on {
+                crate::midi_fx::toggle(&mut app.state, id, i);
+            }
+            true
+        }
+    }
+}
+
+/// Ctrl+G: the selected devices are grouped into a container — the effects of one strip become the members of
+/// a container in the first one's slot ([`crate::container::group_slots`]), the instrument alone becomes the
+/// channel's container ([`crate::container::wrap_channel`], the instrument rack). A container is not grouped
+/// into another container, and the MIDI FX rack is the note-path milestone's.
+pub fn group_selected(app: &mut App) -> bool {
+    let sels: Vec<usize> = app.state.device_rack_sels.iter().copied().collect();
+    if sels.is_empty() {
+        app.state.message = Some("Select devices to group".into());
+        return true;
+    }
+    let kinds: Vec<DeviceKind> = sels.iter().filter_map(|&i| rack_chain(&app.state).get(i).map(|d| d.kind)).collect();
+    if kinds.len() != sels.len() {
+        app.state.message = Some("Select devices to group".into());
+        return true;
+    }
+    if kinds.iter().any(|k| matches!(k, DeviceKind::NoInstrument | DeviceKind::Container { .. })) {
+        app.state.message = Some("A container cannot be grouped into another container".into());
+        return true;
+    }
+    if kinds.iter().all(|k| matches!(k, DeviceKind::MidiFx(_))) {
+        app.state.message = Some("The MIDI FX rack comes with the note-path milestone: MIDI FX cannot be grouped yet".into());
+        return true;
+    }
+    if kinds.len() == 1
+        && let DeviceKind::Instrument(row) = kinds[0]
+    {
+        let msg = app.wrap_channel(row);
+        app.state.message = msg;
+        clear_sel(&mut app.state);
+        app.invalidate();
+        return true;
+    }
+    if kinds.iter().all(|k| matches!(k, DeviceKind::Fx(..))) {
+        let strips: BTreeSet<u16> = kinds.iter().map(|k| match k {
+            DeviceKind::Fx(t, _) => *t,
+            _ => unreachable!("checked above"),
+        }).collect();
+        if strips.len() != 1 {
+            app.state.message = Some("Group the effects of one track".into());
+            return true;
+        }
+        let slots: Vec<u8> = kinds.iter().map(|k| match k {
+            DeviceKind::Fx(_, s) => *s,
+            _ => unreachable!("checked above"),
+        }).collect();
+        let msg = app.group_slots(*strips.iter().next().unwrap(), &slots);
+        app.state.message = msg;
+        clear_sel(&mut app.state);
+        app.invalidate();
+        return true;
+    }
+    app.state.message = Some("Group the effects of one track, or the instrument alone".into());
+    true
 }
 
 /// Keeps the rack's tiles showing their devices' own controls. Called from `clip_docked` (every tick).
@@ -707,6 +1076,13 @@ pub fn sync_embed(app: &mut App) {
             names.insert(key, d.name);
         }
         let prev = app.state.device_rack_params.get(&key).cloned().unwrap_or_default();
+        // A tile re-reads its instance when the instance has something to say (a value moved in its own window) or
+        // every 40 ms, not on every tick: reading a big instrument's ~900 values 60 times a second held the lock its
+        // audio thread wanted (Vital distorted while the rack showed its track). A tile with nothing yet is read now.
+        if !prev.is_empty() && !app.plugins.rack_due(key) {
+            params.insert(key, prev);
+            continue;
+        }
         let rows = app.plugins.rack_controls(key, &prev);
         if !rows.is_empty() {
             params.insert(key, rows);
@@ -955,7 +1331,29 @@ mod tests {
         // Linear mode is on in app() via test_project, but ensure it's true and the rack is open.
         assert!(app.state.project.linear_mode);
         assert!(visible(&app.state));
-        assert!(height(&app.state) >= DEFAULT_H.min((app.state.screen.1 / 2.0).max(MIN_H)));
+        assert!(height(&app.state) >= DEFAULT_H.min(max_h(&app.state)));
+    }
+
+    /// The rack's height stays between [`MIN_H`] and [`MAX_H`] however far the splitter is dragged (it used to
+    /// reach half the window and shrink to a sliver), and a short window pulls the tallest height down with it.
+    #[test]
+    fn the_splitter_stays_within_the_racks_bounds() {
+        let mut app = app();
+        crate::playlist::run(
+            &mut app,
+            Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
+        );
+        assert_eq!(height(&app.state), DEFAULT_H);
+        split_drag(&mut app, 0.0, 0.0);
+        assert_eq!(height(&app.state), MIN_H, "dragged to the top of the workspace");
+        let bottom = app.state.screen.1;
+        split_drag(&mut app, bottom, 0.0);
+        assert_eq!(height(&app.state), MAX_H, "dragged to the bottom edge");
+        // Half the window still wins on a short screen.
+        app.state.screen.1 = 500.0;
+        assert_eq!(max_h(&app.state), 250.0);
+        app.state.device_rack_h = 400.0;
+        assert_eq!(height(&app.state), 250.0);
     }
 
     /// Delete-key semantics: `RackAct::SelectTile` sets the selection, and the control plane handles
@@ -1309,7 +1707,8 @@ mod tests {
         assert!(at("Lemon Arp") < at("Instruments"), "MIDI FX built-ins listed above the instruments");
         assert!(at("Lemon Sampler") < at("Test Synth"), "native instruments first\nlabels={labels:?}");
         assert!(at("Lemon Reverb") < at("Test FX"), "native effects first\nlabels={labels:?}");
-        assert!(at("Instruments") < at("Test Synth") && at("Test Synth") < at("Effects") && at("Effects") < at("Test FX"));
+        // Everything native precedes the installed tail: no third-party instrument between Lemon's instruments and effects.
+        assert!(at("Instruments") < at("Lemon Reverb") && at("Lemon Reverb") < at("Test Synth") && at("Test Synth") < at("Test FX"));
         // Each section groups its built-ins under a "Lemon" header at the very top, before third-party.
         let lemon_after = |head: &str| {
             let h = labels.iter().position(|l| l == head).unwrap();
@@ -1353,7 +1752,11 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(heads, ["MIDI FX", "Instruments", "Effects"], "a MIDI track's sections\n{heads:?}");
+        assert_eq!(
+            heads,
+            ["MIDI FX", "Instruments", "Effects", "Installed instruments", "Installed effects"],
+            "a MIDI track's sections\n{heads:?}"
+        );
         // An audio track: only the effects (no MIDI FX rows, no instrument rows).
         crate::playlist::run(
             &mut app,
@@ -1368,7 +1771,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(heads, ["Effects"], "an audio track's sections\n{heads:?}");
+        assert_eq!(heads, ["Effects", "Installed effects"], "an audio track's sections\n{heads:?}");
         assert!(!rows.iter().any(|r| matches!(r, Row::MidiFx { .. })), "no MIDI FX on an audio track");
         assert!(
             !rows.iter().any(|r| matches!(r, Row::Plugin { effect: false, .. })),
@@ -1488,7 +1891,7 @@ mod tests {
         // The instrument tile is in the chain; select it and Delete.
         let chain = crate::device_rack::rack_chain(&app.state);
         let i = chain.iter().position(|d| matches!(d.kind, DeviceKind::Instrument(_))).expect("the instrument tile");
-        app.state.device_rack_sel = Some(i);
+        app.state.device_rack_sels.insert(i);
         crate::messages::set(&crate::messages::DELETE_CHANNEL, false);
         delete_selected(&mut app);
         assert_eq!(app.state.rack.delete_now, Some(vec![row]), "the tile's Delete asks the channel delete");
@@ -1535,7 +1938,8 @@ mod tests {
         let id = app.state.project.tracks.last().unwrap().clone().id.0;
         // Empty the instrument slot (the default sampler deleted).
         let row = app.state.project.channels.iter().position(|c| Some(c.index) == app.state.project.tracks.last().unwrap().channel).unwrap();
-        app.state.device_rack_sel = Some(crate::device_rack::rack_chain(&app.state).iter().position(|d| matches!(d.kind, DeviceKind::Instrument(_))).unwrap());
+        let i = crate::device_rack::rack_chain(&app.state).iter().position(|d| matches!(d.kind, DeviceKind::Instrument(_))).unwrap();
+        app.state.device_rack_sels.insert(i);
         crate::messages::set(&crate::messages::DELETE_CHANNEL, false);
         crate::device_rack::delete_selected(&mut app);
         crate::rack::delete_step(&mut app, &[row]);
@@ -1759,5 +2163,227 @@ mod tests {
         app.paint(&mut c, None);
         let remove = app.hits.iter().find(|h| h.action == Action::DeviceRack(RackAct::Remove(d.kind)));
         assert!(remove.is_some(), "the menu offers Remove");
+    }
+
+    /// A header click selects the tile (painting its bar brighter, the selected veil lighter); Shift+click
+    /// extends the selection through the anchor (the playlist's track-header pattern), and Delete removes every
+    /// selected device.
+    #[test]
+    fn the_header_selects_and_shift_extends() {
+        let mut app = full_chain_app();
+        // A second effect, so the Shift-extended range spans two deletions.
+        let strip = app.state.project.tracks.last().unwrap().clone().mixer_strip;
+        let free = crate::mixer::track(&app.state, strip).unwrap().slots.iter().position(|s| s.is_none()).unwrap() as u8;
+        let index = app.plugins.effects.iter().position(|a| a.desc.name == crate::plugins::builtin_effects()[0].desc.name).unwrap();
+        app.state.selected_mixer = strip;
+        crate::mixer::run(&mut app, crate::mixer::MCmd::AddEffect(free, index));
+        app.state.control.settle(&mut app.state.project);
+        app.mixer_tick();
+        let tiles = crate::views::device_rack::tiles(&app.state);
+        let fx_idx = tiles.iter().position(|(d, _)| matches!(d.kind, DeviceKind::Fx(..))).unwrap();
+        // A plain click selects one tile; the paint of the selected tile's header is a lighter veil (asserted
+        // through `tile_selected`, what the view reads).
+        run(&mut app, RackAct::SelectTile(fx_idx));
+        assert_eq!(rack_sel(&app.state), Some(fx_idx));
+        assert!(tile_selected(&app.state, fx_idx));
+        assert!(!tile_selected(&app.state, 0));
+        // Shift+click extends through the anchor: every tile between.
+        app.shift = true;
+        let other = tiles.iter().rposition(|(d, _)| matches!(d.kind, DeviceKind::Fx(..))).unwrap();
+        run(&mut app, RackAct::SelectTile(other));
+        app.shift = false;
+        assert_eq!(
+            app.state.device_rack_sels,
+            (fx_idx..=other).collect::<BTreeSet<usize>>(),
+            "the range from the anchor is selected"
+        );
+        // Delete removes the selected devices at once.
+        let n_fx = crate::mixer::track(&app.state, strip).unwrap().slots.iter().filter(|s| s.is_some()).count();
+        delete_selected(&mut app);
+        let m = crate::mixer::track(&app.state, strip).unwrap();
+        assert_eq!(m.slots.iter().filter(|s| s.is_some()).count(), n_fx - 2, "both selected effects went");
+        assert!(app.state.device_rack_sels.is_empty(), "the selection cleared");
+    }
+
+    /// Each device tile's header carries a wrench (right of the v menu): it pops that device's editor out to its
+    /// own floating window — lit while it is out, and docking it again — without the header menu's round trip.
+    #[test]
+    fn the_wrench_pops_out_one_device() {
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = full_chain_app();
+        app.paint(&mut c, None);
+        let tiles = crate::views::device_rack::tiles(&app.state);
+        let (d, tile) = tiles.iter().find(|(d, _)| matches!(d.kind, DeviceKind::Fx(..))).unwrap().clone();
+        let key = d.key.unwrap();
+        // The wrench sits right of the v menu, inside the header.
+        let hit = app.hits.iter().find(|h| h.action == Action::DeviceRack(RackAct::PopOut(key)));
+        assert!(hit.is_some(), "the tile paints a pop-out wrench");
+        assert!(tile.contains(hit.unwrap().rect.cx(), hit.unwrap().rect.y + 2.0), "in the header");
+        assert!(!app.state.device_rack_float.contains(&key), "docked first");
+        run(&mut app, RackAct::PopOut(key));
+        assert!(app.state.device_rack_float.contains(&key), "floated");
+        // Painted again, the wrench is the Dock action and lit.
+        app.paint(&mut c, None);
+        assert!(app.hits.iter().any(|h| h.action == Action::DeviceRack(RackAct::Dock(key))), "lit: Dock now");
+        run(&mut app, RackAct::Dock(key));
+        assert!(!app.state.device_rack_float.contains(&key), "docked back");
+    }
+
+    /// A container is a device kind of its own: an empty container (MCmd::AddContainer, the browser's entry
+    /// dropped on the rack) shows as a Container tile — its own gradient, its own place name — and the tile's
+    /// wrench (or body) opens the docked container window.
+    #[test]
+    fn a_container_is_a_device_of_the_chain() {
+        let mut app = full_chain_app();
+        let strip = app.state.project.tracks.last().unwrap().clone().mixer_strip;
+        let free = app.state.project.mixer.iter().find(|m| m.index == strip).unwrap().slots.iter().position(|s| s.is_none()).unwrap() as u8;
+        app.state.selected_mixer = strip;
+        crate::mixer::run(&mut app, crate::mixer::MCmd::AddContainer(free));
+        let chain = rack_chain(&app.state);
+        let Some(d) = chain.iter().find(|d| matches!(d.kind, DeviceKind::Container { k: k2, .. } if k2 == free)) else {
+            panic!("the container slot is a Container device\n{chain:?}");
+        };
+        assert_eq!(d.name, crate::container::title(&app.state, strip, free).unwrap(), "titled by its place");
+        // Its gradient is its own, distinct from the other kinds'.
+        let (ct, cb) = header_gradient(d.kind);
+        assert_eq!((ct, cb), HEADER_GRAD_CONTAINER);
+        assert_ne!((ct, cb), header_gradient(DeviceKind::Fx(strip, free)));
+        // The wrench (and the body) opens the container window on its place.
+        run(&mut app, RackAct::OpenContainer { t: strip, k: free });
+        assert!(app.state.shown(crate::app::Win::Container), "the container window opened");
+        assert_eq!(app.state.container.at, (strip, free), "on the container's place");
+        // Its LED switches the slot.
+        run(&mut app, RackAct::ToggleOn(d.kind));
+        assert!(!crate::mixer::track(&app.state, strip).unwrap().slot_on[usize::from(free)], "the slot switched off");
+        // Removing it empties the slot (the same RemoveEffect path an effect goes through).
+        run(&mut app, RackAct::Remove(d.kind));
+        assert!(crate::mixer::track(&app.state, strip).unwrap().slots[usize::from(free)].is_none(), "removed");
+    }
+
+    /// The browser's container entry dropped over the device rack makes an empty container in the rack track's
+    /// strip — its own container device tile (the mixer selection is lent to the drop and given back).
+    #[test]
+    fn a_browser_container_drop_lands_on_the_rack() {
+        let mut app = full_chain_app();
+        let strip = app.state.project.tracks.last().unwrap().clone().mixer_strip;
+        let n = crate::mixer::track(&app.state, strip).unwrap().slots.iter().filter(|s| s.is_some()).count();
+        let _msg = app.drop_container_on_rack_strip(None);
+        let m = crate::mixer::track(&app.state, strip).unwrap();
+        assert_eq!(m.slots.iter().filter(|s| s.is_some()).count(), n + 1, "the container landed on the rack strip");
+        assert!(m.slots.iter().any(|s| s.as_ref().is_some_and(|s| s.name == crate::container::CONTAINER)));
+        assert!(rack_chain(&app.state).iter().any(|d| matches!(d.kind, DeviceKind::Container { .. })));
+    }
+
+    /// Ctrl+D duplicates the selected effect into the first free slot after it (its plugin, its state with it),
+    /// Ctrl+X cuts it (the slot clears, the clip keeps it), Ctrl+V pastes it back — and on the instrument both
+    /// are a no-op message.
+    #[test]
+    fn ctrl_d_x_v_duplicate_cut_and_paste() {
+        let mut app = full_chain_app();
+        let tiles = crate::views::device_rack::tiles(&app.state);
+        let (d, _) = tiles.iter().find(|(d, _)| matches!(d.kind, DeviceKind::Fx(..))).unwrap().clone();
+        let DeviceKind::Fx(strip, k) = d.kind else { unreachable!() };
+        let key = d.key.unwrap();
+        let state = app.plugins.hosted.get(&key).and_then(|h| h.plugin.lock().ok().and_then(|p| p.save_state()));
+        app.state.device_rack_sels.insert(tiles.iter().position(|(t, _)| t.kind == d.kind).unwrap());
+        // Ctrl+D: the duplicate lands in the next free slot, same name.
+        assert!(duplicate_selected(&mut app));
+        let dup_name = crate::mixer::track(&app.state, strip).unwrap().slots[usize::from(k + 1)]
+            .as_ref()
+            .map(crate::project_plugins::slot_title)
+            .expect("the duplicate took the next slot");
+        assert_eq!(dup_name, d.name);
+        // Ctrl+X the original: the slot empties, the clip holds the device.
+        assert!(cut_selected(&mut app), "the cut happened");
+        assert!(
+            crate::mixer::track(&app.state, strip).unwrap().slots[usize::from(k)].is_none(),
+            "the cut slot is empty"
+        );
+        let clip = app.state.device_rack_clip.clone();
+        let Some(Clip::Fx { name, state: clip_state, .. }) = clip else { panic!("an effect in the clip") };
+        assert_eq!(name, d.name);
+        if let Some(st) = state {
+            assert_eq!(clip_state, st, "the cut keeps the device's state");
+        }
+        // Ctrl+V pastes it into the freed slot, from the state it was cut with.
+        assert!(paste_clip(&mut app));
+        let m = crate::mixer::track(&app.state, strip).unwrap();
+        assert_eq!(
+            crate::project_plugins::slot_title(m.slots[usize::from(k)].as_ref().expect("pasted back")),
+            d.name
+        );
+        // The instrument is a no-op for the pair.
+        let inst = tiles.iter().find(|(t, _)| matches!(t.kind, DeviceKind::Instrument(_))).unwrap().0.clone();
+        app.state.device_rack_sels = BTreeSet::from([tiles.iter().position(|(t, _)| t.kind == inst.kind).unwrap()]);
+        assert!(duplicate_selected(&mut app));
+        assert!(app.state.message.as_deref().unwrap().contains("Only effects"));
+    }
+
+    /// Ctrl+G groups the selected effects of one strip into a container in the first one's slot: every selected
+    /// effect becomes a member (one undo step), the wrapped slot reads as a Container device.
+    #[test]
+    fn ctrl_g_groups_selected_effects_into_a_container() {
+        use crate::container::members;
+        let mut app = full_chain_app();
+        let strip = app.state.project.tracks.last().unwrap().clone().mixer_strip;
+        // A second effect to group with the first.
+        let free = crate::mixer::track(&app.state, strip).unwrap().slots.iter().position(|s| s.is_none()).unwrap() as u8;
+        let index = app.plugins.effects.iter().position(|a| a.desc.name == crate::plugins::builtin_effects()[0].desc.name).unwrap();
+        app.state.selected_mixer = strip;
+        crate::mixer::run(&mut app, crate::mixer::MCmd::AddEffect(free, index));
+        app.state.control.settle(&mut app.state.project);
+        app.mixer_tick();
+        // Select the two effects through their tiles (a Shift-extended header selection), then Ctrl+G.
+        let tiles = crate::views::device_rack::tiles(&app.state);
+        let sels: Vec<usize> = tiles
+            .iter()
+            .enumerate()
+            .filter(|(_, (d, _))| matches!(d.kind, DeviceKind::Fx(..)))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(sels.len(), 2, "the two effects to group");
+        app.state.device_rack_sels = sels.iter().copied().collect();
+        assert!(group_selected(&mut app));
+        let first_slot = match tiles[sels[0]].0.kind {
+            DeviceKind::Fx(_, k) => k,
+            _ => unreachable!(),
+        };
+        let chain = rack_chain(&app.state);
+        let container = chain
+            .iter()
+            .find(|d| matches!(d.kind, DeviceKind::Container { k, .. } if k == first_slot))
+            .expect("the group container\n{chain:?}");
+        let DeviceKind::Container { t: ct, k: ck } = container.kind else { unreachable!() };
+        assert_eq!(members(&app.state, ct, ck).unwrap_or_default().len(), 2, "every selected effect became a member");
+        assert!(app.state.device_rack_sels.is_empty(), "the selection cleared");
+    }
+
+    /// Ctrl+G with the instrument tile selected wraps the channel (the instrument rack): a plugin channel's
+    /// instrument becomes a Container device at (row, CHANNEL) — the container plays the channel's notes.
+    #[test]
+    fn ctrl_g_on_the_instrument_wraps_the_channel() {
+        let mut app = app();
+        crate::playlist::run(&mut app, Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi));
+        app.plugins = crate::plugins::Plugins::builtins();
+        app.state.plugdb.rebuild(&app.plugins);
+        app.plugin_tick();
+        let trio = app.plugins.index_of(crate::osc3::LEMON_TRIO).unwrap();
+        // The rack track's channel: a rack row's row is the channel's index in the project.
+        let tr = app.state.project.tracks.first().unwrap().clone();
+        let row = app.state.project.channels.iter().position(|c| Some(c.index) == tr.channel).unwrap();
+        crate::plugin_menu::replace_generator(&mut app, trio, row);
+        (0..3).for_each(|_| app.plugin_tick());
+        let i = crate::views::device_rack::tiles(&app.state)
+            .iter()
+            .position(|(d, _)| d.kind == DeviceKind::Instrument(row))
+            .unwrap_or_else(|| panic!("the instrument tile\n{:?}", crate::views::device_rack::tiles(&app.state)));
+        app.state.device_rack_sels = BTreeSet::from([i]);
+        assert!(group_selected(&mut app));
+        let chain = rack_chain(&app.state);
+        assert!(
+            chain.iter().any(|d| matches!(d.kind, DeviceKind::Container { t: ct, k: kk } if ct == row as u16 && kk == crate::container::CHANNEL)),
+            "the instrument is a container now\n{chain:?}"
+        );
+        assert_eq!(crate::container::members(&app.state, row as u16, crate::container::CHANNEL).map(|m| m.len()), Some(1));
     }
 }

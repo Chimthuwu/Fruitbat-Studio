@@ -2116,7 +2116,7 @@ fn run_now(app: &mut App, c: MCmd) -> Option<String> {
             s.rack.sel = rows;
             let tracks = crate::track_links::tracks_routed_to(s, &tg);
             if let Some(&t) = tracks.first() {
-                s.playlist.track = t;
+                crate::playlist::select_track(s, t, false);
             }
             Some(format!("Selected {k} channel(s) and {} playlist track(s)", tracks.len()))
         }

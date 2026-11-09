@@ -20,6 +20,13 @@ the window's own frame, so it sits exactly where the arrangement was.
 - One **row per track, in the mixer's order** (`Track::mixer_strip`), each headed by the
   track's name, its colour, its own **■** stop button and, on a MIDI track with no instrument,
   an accent **!**.
+- **The grid scrolls when it outgrows the window** (S3, finished): a scene column keeps at least
+  `views::launcher::MIN_COL` px (a clip's name stays readable) and a track row `MIN_ROW` px, and
+  what does not fit moves — the wheel scrolls the rows, **Shift**+wheel (or a sideways wheel) the
+  scene columns (`Launcher::scroll_x` / `scroll_y`, `views::launcher::wheel`, clamped to the
+  content). The scene buttons and the track column stay put while the cells scroll under them, so
+  a track's name never leaves its clips, and a cell scrolled out of the grid registers no hit (it
+  cannot take a click meant for the track column or the scene buttons).
 - **Right-click a clip, a scene button or a track row**: its menu offers Rename..., Select in
   the playlist / Set current pattern / Clear clip, and a colour swatch (the crossed one takes a
   colour away). Renaming opens the playlist's inline text box over the grid. A clip's colour
@@ -27,12 +34,32 @@ the window's own frame, so it sits exactly where the arrangement was.
   (`playlist::track_color`, `EditTarget::TrackName`), so the header and the launcher agree.
 - One cell per (track, scene). A cell holds a **pattern** — the project's own pattern, so the
   piano roll, the device rack and the mixer all see the same notes — plus a name and a colour
-  of its own (`launcher::Slot`).
+  of its own (`launcher::Slot`). A cell can hold **an audio clip** instead: see "Samples" below.
+- **Samples** (dropped on a cell). Dragging an audio file from Explorer onto a cell
+  (`App::drop_file` → `launcher::add_audio`) makes an `AudioClip` channel playing it
+  (`playlist::audio_channel`, the same channel a drop on the arranger makes) and a clip in the
+  cell that plays it (`Slot::audio`, `Slot::pattern` = 0: no pattern). Its length is the
+  sample's own (`playlist::source_len`, so it follows the tempo), the shadow lays
+  `ClipSource::Channel` clips on the track's lane, and the cell draws the sample's peaks behind
+  its name. Double-clicking it plays it again (there is no pattern to open), and a recording
+  into that cell replaces the sample with the take's pattern (`launcher::take_pattern`).
+- **A cell records** (S4, finished). Its menu's `Record into this clip` (`Act::Record`,
+  `launcher::record`) arms Record with the cell as the take's target (`Rec::slot`) and starts
+  playback, so what is played lands in the cell: an empty cell gets a pattern and a clip of its
+  own as the first note comes (`launcher::take_pattern` / `bind_take`) and shows the clip being
+  recorded (ringed in the record colour, ● in its corner), and a cell that already holds a clip
+  records into that clip's pattern. The take records from its own start, so the first note is at
+  the clip's start; the clip's length is its pattern's (whole bars past the last note), so it
+  loops at that length like any other. Stopping the track (`launcher::stop`) or the transport ends
+  the take, and a take that recorded nothing leaves the cell as it was.
 - **Left-click** a filled cell: that track lights up for the scene and the pattern starts.
-  An empty cell stops the track. **Right-click** a cell: the current pattern goes in, or out if
-  it is already there. **Double-click** a filled cell: that clip's pattern opens in the Piano
-  Roll (the first click launched it; the second opens it, as a double-click on a playlist MIDI
-  clip does).
+  An empty cell stops the track. **Double-click** an empty cell: it gets a clip of its own (a new
+  pattern, `launcher::make_clip`) and opens in the Piano Roll to be filled — a double click makes
+  clips, as in Bitwig, rather than the menu. **Double-click** a filled cell: that clip's pattern
+  opens in the Piano Roll (the first click launched it; the second opens it, as a double-click on
+  a playlist MIDI clip does). **Right-click** a cell: its menu — launch settings, next action,
+  rename, colour, `Set current pattern` (the current pattern goes in, or out if it is already
+  there), `Clear clip`.
 - **Launches are quantised** (S1, finished): every clip and every scene has its own
   `LaunchQ` — Off, 1/16, 1/8, 1/4, 1/2, 1 bar, 2, 4 or 8 bars — and `Q to Loop`. While the
   transport runs a click queues the clip for the next line of *its own* grid
@@ -62,7 +89,8 @@ playing track a copy of its clip's pattern holding only that track's channel's n
 those copies along the track's lane at the clip's own length, from the tick the clip was launched
 at, across the window. The project's real patterns are untouched, so the piano roll, the channel
 rack and a save never see them; the transport loops `[0, window)` (`App::selection_loop`) so the
-set never runs out.
+set never runs out. A cell holding a sample (`Slot::audio`) needs no copy: its lane gets
+`ClipSource::Channel` clips of the sample itself, repeated at its own length.
 
 - `window` is the **common multiple** of the playing clips' lengths, capped at 64 bars
   (`MAX_WINDOW_BARS`).
@@ -80,14 +108,16 @@ set never runs out.
 ## 2. The plan, in order
 
 Each step should land on its own, green, with tests. `cargo test -p os-app` is currently
-1120 passed / 0 failed / 62 ignored — keep it that way.
+1124 passed / 0 failed / 62 ignored — keep it that way.
 
 ### S0 — Editing from the launcher (done)
 
 Double-clicking a filled cell opens the clip's pattern in the Piano Roll (`launcher::open`,
-`Act::Launch` twice within 450 ms, tracked by `App::launcher_click`). Nothing else about the
-clip is editable in place yet: a right-click holds only "the current pattern, or nothing". A
-real slot menu (rename, duplicate, colour, delete) belongs with S4/S5.
+`Act::Launch` twice within 450 ms, tracked by `App::launcher_click`), and a double click on an
+empty cell makes the clip first (`launcher::make_clip`) and opens it — the grid's own gesture
+for making clips. The rest is the slot menu (rename, colour, `Set current pattern`, `Clear
+clip`, the launch sets, the next action), plus a drop of an audio file on a cell
+(`launcher::add_audio`).
 
 ### S1 — Quantised launch (done)
 
@@ -131,21 +161,32 @@ must be ordered *live clip → MIDI FX → instrument*.
 
 ### S3 — Mixer alignment (S/M)
 
-The columns already follow `mixer_strip`. What is missing when a set grows:
+The columns already follow `mixer_strip`, and the grid scrolls on both axes at a least column and
+row size (§1). What is still missing when a set grows:
 
-- horizontal scroll for many tracks (the device rack's `device_rack_scroll_x` is the pattern to
-  copy), and a minimum column width so names stay readable;
+- ~~horizontal scroll for many tracks, and a minimum column width so names stay readable~~ done:
+  in this grid a track is a row, so many tracks scroll up and down and many scenes sideways (8
+  scenes, `MIN_COL` = 96 px, `MIN_ROW` = 22 px, wheel and Shift+wheel in `views::launcher::wheel`);
 - grouping: a launcher column for a **bus** is currently skipped (a bus has no lane). Bitwig shows
   group tracks; decide whether a bus gets a column that only shows its return;
 - the mixer itself should be able to show the same left-to-right order as the launcher when both
   are open — today the mixer orders by strip, which is what the launcher uses, so they agree;
   keep that invariant if either side ever gains reordering.
 
-### S4 — Recording into slots (M/L)
+### S4 — Recording into slots (done for notes)
 
-Arm a track, press record on a slot, play: the notes land in a new pattern bound to that cell
-(`Pattern` creation already exists; `crates/os-app/src/record.rs`). Suhina:
-`crates/session/src/recording.rs`, `record_writer.rs`.
+~~Arm a track, press record on a slot, play: the notes land in a new pattern bound to that cell~~
+done: `Act::Record` / `launcher::record` arm the cell, `record::open_take` records into the cell's
+pattern from the take's own start, and `record::rec_pattern_tick` keeps a launcher take out of the
+arranger's clip placement. Still open:
+
+- **audio** into a launcher slot (only notes and automation are captured; a sample dropped on
+  a cell plays from it but is not recorded);
+- recording **across loops**: the transport's loop wrap ends the take (one pass per take, as the
+  arranger's takes already did), where Bitwig keeps layering passes into the same clip;
+- take **comping** (several takes of one cell, picked between) — Suhina's
+  `crates/session/src/recording.rs` / `record_writer.rs` are the pointer for that part;
+- the clip the take makes is not launched by the end of the take: click it to hear it.
 
 ### S5 — Follow actions and scene chains (done)
 
@@ -178,14 +219,15 @@ whichever storage wins.
 
 | file | what |
 |---|---|
-| `crates/os-app/src/launcher.rs` | `Launcher` (clips, playing, pending, scenes), `Slot`, `Scene`, `Launch`, `LaunchQ`, `PlayFrom`, `OnRelease`, `NextAction`, `NextTiming`, `Act`, `columns`, `clip`, `playing`, `set`, `launch`, `release`, `stop`, `launch_scene`, `stop_all`, `advance`, `shadow`, `window`, `run` |
-| `crates/os-app/src/views/launcher.rs` | the grid: frame + title "Clip Launcher", track headers, scene column, cells, the right-click hint |
-| `crates/os-app/src/app.rs` | `Action::Launcher(Act)`, `Action::ToggleLauncher`, the **Tab** key, `State::launcher` / `State::launcher_open`, the right-click → `Act::Set` route in `mouse_down_right` |
+| `crates/os-app/src/launcher.rs` | `Launcher` (clips, playing, pending, scenes), `Slot` (pattern or `audio`), `Scene`, `Launch`, `LaunchQ`, `PlayFrom`, `OnRelease`, `NextAction`, `NextTiming`, `Act`, `columns`, `clip`, `playing`, `set`, `make_clip`, `add_audio`, `slot_len`, `launch`, `release`, `stop`, `launch_scene`, `stop_all`, `advance`, `shadow`, `window`, `run` |
+| `crates/os-app/src/views/launcher.rs` | the grid: frame + title "Clip Launcher", track headers, scene buttons, cells (and a sample's peaks in one), the hint, and its layout and scroll (`geom`, `wheel`) |
+| `crates/os-app/src/app.rs` | `Action::Launcher(Act)`, `Action::ToggleLauncher`, the **Tab** key, `State::launcher` / `State::launcher_open`, the right-click → `Act::Menu` route in `mouse_down_right` |
+| `crates/os-app/src/record.rs` | `Rec::slot` and the take's `slot` / `created` / `start`: a launcher cell's take records into the cell's pattern from its own start, and ends with the cell's clip (`finish_slot_take`) |
 | `crates/os-app/src/views/mod.rs` | `Win::Playlist` paints the launcher when `launcher_open` |
 
 ## 4. Testing habits this code base expects
 
-- Model/unit tests live at the bottom of the module they test (`launcher.rs` has six).
+- Model/unit tests live at the bottom of the module they test (`launcher.rs` has twenty-four).
 - Paint tests make a `os_ui::Canvas`, call `app.paint(&mut c, None)` and read `app.hits` — that is
   how "a slot per track and scene" is asserted, and how a click is simulated
   (`mouse_move` → `mouse_down`).

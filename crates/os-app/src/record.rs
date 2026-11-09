@@ -186,6 +186,13 @@ struct Take {
     controls: Vec<(u32, u32)>,
     /// SONG mode: the clip the take records into (track, position), made longer when playback runs past it (spec §2).
     clip: Option<(u16, u32)>,
+    /// A launcher take's cell (track id, scene): its notes go to the cell's pattern from the take's own start
+    /// (`Rec::slot`, `crate::launcher::take_pattern`).
+    slot: Option<(u32, usize)>,
+    /// Whether the take made its pattern (an empty take leaves the cell as it was).
+    created: bool,
+    /// The transport tick the take started at: a launcher take's first note is at the clip's start.
+    start: f64,
 }
 
 /// Record's state (spec §2).
@@ -212,6 +219,9 @@ pub struct Rec {
     /// SONG mode: playback has passed a Stop recording marker (and no Start recording marker since), so notes are not
     /// recorded until playback stops or goes back (spec: audio/transport.md "Time markers in SONG mode").
     punched_out: bool,
+    /// The launcher cell the take records into (track id, scene), set by `launcher::record`: an empty cell gets a clip
+    /// as the take starts (crate::launcher). `None`: the current pattern, as usual.
+    pub slot: Option<(u32, usize)>,
 }
 
 impl Rec {
@@ -560,7 +570,15 @@ impl App {
     /// A note went down (typing keyboard, MIDI, Touch controller): recorded from the playback position while
     /// recording (spec §2 Taking notes).
     pub(crate) fn record_down_with(&mut self, src: Src, key: u16, velocity: u8, extra: Extra) {
-        let target = extra.channel.or_else(|| crate::piano::channel(&self.state));
+        // A launcher cell's take records into its own track, so the note takes that track's channel whatever is
+        // selected (a clip plays the notes of its track's channel, `launcher::shadow`).
+        let target = self
+            .state
+            .rec
+            .slot
+            .and_then(|(track, _)| crate::launcher::channel_of(&self.state, track))
+            .or(extra.channel)
+            .or_else(|| crate::piano::channel(&self.state));
         if let Some(channel) = target {
             self.state.rec.log.down(src, key, velocity, channel, std::time::Instant::now());
         }
@@ -597,11 +615,25 @@ impl App {
 
     /// The take starts: one undo step for it, with the playlist too in SONG mode (a clip may be placed).
     fn open_take(&mut self, song: bool) {
+        let start = self.transport.tick();
         let s = &mut self.state;
-        if s.rec.take.as_ref().is_some_and(|t| t.pattern == s.pattern) {
+        let slot = s.rec.slot;
+        if s.rec.take.as_ref().is_some_and(|t| t.pattern == s.pattern && t.slot == slot) {
             return;
         }
-        let pattern = s.pattern;
+        // A launcher cell's take records into the cell's own pattern: an empty cell gets one made for it, and the clip
+        // showing on the grid is how the take says where its notes are going (`launcher::take_pattern`).
+        let (pattern, created) = match slot {
+            Some((track, scene)) => {
+                let (pattern, created) = crate::launcher::take_pattern(s, track, scene);
+                if created {
+                    crate::launcher::bind_take(s, track, scene, pattern);
+                }
+                (pattern, created)
+            }
+            None => (s.pattern, false),
+        };
+        s.pattern = pattern;
         let snap = crate::history::Snap::pattern(s, pattern);
         let snap = if song {
             crate::playlist::arr_mut(s);
@@ -611,7 +643,7 @@ impl App {
         };
         crate::history::record(s, RECORDED, snap);
         let before = s.project.pattern(pattern).map(|p| p.notes.clone()).unwrap_or_default();
-        s.rec.take = Some(Take { pattern, before, channels: Vec::new(), span: None, new: Vec::new(), controls: Vec::new(), clip: None });
+        s.rec.take = Some(Take { pattern, before, channels: Vec::new(), span: None, new: Vec::new(), controls: Vec::new(), clip: None, slot, created, start });
     }
 
     /// The current pattern's tick at playback tick `t`: the tick itself in PAT mode; in SONG mode where a clip of the
@@ -619,6 +651,11 @@ impl App {
     /// no clip, a whole-pattern clip just before `t` becomes the take's and grows, else one is placed from the start
     /// of that bar on the first free track (spec §2).
     fn rec_pattern_tick(&mut self, t: f64, song: bool) -> Option<f64> {
+        // A launcher cell's take records from the moment it started, so its first note lands at the clip's start (no
+        // arrangement clip is placed for it; the cell is its clip).
+        if let Some(from) = self.state.rec.take.as_ref().and_then(|k| k.slot.map(|_| k.start)) {
+            return Some((t - from).max(0.0));
+        }
         if !song {
             return Some(t);
         }
@@ -721,7 +758,23 @@ impl App {
         for h in held {
             self.write_held(h, last);
         }
-        self.state.rec.take = None;
+        if let Some(take) = self.state.rec.take.take() {
+            self.finish_slot_take(&take);
+        }
+        self.state.rec.slot = None;
+    }
+
+    /// A take into a launcher cell is over: one that recorded nothing leaves the cell as it was (the clip and the
+    /// pattern the take made go with it); one that recorded notes keeps them as the cell's clip, whose length is its
+    /// pattern's own (whole bars past the last note), so it loops like any other clip.
+    fn finish_slot_take(&mut self, take: &Take) {
+        let Some((track, scene)) = take.slot else { return };
+        if take.created && take.new.is_empty() {
+            crate::launcher::set(self, track, scene, None);
+            self.state.project.patterns.retain(|p| p.number != take.pattern);
+            self.state.piano.dirty = true;
+        }
+        self.invalidate();
     }
 
     /// Each tick: notes the playback position; when playback stops or pauses, or the pattern changes, the take ends;
@@ -815,7 +868,9 @@ impl App {
             }
         }
         let r = &self.state.rec;
-        let changed = r.take.as_ref().is_some_and(|t| t.pattern != self.state.pattern);
+        // A launcher take records into its cell's pattern whatever the current pattern does (another track's clip may
+        // launch while it runs); the others end when the pattern changes under them.
+        let changed = r.take.as_ref().is_some_and(|t| t.slot.is_none() && t.pattern != self.state.pattern);
         if (r.was_live && !live) || changed {
             self.end_take();
             if !self.transport.playing() && self.state.rec.armed && Opt::DisarmOnStop.on() {
@@ -842,7 +897,17 @@ impl App {
         }
         let since = r.since;
         self.state.rec.held.clear();
-        self.state.rec.take = None;
+        // A cell the take made goes away with it (it was empty before the take); one that already held a clip keeps
+        // it, its notes taken back by the undo below.
+        if let Some(take) = self.state.rec.take.take()
+            && let Some((track, scene)) = take.slot
+            && take.created
+        {
+            crate::launcher::set(self, track, scene, None);
+            self.state.project.patterns.retain(|p| p.number != take.pattern);
+            self.state.piano.dirty = true;
+        }
+        self.state.rec.slot = None;
         self.state.rec.waiting = false;
         self.state.rec.count = None;
         self.act(crate::app::Action::Stop);

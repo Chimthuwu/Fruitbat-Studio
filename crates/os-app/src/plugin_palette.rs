@@ -281,9 +281,10 @@ pub fn rows(s: &State) -> Vec<Row> {
     v
 }
 
-/// The device rack browser's rows: MIDI FX first (all-native), then Instruments and Effects, each led by a
-/// "Lemon" group of the built-ins before the installed ones. Which sections show follows the rack track's kind
-/// (§7's chain: MIDI FX → instrument → audio FX): a MIDI track takes all three, an audio track only the effects.
+/// The device rack browser's rows: MIDI FX first (all-native), then the Lemon built-ins — instruments, then audio
+/// effects — and only then all the installed (third-party) plugins, instruments and effects together in the tail.
+/// Which sections show follows the rack track's kind (§7's chain: MIDI FX → instrument → audio FX): a MIDI track
+/// takes all of them, an audio track only the effects and the installed tail.
 fn rack_rows(s: &State) -> Vec<Row> {
     let p = &s.palette;
     let q = p.query.trim().to_lowercase();
@@ -324,30 +325,45 @@ fn rack_rows(s: &State) -> Vec<Row> {
             v.extend((0..p.midi_fx.len()).map(|at| Row::MidiFx { at }));
         }
         v.push(Row::Head { label: "Instruments".into(), major: true });
-        v.extend(rack_section(s, false));
+        v.extend(native_rows(s, false));
     }
     v.push(Row::Head { label: "Effects".into(), major: true });
-    v.extend(rack_section(s, true));
+    v.extend(native_rows(s, true));
+    // The installed (third-party) plugins come after everything native, instruments and effects together.
+    if midi {
+        v.push(Row::Head { label: "Installed instruments".into(), major: true });
+        v.extend(third_party_rows(s, false));
+    }
+    v.push(Row::Head { label: "Installed effects".into(), major: true });
+    v.extend(third_party_rows(s, true));
     v
 }
 
-/// One rack browser section, native first: a "Lemon" group holds every built-in at the top, then the installed
-/// ones in the display arrangement the palette's own list uses (favourites, then the view's order).
-fn rack_section(s: &State, effect: bool) -> Vec<Row> {
+/// A rack browser section's native rows: every built-in (plugin_db's `Entry.builtin`) under a "Lemon" heading, in
+/// the list's order. An empty list keeps the section's note; a list of installed plugins only contributes nothing.
+fn native_rows(s: &State, effect: bool) -> Vec<Row> {
     let list = if effect { &s.plugdb.lists.fx } else { &s.plugdb.lists.gens };
     if list.is_empty() {
         return vec![Row::Note(if effect { "(no effect plugins found)" } else { "(no instruments found)" })];
     }
-    let mut v = Vec::new();
     let builtins: Vec<usize> = (0..list.len()).filter(|&i| list[i].builtin).collect();
-    if !builtins.is_empty() {
-        v.push(Row::Head { label: "Lemon".into(), major: false });
-        v.extend(builtins.iter().map(|&i| Row::Plugin { effect, at: i }));
+    if builtins.is_empty() {
+        return Vec::new();
     }
+    let mut v = vec![Row::Head { label: "Lemon".into(), major: false }];
+    v.extend(builtins.iter().map(|&i| Row::Plugin { effect, at: i }));
+    v
+}
+
+/// A rack browser section's installed (non-built-in) rows, in the display arrangement the palette's own list uses
+/// (favourites, then the view's order).
+fn third_party_rows(s: &State, effect: bool) -> Vec<Row> {
+    let list = if effect { &s.plugdb.lists.fx } else { &s.plugdb.lists.gens };
     let rest: Vec<usize> = (0..list.len()).filter(|&i| !list[i].builtin).collect();
     if rest.is_empty() {
-        return v;
+        return Vec::new();
     }
+    let mut v = Vec::new();
     let row = |at: usize| Row::Plugin { effect, at };
     let head = |label: &str| Row::Head { label: label.into(), major: false };
     let favs: Vec<usize> = rest.iter().copied().filter(|&i| list[i].favorite).collect();
@@ -744,6 +760,59 @@ mod tests {
             Row::Plugin { effect, at } => entry(&app.state, effect, at).map(|e| e.label.clone()),
             _ => None,
         }).collect()
+    }
+
+    /// The rack browser's order: MIDI FX, then the Lemon built-in instruments, then the Lemon built-in effects,
+    /// and only then all the installed plugins — instruments and effects together in the tail (§7).
+    #[test]
+    fn the_rack_browser_puts_everything_native_before_the_installed_plugins() {
+        let mut app = app();
+        crate::playlist::run(&mut app, crate::playlist::Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi));
+        app.plugins = crate::plugins::Plugins::builtins();
+        app.state.plugdb.rebuild(&app.plugins);
+        app.plugins.available.push(db::fake("Test Synth", os_host::Kind::Instrument));
+        app.plugins.available.push(db::fake("Zebra Synth", os_host::Kind::Instrument));
+        app.plugins.effects.push(db::fake("Test FX", os_host::Kind::Effect));
+        app.state.plugdb.rebuild(&app.plugins);
+        app.open_plugin_palette(Target::Rack(None), (0.0, 0.0), None);
+        let s = &app.state;
+        let flat: Vec<(String, bool)> = rows(s)
+            .iter()
+            .filter_map(|r| match r {
+                Row::Head { label, major } => Some((label.clone(), *major)),
+                Row::Plugin { effect, at } => entry(s, *effect, *at).map(|e| (e.label.clone(), false)),
+                Row::MidiFx { at } => Some((s.palette.midi_fx[*at].0.clone(), false)),
+                _ => None,
+            })
+            .collect();
+        let at = |name: &str| flat.iter().position(|(l, _)| l == name).unwrap_or_else(|| panic!("{name} missing\n{flat:?}"));
+        // The kind sections, native first and the installed tail last.
+        let majors: Vec<&str> = flat.iter().filter(|(_, m)| *m).map(|(l, _)| l.as_str()).collect();
+        assert_eq!(
+            majors,
+            ["MIDI FX", "Instruments", "Effects", "Installed instruments", "Installed effects"],
+            "the rack browser's sections\n{majors:?}"
+        );
+        // Lemon instruments, then Lemon effects, then the installed instruments, then the installed effects.
+        assert!(at("Lemon Sampler") < at("Lemon Reverb"), "native instruments precede native effects\n{flat:?}");
+        assert!(at("Lemon Reverb") < at("Test Synth"), "everything native precedes the installed plugins");
+        assert!(at("Test Synth") < at("Zebra Synth") && at("Zebra Synth") < at("Test FX"), "installed instruments before installed effects");
+        // A third-party instrument must not split the Lemon effects from the Lemon instruments.
+        assert!(at("Test Synth") > at("Lemon Sampler") && at("Test Synth") > at("Lemon Reverb"), "no third-party plugin among the built-ins");
+        // An audio track's browser: no MIDI FX, no instruments, only effects and the installed tail.
+        crate::playlist::run(&mut app, crate::playlist::Cmd::TrackMode(2, crate::track_links::Mode::LinearAudio));
+        app.open_plugin_palette(Target::Rack(None), (0.0, 0.0), None);
+        let s = &app.state;
+        let rack = rows(s);
+        let majors: Vec<&str> = rack
+            .iter()
+            .filter_map(|r| match r {
+                Row::Head { label, major: true } => Some(label.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(majors, ["Effects", "Installed effects"], "an audio track's sections\n{majors:?}");
+        assert!(!rack.iter().any(|r| matches!(r, Row::Plugin { effect: false, .. })), "no instruments on an audio track");
     }
 
     /// F8 opens the palette with the keyboard in its search; typing filters both kinds, ranked by where the text is

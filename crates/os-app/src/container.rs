@@ -337,6 +337,8 @@ fn shape(members: &[Member]) -> Vec<(u32, String)> {
 /// The slot menu's Wrap in container and the channel menu's (the original's Patcherize) are named alike.
 pub const WRAP: &str = "Wrap in container";
 pub const WRAP_ALL: &str = "Wrap all in container";
+/// Ctrl+G on the device rack's selected effects (§7's group device).
+pub const GROUP: &str = "Group in container";
 pub const REMOVE: &str = "Remove effect from container";
 pub const MOVE: &str = "Move effect in container";
 pub const ADD: &str = "Add effect to container";
@@ -949,6 +951,37 @@ impl App {
         msg
     }
 
+    /// Group in container (the device rack's Ctrl+G on selected effects, `device_rack::group_selected`): the
+    /// selected slots of strip `t` in slot order become the members of a container in the first one's slot —
+    /// one undo step (named `GROUP`), then the remote control links of what moved follow it (`relink`).
+    pub(crate) fn group_slots(&mut self, t: u16, slots: &[u8]) -> Option<String> {
+        let slot = *slots.first()?;
+        let name = GROUP;
+        let mut moved = None;
+        let msg = crate::control::edit_app(self, name, crate::control::command::Region::Project, |app| {
+            let (msg, m) = app.wrap_slots(t, slot, slots, false);
+            moved = m;
+            msg
+        });
+        if let Some(m) = moved {
+            relink(&mut self.state, name, &m);
+        }
+        msg
+    }
+
+    /// The browser's container entry dropped on the device rack: an empty container in `slot` (else the rack
+    /// track's first free slot) of the rack track's strip — the same [`drop_container_on_slot`] the mixer drop
+    /// uses, the mixer selection lent to it and given back (spec: model/track-model.md §7, the device rack's
+    /// container device).
+    pub(crate) fn drop_container_on_rack_strip(&mut self, slot: Option<u8>) -> Option<String> {
+        let t = crate::device_rack::rack_track(&self.state)?.mixer_strip;
+        let prev = self.state.selected_mixer;
+        self.state.selected_mixer = t;
+        let msg = self.drop_container_on_slot(slot, false);
+        self.state.selected_mixer = prev;
+        msg
+    }
+
     /// Wrap in container (`all` = false) and Wrap all in container on slot `slot` of the current track (spec: plugins/
     /// patcher/README.md §3.3, §4.5). The slot's effect, or every effect of the track in slot order, becomes a member
     /// with the levels its slot blended it at and its slot's CPU switches; the container takes the slot, switched on at
@@ -961,16 +994,24 @@ impl App {
     /// dry 0 %, so the clip blends it as before. Run inside the undo step (`wrap_slot`).
     pub(crate) fn wrap_in_container(&mut self, slot: u8, all: bool) -> (Option<String>, Option<Moved>) {
         let t = self.state.selected_mixer;
-        let Some(track) = crate::mixer::track(&self.state, t) else { return (None, None) };
-        let slots: Vec<u8> = if all { (0..10u8).filter(|&k| track.slots[usize::from(k)].is_some()).collect() } else { vec![slot] };
+        let slots: Vec<u8> = if all { crate::mixer::track(&self.state, t).map(|track| (0..10u8).filter(|&k| track.slots[usize::from(k)].is_some()).collect()).unwrap_or_default() } else { vec![slot] };
         // A single slot whose switch or mix is driven keeps them: they blend the container as they blended the effect.
         let keep_mix = !all && (driven(&self.state, target::slot(t, slot, target::SLOT_MIX)) || driven(&self.state, target::slot(t, slot, target::SLOT_ON)));
+        self.wrap_slots(t, slot, &slots, keep_mix)
+    }
+
+    /// The wrap's core, generalized to an explicit list `slots` in slot order (the wrap takes every filled slot
+    /// of the track, the device rack's Ctrl+G takes the selected ones): they become the members of a container in
+    /// `slot` of strip `t`, per [`wrap_in_container`]'s doc. `keep_mix` keeps `slot`'s switch and mix (a plain wrap
+    /// on a driven slot). Run inside the undo step.
+    pub(crate) fn wrap_slots(&mut self, t: u16, slot: u8, slots: &[u8], keep_mix: bool) -> (Option<String>, Option<Moved>) {
+        let Some(track) = crate::mixer::track(&self.state, t) else { return (None, None) };
         let kept = (track.slot_mix[usize::from(slot)], track.slot_on[usize::from(slot)]);
         let mut list = Vec::new();
         let mut taken = Vec::new();
         let mut left = Vec::new();
         let mut moves = Vec::new();
-        for k in slots {
+        for k in slots.iter().copied() {
             let (mix, on) = (track.slot_mix[usize::from(k)], track.slot_on[usize::from(k)]);
             if let Some(inner) = members(&self.state, t, k) {
                 let first = list.len() as u32 + 1;

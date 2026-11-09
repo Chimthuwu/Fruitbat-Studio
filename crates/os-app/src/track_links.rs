@@ -92,7 +92,7 @@ pub fn assign_audio(s: &mut State, mixers: &[u16]) -> Option<String> {
         made.push((m, t));
     }
     let &(m, t) = made.last()?;
-    s.playlist.track = t;
+    crate::playlist::select_track(s, t, false);
     s.piano.dirty = true;
     Some(match made.len() {
         1 => format!("Assigned {} to {}", crate::mixer::name(s, m), crate::playlist::track_name(s, t)),
@@ -143,7 +143,7 @@ pub fn assign_instrument(s: &mut State, rows: &[usize]) -> Option<String> {
         made.push((r, t));
     }
     let &(r, t) = made.last()?;
-    s.playlist.track = t;
+    crate::playlist::select_track(s, t, false);
     s.piano.dirty = true;
     Some(match made.len() {
         1 => format!("Assigned {} to {}", crate::rack::channel_name(s, r), crate::playlist::track_name(s, t)),

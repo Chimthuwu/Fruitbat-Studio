@@ -249,6 +249,15 @@ pub enum Cmd {
     Consolidate,
     SelectAll,
     Deselect,
+    /// Ctrl+D: duplicate the selected track (or every lane of a Shift+click range) under itself, with its clips.
+    DuplicateTrack,
+    /// Delete while a Shift+click range of lanes is open: every selected track goes with its clips (the active one
+    /// alone when there is no range), bottom up in one undo step.
+    DeleteTracks,
+    /// Ctrl+G / Alt+G on a Shift+click range (§6a): every selected lane but its run's leader joins the group the run
+    /// leads, or leaves its group again.
+    TrackGroupSel,
+    TrackUngroupSel,
     InvertSelection,
     SelectMuted,
     SelectSource,
@@ -639,6 +648,10 @@ pub struct PlaylistState {
     pub sel: Vec<usize>,
     /// Selected track (Ctrl+Up / Down, header click).
     pub track: u16,
+    /// The lane a Shift+click ranged from while several tracks are selected together (`None`: `track` alone). The
+    /// active track stays `track`, so everything that follows the selection (the device rack, the mixer's focus) keeps
+    /// following it while the whole range is highlighted.
+    pub track_anchor: Option<u16>,
     /// Song position (ticks): song playback starts here.
     pub pos: u32,
     /// The ▸ menu's Quantize song jumps (§7a): a move of the song position while the song plays waits for the next
@@ -799,6 +812,7 @@ impl Default for PlaylistState {
             pick_rows: [PICK_ROW; 3],
             sel: Vec::new(),
             track: 0,
+            track_anchor: None,
             pos: 0,
             jump_quantize: 0,
             key_root: 0,
@@ -2149,13 +2163,40 @@ pub fn shift_tracks(s: &mut State, d: i32) {
         s.piano.dirty = true;
         return;
     }
+    // A Shift+click range moves as a block (§6): the lanes trade places with the ones just beyond the block, step by
+    // step, so the block keeps its order and the anchor and the active track shift with it.
+    if let Some(anchor) = s.playlist.track_anchor {
+        let t = s.playlist.track;
+        let (mut lo, mut hi) = (anchor.min(t), anchor.max(t));
+        if i32::from(lo) + d < 0 || i32::from(hi) + d >= i32::from(TRACKS) {
+            return;
+        }
+        for _ in 0..d.unsigned_abs() {
+            if d > 0 {
+                for k in (lo..=hi).rev() {
+                    swap_tracks(s, k, k + 1);
+                }
+                lo += 1;
+                hi += 1;
+            } else {
+                for k in lo..=hi {
+                    swap_tracks(s, k, k - 1);
+                }
+                lo -= 1;
+                hi -= 1;
+            }
+        }
+        s.playlist.track = (i32::from(t) + d) as u16;
+        s.playlist.track_anchor = Some((i32::from(anchor) + d) as u16);
+        return;
+    }
     let t = i32::from(s.playlist.track);
     let u = t + d;
     if u < 0 || u >= i32::from(TRACKS) {
         return;
     }
     swap_tracks(s, t as u16, u as u16);
-    s.playlist.track = u as u16;
+    select_track(s, u as u16, false);
 }
 
 /// Swap two tracks with their clips.
@@ -2193,6 +2234,68 @@ pub fn insert_track(s: &mut State, t: u16) {
     s.piano.dirty = true;
 }
 
+/// A track edit as one undo step. Classic mode keeps the playlist snapshot as it was; Linear mode's [`os_model::
+/// Track`]s follow the lanes they name (spec: model/track-model.md "Remap discipline") and the playlist snapshot does
+/// not hold them, so the step is a control-plane edit of the project and the ids settle onto what it made.
+fn track_undo(s: &mut State, name: &'static str, f: impl FnOnce(&mut State)) {
+    if s.project.linear_mode {
+        crate::control::edit(s, name, crate::control::command::Region::Project, f);
+        s.control.settle(&mut s.project);
+    } else {
+        snapshot(s);
+        f(s);
+    }
+}
+
+/// Ctrl+D: duplicates the selected track — every lane of a Shift+click range, each under itself — with its name,
+/// colour, state and clips. A copy is a lane of its own: it does not join the original's group nor take its link (a
+/// link names one track's mixer strip or channel; the copy's clips still play, and it can be linked on its own). The
+/// copy made last becomes the selected track. Linear mode: each copied lane takes a matching [`os_model::Track`] (the
+/// launcher shows the tracks that name a lane), mirroring the source's kind, mixer strip and channel, in the same undo
+/// step as the lane (`track_undo`).
+pub fn duplicate_tracks(s: &mut State) {
+    let rows: Vec<u16> = (0..TRACKS)
+        .filter(|&r| track_info(s, r).is_some() && track_selected(s, r))
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    track_undo(s, "Duplicate track", |s| {
+        let mut first_copy = None;
+        // From the bottom up: each insert lands under the lane it copies and moves nothing above it.
+        for &row in rows.iter().rev() {
+            let at = row + 1;
+            // The copy's track mirrors the source's (found by its lane); its lane's link stays off (`TrackLink::NONE`
+            // below), so the copy can be linked on its own.
+            let src_track =
+                crate::track_links::lane_track(s, row).map(|t| (t.kind, t.mixer_strip, t.channel));
+            insert_track(s, at);
+            if let Some((kind, strip, channel)) = src_track {
+                s.project.tracks.push(os_model::Track::new(kind, u32::from(at) + 1, strip, channel));
+            }
+            let src = arr_mut(s).tracks[usize::from(row)].clone();
+            let lane = &mut arr_mut(s).tracks[usize::from(at)];
+            let number = lane.number;
+            *lane = PlaylistTrack { number, grouped: false, link: os_model::TrackLink::NONE, ..src };
+            let copies: Vec<Clip> = clips(s).iter().filter(|c| c.track == row).copied().collect();
+            let arr = arr_mut(s);
+            first_copy.get_or_insert(arr.clips.len());
+            for mut c in copies {
+                c.track = at;
+                c.set_id(0);
+                arr.clips.push(c);
+            }
+        }
+        if let Some(first) = first_copy {
+            regroup_copies(s, first);
+        }
+        // A range's copies sit between its originals, so the selection is the copy made last.
+        let last = rows[rows.len() - 1] + rows.len() as u16;
+        select_track(s, last, false);
+        s.piano.dirty = true;
+    });
+}
+
 /// Delete track `t` with its clips (the rest move up).
 pub fn delete_track(s: &mut State, t: u16) {
     let gone: Vec<usize> = clips(s).iter().enumerate().filter(|(_, c)| c.track == t).map(|(i, _)| i).collect();
@@ -2213,6 +2316,79 @@ pub fn delete_track(s: &mut State, t: u16) {
     // model/track-model.md "Remap discipline").
     s.project.track_lane_deleted(t);
     s.piano.dirty = true;
+}
+
+/// Delete: the selected tracks go — every lane of a Shift+click range, or the active track alone — with their clips,
+/// bottom up in one undo step (the track menu's Delete one does one at a time). Returns how many lanes went.
+pub fn delete_tracks(s: &mut State) -> usize {
+    let rows: Vec<u16> = (0..TRACKS).filter(|&r| track_info(s, r).is_some() && track_selected(s, r)).collect();
+    if rows.is_empty() {
+        return 0;
+    }
+    track_undo(s, "Delete tracks", |s| {
+        // From the bottom up: each delete only moves the lanes under it.
+        for &row in rows.iter().rev() {
+            delete_track(s, row);
+        }
+        // The lanes are gone: the active track takes the first deleted lane's place and the range is over.
+        s.playlist.track = s.playlist.track.min(rows[0]);
+        s.playlist.track_anchor = None;
+    });
+    rows.len()
+}
+
+/// The runs of consecutive selected lanes as (leading lane, its members): a group's leading track is a run's first.
+fn selected_runs(s: &State) -> Vec<(u16, Vec<u16>)> {
+    let rows: Vec<u16> = (0..TRACKS).filter(|&r| track_info(s, r).is_some() && track_selected(s, r)).collect();
+    let mut runs = Vec::new();
+    let mut i = 0;
+    while i < rows.len() {
+        let mut j = i;
+        while j + 1 < rows.len() && rows[j + 1] == rows[j] + 1 {
+            j += 1;
+        }
+        runs.push((rows[i], rows[i + 1..=j].to_vec()));
+        i = j + 1;
+    }
+    runs
+}
+
+/// Ctrl+G on a Shift+click range (§6a): every selected lane but its run's leader joins the group the run leads
+/// ([`PlaylistTrack::grouped`], os_model lib.rs). Returns how many lanes joined.
+pub fn group_selected_tracks(s: &mut State) -> usize {
+    let joined: Vec<u16> =
+        selected_runs(s).into_iter().flat_map(|(_, m)| m).filter(|&r| !track_info(s, r).is_some_and(|x| x.grouped)).collect();
+    if joined.is_empty() {
+        return 0;
+    }
+    let n = joined.len();
+    snapshot(s);
+    for r in joined {
+        if let Some(tr) = arr_mut(s).tracks.get_mut(usize::from(r)) {
+            tr.grouped = true;
+        }
+    }
+    s.piano.dirty = true;
+    n
+}
+
+/// Alt+G / Alt+U on a Shift+click range (§6a): every selected lane but its run's leader leaves its group. Returns how
+/// many lanes left.
+pub fn ungroup_selected_tracks(s: &mut State) -> usize {
+    let left: Vec<u16> =
+        selected_runs(s).into_iter().flat_map(|(_, m)| m).filter(|&r| track_info(s, r).is_some_and(|x| x.grouped)).collect();
+    if left.is_empty() {
+        return 0;
+    }
+    let n = left.len();
+    snapshot(s);
+    for r in left {
+        if let Some(tr) = arr_mut(s).tracks.get_mut(usize::from(r)) {
+            tr.grouped = false;
+        }
+    }
+    s.piano.dirty = true;
+    n
 }
 
 /// Track LED: mute / unmute only this track. During a solo the other tracks stay as they are and the solo is over (its
@@ -2511,16 +2687,16 @@ pub fn add_audio_clip_as(s: &mut State, path: &str, track: u16, tick: u32, name:
     add_audio_clip_in(s, path, track, tick, None)
 }
 
-/// `add_audio_clip_as` with no undo step of its own (the caller took one), its channel on mixer track `mixer` (`None`:
-/// the track after the highest any channel uses).
-pub fn add_audio_clip_in(s: &mut State, path: &str, track: u16, tick: u32, mixer: Option<u16>) -> Option<usize> {
+/// An `AudioClip` channel playing `path` (loaded first), named after the file, on the mixer track after the highest
+/// any channel uses: what a drop on the arranger (`add_audio_clip_in`) and a drop on a launcher cell
+/// (`launcher::add_audio`) both make. `None`: the file cannot be read as audio.
+///
+/// Spec: ui/settings-choices.md "Light mode and clip note colours (2026-10-16)" gives a new channel its colour.
+pub fn audio_channel(s: &mut State, path: &str) -> Option<u16> {
     s.playlist.wave(path)?;
-    // Not on an instrument track: the next free track below it (§6c); on an audio track, through its mixer track.
-    let track = crate::track_links::audio_drop_track(s, track, tick, tick + 1);
-    let mixer = mixer.or_else(|| crate::track_links::audio_mixer(s, track));
     let index = s.project.channels.iter().map(|c| c.index + 1).max().unwrap_or(0);
     let name = std::path::Path::new(path).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Audio".into());
-    let mixer_track = mixer.unwrap_or_else(|| (s.project.channels.iter().map(|c| c.mixer_track).max().unwrap_or(0) + 1).min(crate::mixer::max_insert(&s.project)));
+    let mixer_track = (s.project.channels.iter().map(|c| c.mixer_track).max().unwrap_or(0) + 1).min(crate::mixer::max_insert(&s.project));
     s.project.channels.push(Channel {
         id: os_model::Id::NONE,
         index,
@@ -2528,7 +2704,6 @@ pub fn add_audio_clip_in(s: &mut State, path: &str, track: u16, tick: u32, mixer
         name: Some(name),
         plugin: None,
         plugin_state: None,
-        // Spec: ui/settings-choices.md "Light mode and clip note colours (2026-10-16)" (`clip_colors`).
         color: Some(s.clip_colors.new_channel(index)),
         enabled: true,
         volume: 0.78125,
@@ -2540,6 +2715,22 @@ pub fn add_audio_clip_in(s: &mut State, path: &str, track: u16, tick: u32, mixer
         envelopes: Default::default(), rack: Default::default(), misc: Default::default(),
         sound: os_model::ChannelSound { sampler_flags: Some(os_model::ChannelSound::AUDIO_CLIP_FLAGS), ..Default::default() },
     });
+    Some(index)
+}
+
+/// `add_audio_clip_as` with no undo step of its own (the caller took one), its channel on mixer track `mixer` (`None`:
+/// the track after the highest any channel uses).
+pub fn add_audio_clip_in(s: &mut State, path: &str, track: u16, tick: u32, mixer: Option<u16>) -> Option<usize> {
+    s.playlist.wave(path)?;
+    // Not on an instrument track: the next free track below it (§6c); on an audio track, through its mixer track.
+    let track = crate::track_links::audio_drop_track(s, track, tick, tick + 1);
+    let mixer = mixer.or_else(|| crate::track_links::audio_mixer(s, track));
+    let index = audio_channel(s, path)?;
+    if let Some(m) = mixer
+        && let Some(ch) = s.project.channels.iter_mut().find(|c| c.index == index)
+    {
+        ch.mixer_track = m;
+    }
     s.playlist.source = Some(ClipSource::Channel(index));
     s.playlist.picker = PickKind::Audio;
     let i = place(s, track, tick);
@@ -2736,7 +2927,7 @@ pub fn options_menu(s: &State, x: f32, y: f32) -> Popup {
         PItem::sub(
             "Select",
             vec![
-                PItem::new("Deselect", Cmd::Deselect).key("Ctrl+D"),
+                PItem::new("Deselect", Cmd::Deselect).key("Ctrl+Shift+D"),
                 PItem::new("Select all", Cmd::SelectAll).key("Ctrl+A"),
                 PItem::new("Select by selected source", Cmd::SelectSource).key("Shift+C"),
                 PItem::new("Select muted", Cmd::SelectMuted),
@@ -3058,6 +3249,7 @@ pub fn track_menu(s: &State, t: u16, x: f32, y: f32) -> Popup {
         PItem::new("Collapse group", Cmd::GroupCollapse(t))
             .mark(Mark::Check(group_track(s, t).or(Some(t)).and_then(|g| track_info(s, g)).is_some_and(|x| x.collapsed))),
         PItem::sep(),
+        PItem::new("Duplicate track", Cmd::DuplicateTrack).key("Ctrl+D"),
         PItem::new("Insert one", Cmd::TrackInsert(t)),
         PItem::new("Delete one", Cmd::TrackDelete(t)),
         PItem::new("Move up", Cmd::TrackUp(t)),
@@ -4249,7 +4441,28 @@ pub fn press_markers(app: &mut App, grid: Rect, right: bool) {
 }
 
 /// Track header press (§6): name area selects (double-click renames); right-click opens the track menu.
+/// Whether lane `row` is selected: the active track, and — while a Shift+click range is open — every lane between it
+/// and the lane the range started from.
+pub fn track_selected(s: &State, row: u16) -> bool {
+    let t = s.playlist.track;
+    match s.playlist.track_anchor {
+        Some(a) => row >= a.min(t) && row <= a.max(t),
+        None => row == t,
+    }
+}
+
+/// Selects a track by a header click: plain selects it alone, `extend` (a click with Shift held, the anchor being the
+/// last plain click) selects every lane from the anchor to `row`. `row` becomes the active track either way.
+pub fn select_track(s: &mut State, row: u16, extend: bool) {
+    let anchor = s.playlist.track_anchor.unwrap_or(s.playlist.track);
+    s.playlist.track = row;
+    s.playlist.track_anchor = (extend && anchor != row).then_some(anchor);
+}
+
+/// A track header click: plain click selects the track, Shift+click extends the selection to it (a range of tracks is
+/// highlighted and the last one clicked is the active track); a double click renames, a right click opens the menu.
 pub fn press_header(app: &mut App, t: u16, right: bool, at: (f32, f32)) {
+    let extend = app.shift;
     let s = &mut app.state;
     s.playlist.popup = None;
     if right {
@@ -4265,7 +4478,7 @@ pub fn press_header(app: &mut App, t: u16, right: bool, at: (f32, f32)) {
     let s = &mut app.state;
     let now = std::time::Instant::now();
     let double = s.playlist.last_header.is_some_and(|(lt, when)| lt == t && now.duration_since(when).as_millis() < 450);
-    s.playlist.track = t;
+    select_track(s, t, extend);
     s.playlist.last_header = Some((t, now));
     if double {
         start_edit(s, EditTarget::TrackName(t), at);
@@ -4826,6 +5039,10 @@ pub fn run(app: &mut App, cmd: Cmd) -> Option<String> {
             s.playlist.range = None;
             None
         }
+        Cmd::DuplicateTrack => {
+            duplicate_tracks(s);
+            None
+        }
         Cmd::InvertSelection => {
             let sel = s.playlist.sel.clone();
             s.playlist.sel = (0..clips(s).len()).filter(|i| !sel.contains(i)).collect();
@@ -5094,6 +5311,18 @@ pub fn run(app: &mut App, cmd: Cmd) -> Option<String> {
             None
         }
         Cmd::TrackGroup(_) => None,
+        Cmd::TrackGroupSel => match group_selected_tracks(s) {
+            0 => Some("Group: select a range of two or more tracks first".into()),
+            n => Some(format!("Grouped {n} tracks")),
+        },
+        Cmd::TrackUngroupSel => match ungroup_selected_tracks(s) {
+            0 => Some("Ungroup: no grouped lane is selected".into()),
+            n => Some(format!("Ungrouped {n} tracks")),
+        },
+        Cmd::DeleteTracks => match delete_tracks(s) {
+            0 => Some("Delete: no track is selected".into()),
+            n => Some(format!("Deleted {n} track{}", if n == 1 { "" } else { "s" })),
+        },
         // Linear mode's Insert ▸ (spec: model/track-model.md §5): one action makes the track and its pieces, through
         // the control plane's track_create — not `edit`'s region, which `apply` records itself.
         Cmd::TrackMode(_, m) if matches!(m, crate::track_links::Mode::LinearAudio | crate::track_links::Mode::LinearMidi) => {
@@ -5149,13 +5378,13 @@ pub fn run(app: &mut App, cmd: Cmd) -> Option<String> {
         Cmd::TrackUp(t) if t > 0 => {
             snapshot(s);
             swap_tracks(s, t, t - 1);
-            s.playlist.track = t - 1;
+            select_track(s, t - 1, false);
             None
         }
         Cmd::TrackDown(t) if t + 1 < TRACKS => {
             snapshot(s);
             swap_tracks(s, t, t + 1);
-            s.playlist.track = t + 1;
+            select_track(s, t + 1, false);
             None
         }
         Cmd::TrackUp(_) | Cmd::TrackDown(_) => None,
@@ -5165,8 +5394,8 @@ pub fn run(app: &mut App, cmd: Cmd) -> Option<String> {
             None
         }
         Cmd::TrackDelete(t) => {
-            snapshot(s);
-            delete_track(s, t);
+            // Linear mode: the step keeps the os_model::Track that names the lane too (`track_undo`).
+            track_undo(s, "Delete track", |s| delete_track(s, t));
             None
         }
         Cmd::TrackColor(t, c) => {
@@ -5502,7 +5731,9 @@ pub fn key(app: &mut App, key: &winit::keyboard::Key, ctrl: bool, alt: bool) -> 
         // Performance mode, also with Shift (spec: ui/playlist.md, ui/performance-mode.md §1).
         Key::Character(c) if ctrl && !alt && c.eq_ignore_ascii_case("p") => Cmd::PerfToggle,
         Key::Character(c) if ctrl && c.eq_ignore_ascii_case("a") => Cmd::SelectAll,
-        Key::Character(c) if ctrl && c.eq_ignore_ascii_case("d") => Cmd::Deselect,
+        // Ctrl+D duplicates the selected track (Ctrl+Shift+D deselects, as Ctrl+D used to).
+        Key::Character(c) if ctrl && shift && c.eq_ignore_ascii_case("d") => Cmd::Deselect,
+        Key::Character(c) if ctrl && c.eq_ignore_ascii_case("d") => Cmd::DuplicateTrack,
         Key::Character(c) if ctrl && c.eq_ignore_ascii_case("c") => Cmd::Copy,
         Key::Character(c) if ctrl && c.eq_ignore_ascii_case("x") => Cmd::Cut,
         Key::Character(c) if ctrl && c.eq_ignore_ascii_case("v") => Cmd::Paste,
@@ -5515,7 +5746,11 @@ pub fn key(app: &mut App, key: &winit::keyboard::Key, ctrl: bool, alt: bool) -> 
         Key::Character(c) if shift && !ctrl && !alt && c.eq_ignore_ascii_case("z") => Cmd::ZoomSelection,
         Key::Character(c) if shift && !ctrl && !alt && c.eq_ignore_ascii_case("m") => Cmd::StretchMode,
         Key::Character(c) if shift && !ctrl && !alt && c.eq_ignore_ascii_case("i") => Cmd::InvertSelection,
+        // Ctrl+G groups the lanes of a Shift+click range (Alt+G / Alt+U take their groups apart; without a range open
+        // the Alt keys stay with the clips, §3a / §6a).
+        Key::Character(c) if ctrl && c.eq_ignore_ascii_case("g") => Cmd::TrackGroupSel,
         Key::Character(c) if shift && !ctrl && !alt && c.eq_ignore_ascii_case("g") => Cmd::GroupClips,
+        Key::Character(c) if alt && !ctrl && (c.eq_ignore_ascii_case("g") || c.eq_ignore_ascii_case("u")) && app.state.playlist.track_anchor.is_some() => Cmd::TrackUngroupSel,
         Key::Character(c) if alt && !ctrl && (c.eq_ignore_ascii_case("g") || c.eq_ignore_ascii_case("u")) => Cmd::UngroupClips,
         Key::Named(NamedKey::End) if !ctrl && !alt => Cmd::ZoomSelection,
         Key::Named(NamedKey::Tab) if shift && !ctrl && !alt => Cmd::CycleSnap,
@@ -5532,6 +5767,9 @@ pub fn key(app: &mut App, key: &winit::keyboard::Key, ctrl: bool, alt: bool) -> 
         }
         Key::Named(NamedKey::Delete) if ctrl => Cmd::DeleteSpace,
         Key::Named(NamedKey::Insert) if ctrl => Cmd::InsertSpace,
+        // Delete while a Shift+click range of lanes is open: the selected tracks go (plain Delete stays with the
+        // clips, §10).
+        Key::Named(NamedKey::Delete) if app.state.playlist.track_anchor.is_some() => Cmd::DeleteTracks,
         Key::Named(NamedKey::Delete) => Cmd::Delete,
         Key::Named(NamedKey::PageUp) => Cmd::ZoomIn,
         Key::Named(NamedKey::PageDown) => Cmd::ZoomOut,
@@ -5541,13 +5779,15 @@ pub fn key(app: &mut App, key: &winit::keyboard::Key, ctrl: bool, alt: bool) -> 
         Key::Named(NamedKey::ArrowDown) if shift => Cmd::ShiftTracks(1),
         Key::Named(NamedKey::ArrowUp) if ctrl => {
             let s = &mut app.state;
-            s.playlist.track = s.playlist.track.saturating_sub(1);
+            let t = s.playlist.track.saturating_sub(1);
+            select_track(s, t, false);
             app.invalidate();
             return true;
         }
         Key::Named(NamedKey::ArrowDown) if ctrl => {
             let s = &mut app.state;
-            s.playlist.track = (s.playlist.track + 1).min(TRACKS - 1);
+            let t = (s.playlist.track + 1).min(TRACKS - 1);
+            select_track(s, t, false);
             app.invalidate();
             return true;
         }
@@ -5790,6 +6030,184 @@ mod tests {
         let mut app = App::new(None);
         app.state.project = crate::app::test_project();
         app
+    }
+
+    /// Ctrl+D copies the selected track under itself — name, colour and clips — and the copy becomes the selection;
+    /// a Shift+click range copies each lane of the range under its own original, in one undo step.
+    #[test]
+    fn ctrl_d_duplicates_the_selected_track() {
+        let mut app = app();
+        let track = |app: &App, t: u16| track_info(&app.state, t).cloned();
+        for (t, name) in [(1u16, "Lead"), (3, "Bass")] {
+            arr_mut(&mut app.state).tracks[usize::from(t)].name = Some(name.into());
+        }
+        arr_mut(&mut app.state).tracks[1].color = Some(Rgb::new(0xa0, 0x40, 0x40));
+        arr_mut(&mut app.state).clips.push(Clip::new(0, 96, 1, ClipSource::Pattern(0)));
+        arr_mut(&mut app.state).clips.push(Clip::new(192, 96, 1, ClipSource::Pattern(0)));
+        press_header(&mut app, 1, false, (0.0, 0.0));
+        run(&mut app, Cmd::DuplicateTrack);
+        let copy = track(&app, 2).expect("a track under it");
+        assert_eq!(copy.name.as_deref(), Some("Lead"));
+        assert_eq!(copy.color, Some(Rgb::new(0xa0, 0x40, 0x40)), "its colour came along");
+        assert_eq!(copy.link, os_model::TrackLink::NONE, "the copy is a lane of its own");
+        assert_eq!(clips(&app.state).iter().filter(|c| c.track == 2).count(), 2, "both clips came along");
+        assert_eq!(clips(&app.state).iter().filter(|c| c.track == 1).count(), 2, "the original keeps its own");
+        assert_eq!(app.state.playlist.track, 2, "the copy is selected");
+        // One undo step puts the track back.
+        run(&mut app, Cmd::Undo);
+        assert!(track(&app, 2).is_none_or(|t| t.name.is_none()), "one undo step");
+        // Shift+click lanes 1 to 3 selects all three: each is copied under its own original, so 2, 4 and 6 are copies
+        // and the last of them is the selection (a plain click first sets the anchor).
+        press_header(&mut app, 1, false, (0.0, 0.0));
+        app.shift = true;
+        press_header(&mut app, 3, false, (0.0, 0.0));
+        app.shift = false;
+        run(&mut app, Cmd::DuplicateTrack);
+        assert_eq!(track(&app, 2).and_then(|t| t.name), Some("Lead".into()));
+        assert!(track(&app, 4).is_some(), "the middle lane is copied too");
+        assert_eq!(track(&app, 6).and_then(|t| t.name), Some("Bass".into()), "the range's last copy");
+        assert_eq!(app.state.playlist.track, 6, "the copy made last is selected");
+    }
+
+    /// Linear mode: Ctrl+D makes the copy's `os_model::Track` too — it mirrors the source's kind, mixer strip and
+    /// channel, so the launcher (which lists the tracks that name a lane) sees the copy — and one undo step takes the
+    /// lane and its track back together.
+    #[test]
+    fn duplicate_track_makes_the_matching_linear_track() {
+        let mut app = app();
+        app.state.project.linear_mode = true;
+        arr_mut(&mut app.state).tracks[1].name = Some("Lead".into());
+        // A MIDI track naming lane 1 (playlist_lane 1-based), on Insert 5 and channel 1.
+        app.state.project.tracks.push(os_model::Track::new(os_model::TrackKind::Midi, 2, 5, Some(1)));
+        press_header(&mut app, 1, false, (0.0, 0.0));
+        run(&mut app, Cmd::DuplicateTrack);
+        let copy = app.state.project.tracks.iter().find(|t| t.playlist_lane == 3).expect("the copy's track");
+        assert_eq!(copy.kind, os_model::TrackKind::Midi, "the kind came along");
+        assert_eq!(copy.mixer_strip, 5, "the mixer strip came along");
+        assert_eq!(copy.channel, Some(1), "the channel came along");
+        run(&mut app, Cmd::Undo);
+        assert!(!app.state.project.tracks.iter().any(|t| t.playlist_lane == 3), "the copy's track went");
+        assert!(track_info(&app.state, 2).is_some_and(|t| t.name.is_none()), "the lane went too");
+        assert!(app.state.project.tracks.iter().any(|t| t.playlist_lane == 2), "the source's track stayed");
+    }
+
+    /// Delete while a Shift+click range of lanes is open takes the selected tracks and their clips away, bottom up in
+    /// one undo step; the active track alone goes when there is no range, and plain Delete stays with the clips.
+    #[test]
+    fn delete_deletes_the_selected_tracks() {
+        let mut app = app();
+        let mut name = |app: &mut App, t: u16, n: &str| arr_mut(&mut app.state).tracks[usize::from(t)].name = Some(n.into());
+        for (t, n) in [(0u16, "Top"), (1, "A"), (2, "B"), (3, "C"), (4, "D")] {
+            name(&mut app, t, n);
+        }
+        arr_mut(&mut app.state).clips.push(Clip::new(0, 96, 2, ClipSource::Pattern(0)));
+        arr_mut(&mut app.state).clips.push(Clip::new(192, 96, 4, ClipSource::Pattern(0)));
+        press_header(&mut app, 1, false, (0.0, 0.0));
+        app.shift = true;
+        press_header(&mut app, 3, false, (0.0, 0.0));
+        app.shift = false;
+        let msg = run(&mut app, Cmd::DeleteTracks).expect("a message");
+        assert!(msg.contains("3"), "all three lanes went: {msg}");
+        assert_eq!(track_name(&app.state, 0), "Top", "the lane above the range stayed");
+        assert_eq!(track_name(&app.state, 1), "D", "the lanes under the range moved up into it");
+        assert!(track_info(&app.state, 2).is_some_and(|t| t.name.is_none()), "the range is empty lanes now");
+        assert_eq!(clips(&app.state).len(), 1, "the clips of the deleted lanes went");
+        assert_eq!(clips(&app.state)[0].track, 1, "the clip under the range moved up with its lane");
+        assert_eq!(app.state.playlist.track, 1, "the active track took the range's first lane");
+        assert_eq!(app.state.playlist.track_anchor, None, "the range is over");
+        // One undo step puts the lanes, their clips and their names back.
+        run(&mut app, Cmd::Undo);
+        assert_eq!(track_name(&app.state, 1), "A");
+        assert_eq!(clips(&app.state).len(), 2);
+        // The active track alone goes when there is no range open.
+        press_header(&mut app, 2, false, (0.0, 0.0));
+        let msg = run(&mut app, Cmd::DeleteTracks).expect("a message");
+        assert!(msg.contains("1"), "just the active track: {msg}");
+        assert_eq!(track_name(&app.state, 1), "A", "the lane below the deleted one stayed");
+        assert_eq!(track_name(&app.state, 2), "C", "the lanes under the deleted one moved up");
+    }
+
+    /// Shift+Up / Shift+Down (the Shift+wheel over the headers routes through the same `shift_tracks`) moves a
+    /// Shift+click range as a block: the lanes keep their order, the clips trade rows with them, the anchor shifts
+    /// with the block, and a block at the edge does not move.
+    #[test]
+    fn shift_keys_move_a_range_of_tracks_as_a_block() {
+        let mut app = app();
+        for (t, n) in [(0u16, "Top"), (1, "A"), (2, "B"), (3, "C"), (4, "D")] {
+            arr_mut(&mut app.state).tracks[usize::from(t)].name = Some(n.into());
+        }
+        arr_mut(&mut app.state).clips.push(Clip::new(0, 96, 2, ClipSource::Pattern(0)));
+        press_header(&mut app, 1, false, (0.0, 0.0));
+        app.shift = true;
+        press_header(&mut app, 3, false, (0.0, 0.0));
+        app.shift = false;
+        run(&mut app, Cmd::ShiftTracks(1));
+        assert_eq!((app.state.playlist.track, app.state.playlist.track_anchor), (4, Some(2)), "anchor and active moved together");
+        assert_eq!(track_name(&app.state, 0), "Top", "the lane above the range stayed");
+        assert_eq!(track_name(&app.state, 1), "D", "the lane the block trades places with moved up into it");
+        assert_eq!(track_name(&app.state, 2), "A");
+        assert_eq!(track_name(&app.state, 3), "B", "the block keeps its order");
+        assert_eq!(track_name(&app.state, 4), "C");
+        assert_eq!(clips(&app.state)[0].track, 3, "the clip followed its lane");
+        run(&mut app, Cmd::ShiftTracks(-1));
+        assert_eq!((app.state.playlist.track, app.state.playlist.track_anchor), (3, Some(1)));
+        assert_eq!(track_name(&app.state, 1), "A", "back in place");
+        assert_eq!(track_name(&app.state, 4), "D", "back in place");
+        // The block can climb to the top edge; one step further stays put.
+        run(&mut app, Cmd::ShiftTracks(-1));
+        assert_eq!((app.state.playlist.track, app.state.playlist.track_anchor), (2, Some(0)));
+        assert_eq!(track_name(&app.state, 0), "A", "the block took the top lane");
+        assert_eq!(track_name(&app.state, 3), "Top", "the top lane moved under the block");
+        run(&mut app, Cmd::ShiftTracks(-1));
+        assert_eq!((app.state.playlist.track, app.state.playlist.track_anchor), (2, Some(0)), "a block at the top edge does not move");
+        assert_eq!(track_name(&app.state, 0), "A");
+    }
+
+    /// Ctrl+G puts every lane of a Shift+click range but its run's leader into the group the run leads; Alt+G / Alt+U
+    /// take the range's groups apart, and both undo in one step. Without a range open the keys stay with the clips.
+    #[test]
+    fn group_and_ungroup_a_range_of_tracks() {
+        let mut app = app();
+        for (t, n) in [(1u16, "A"), (2, "B"), (3, "C"), (4, "D")] {
+            arr_mut(&mut app.state).tracks[usize::from(t)].name = Some(n.into());
+        }
+        press_header(&mut app, 2, false, (0.0, 0.0));
+        app.shift = true;
+        press_header(&mut app, 3, false, (0.0, 0.0));
+        app.shift = false;
+        run(&mut app, Cmd::TrackGroupSel);
+        assert!(track_info(&app.state, 2).is_some_and(|t| !t.grouped), "the run's leader leads the group");
+        assert!(track_info(&app.state, 3).is_some_and(|t| t.grouped), "the member joined");
+        assert!(track_info(&app.state, 1).is_some_and(|t| !t.grouped), "the unselected lane stayed out");
+        run(&mut app, Cmd::Undo);
+        assert!(track_info(&app.state, 3).is_some_and(|t| !t.grouped), "one undo step");
+        // Alt+G takes the group apart again; without a range open it stays with the clips (UngroupClips).
+        run(&mut app, Cmd::TrackUngroupSel);
+        assert!(track_info(&app.state, 3).is_some_and(|t| !t.grouped), "the member left the group");
+    }
+
+    /// A header click selects one track; with Shift held it selects every lane from the last clicked track to the one
+    /// clicked, so several tracks are highlighted together (the last click stays the active track).
+    #[test]
+    fn shift_click_a_header_selects_a_range_of_tracks() {
+        let mut app = app();
+        let lanes = |app: &App| (0..TRACKS).filter(|&r| track_selected(&app.state, r)).collect::<Vec<u16>>();
+        press_header(&mut app, 1, false, (0.0, 0.0));
+        assert_eq!(lanes(&app), vec![1]);
+        app.shift = true;
+        press_header(&mut app, 4, false, (0.0, 0.0));
+        assert_eq!(lanes(&app), vec![1, 2, 3, 4], "Shift extends up from the track clicked last");
+        assert_eq!(app.state.playlist.track, 4, "the last click is the active track");
+        // Another Shift+click ranges from the anchor the first click set, not from the one before it.
+        press_header(&mut app, 2, false, (0.0, 0.0));
+        assert_eq!(lanes(&app), vec![1, 2]);
+        press_header(&mut app, 3, false, (0.0, 0.0));
+        assert_eq!(lanes(&app), vec![1, 2, 3]);
+        // A plain click collapses the range to that one track.
+        app.shift = false;
+        press_header(&mut app, 5, false, (0.0, 0.0));
+        assert_eq!(lanes(&app), vec![5]);
+        assert_eq!(app.state.playlist.track_anchor, None);
     }
 
     /// Rename... on an audio or automation clip renames its channel in the rack's name box; a pattern clip still edits
