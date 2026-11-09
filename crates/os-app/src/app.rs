@@ -6843,10 +6843,13 @@ impl App {
                 crate::patterns::run(&mut self.state, crate::patterns::Cmd::FindNext, (at.x, at.y));
                 return self.invalidate();
             }
-            // Right-click on a launcher slot: the current pattern goes in, or out when it is already there.
+            // Right-click on a launcher clip, a scene button or a track row: its menu (rename, colour, ...).
             Some(Action::Launcher(a)) if self.state.launcher_open => {
+                use crate::launcher::{Act, MenuTarget};
                 let act = match *a {
-                    crate::launcher::Act::Launch(track, scene) => crate::launcher::Act::Set(track, scene),
+                    Act::Launch(track, scene) => Act::Menu(MenuTarget::Clip(track, scene), (x, y)),
+                    Act::LaunchScene(scene) => Act::Menu(MenuTarget::Scene(scene), (x, y)),
+                    Act::SelectTrack(track) => Act::Menu(MenuTarget::Track(track), (x, y)),
                     other => other,
                 };
                 crate::launcher::run(self, act);
@@ -7010,6 +7013,12 @@ impl App {
         self.hold = None;
         self.shift_clone = false;
         self.release();
+        // Bitwig's "on Release": the clip a press launched does what its setting says (Continue leaves it playing).
+        if self.state.launcher_open {
+            if let Some((track, scene)) = self.state.launcher.pressed {
+                crate::launcher::run(self, crate::launcher::Act::Release(track, scene));
+            }
+        }
         // An undo step whose press changed nothing goes (spec: ui/settings-choices.md "Undo history").
         crate::history::settle(&mut self.state);
     }
@@ -8192,7 +8201,8 @@ impl App {
     }
 
     fn play_mode(&self) -> PlayMode {
-        if self.state.song_mode { PlayMode::Song } else { PlayMode::Pattern(self.state.pattern) }
+        // Launcher clips play as an arrangement (`launcher::shadow`), so the transport plays it as a song.
+        if self.state.song_mode || crate::launcher::live(&self.state) { PlayMode::Song } else { PlayMode::Pattern(self.state.pattern) }
     }
 
     /// Play one note of channel `channel` (Note::channel) once (also while playing or paused).

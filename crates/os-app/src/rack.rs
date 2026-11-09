@@ -2658,7 +2658,9 @@ pub fn play_project(s: &State) -> Project {
         expand_loops(&mut p, s, &rows);
     }
     crate::perform::apply(s, &mut p);
-    p
+    // Launcher clips run: the played project is their shadow (one lane per track, each clip looping at its own
+    // length), so every track plays its own clip at once (`crate::launcher::shadow`).
+    crate::launcher::shadow(s, &p).unwrap_or(p)
 }
 
 /// Repeat each row's first `loop_len` steps up to the end of every pattern (its length as played, §23); notes past

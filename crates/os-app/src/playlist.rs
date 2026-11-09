@@ -586,6 +586,11 @@ pub enum EditTarget {
     ArrangementName,
     /// The value box of "Enter value..." and whether it reads normalized values (spec: ui/type-in-value.md).
     TypeIn(crate::typein::Target, bool),
+    /// A clip launcher cell's name (its track's id and its scene): renamed in the launcher
+    /// (`crate::launcher::set_clip_name`).
+    LauncherClip(u32, usize),
+    /// A clip launcher scene's name (`crate::launcher::set_scene_name`).
+    LauncherScene(usize),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1131,6 +1136,18 @@ pub fn arr_mut(s: &mut State) -> &mut Arrangement {
         a.tracks.push(PlaylistTrack::new(n));
     }
     a
+}
+
+/// Track `t`'s colour in the arrangement (the playlist header, the mixer and the launcher's rows share it).
+pub fn track_color(s: &State, t: u16) -> Option<os_model::Rgb> {
+    track_info(s, t).and_then(|i| i.color)
+}
+
+/// Gives track `t` a colour (`None`: the default).
+pub fn set_track_color(s: &mut State, t: u16, color: Option<os_model::Rgb>) {
+    if let Some(tr) = arr_mut(s).tracks.get_mut(usize::from(t)) {
+        tr.color = color;
+    }
 }
 
 pub fn clips(s: &State) -> &[Clip] {
@@ -4288,6 +4305,8 @@ pub fn start_edit(s: &mut State, target: EditTarget, at: (f32, f32)) {
         EditTarget::MixerGroup(_) => String::new(),
         EditTarget::Chords => crate::chord_tool::last(),
         EditTarget::TypeIn(t, norm) => crate::typein::text(s, t, norm),
+        EditTarget::LauncherClip(track, scene) => crate::launcher::clip_name(s, track, scene),
+        EditTarget::LauncherScene(scene) => crate::launcher::scene_name(s, scene),
     };
     s.playlist.edit = Some(TextEdit { target, text, at, sel: false });
 }
@@ -4352,6 +4371,8 @@ pub fn commit_edit(s: &mut State) {
         }),
         EditTarget::MemberName(t, k, id) => crate::container::rename(s, t, k, id, &text),
         EditTarget::TypeIn(t, norm) => crate::typein::accept(s, t, norm, &text),
+        EditTarget::LauncherClip(track, scene) => crate::launcher::set_clip_name(s, track, scene, &text),
+        EditTarget::LauncherScene(scene) => crate::launcher::set_scene_name(s, scene, &text),
         // Their own steps too. Settled first: they renumber mixer tracks, which moves channels' mixer tracks, part of
         // the playlist's step since audio tracks (`capture`), so the step above would no longer be empty.
         EditTarget::MixerInsert(n) => {

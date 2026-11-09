@@ -383,9 +383,14 @@ impl App {
     }
 
     /// The time selection that loops playback (spec §5): the piano roll's in PAT mode while it is shown, the
-    /// playlist's in SONG mode; one with no length does not count.
+    /// playlist's in SONG mode; one with no length does not count. Launcher clips loop over their own window (the
+    /// common multiple of their lengths), so the set never runs out (`crate::launcher::window`).
     pub(crate) fn selection_loop(&self) -> Option<(u32, u32)> {
         let s = &self.state;
+        if crate::launcher::live(s) {
+            let w = crate::launcher::window(s);
+            return (w > 0 && w <= u64::from(u32::MAX)).then_some((0, w as u32));
+        }
         let r = if s.song_mode { s.playlist.range } else if s.shown(crate::app::Win::PianoRoll) { s.piano.range } else { None };
         r.filter(|r| r.1 > r.0)
     }

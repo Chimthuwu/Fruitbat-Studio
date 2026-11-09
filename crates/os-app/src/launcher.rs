@@ -2,50 +2,394 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! The clip launcher (Bitwig-style; the plan for the rest is docs/clip-launcher.md): scenes down the left edge, one
-//! column per track in the mixer's order, a clip per cell. A clip plays one of the project's patterns, so a launched
-//! cell puts that pattern on the air through the channel the track already has — the device rack, the mixer and the
-//! piano roll all see the same notes.
+//! The clip launcher, Bitwig-style: the scenes are columns (their launch buttons run along the top), one row per
+//! track in the mixer's order, a clip per cell. A clip plays one of the project's patterns, so a launched cell puts
+//! that pattern on the air through the channel the track already has — the device rack, the mixer and the piano roll
+//! all see the same notes.
+//!
+//! Every clip and every scene carries Bitwig's launcher parameters (`LaunchQ`, `PlayMode`, `OnRelease`, main and
+//! ALT), a next action with its own timing, a name and a colour; a scene may override the launch settings of the
+//! clips it starts. Clips, scenes and track headers are renamed and coloured from their right-click menus.
+//!
+//! ## Clips play independently
+//!
+//! Tracks do not share one pattern any more. While launcher clips run, the project the transport plays is
+//! [`shadow`]: the arrangement's clips on those tracks are replaced by each playing clip's loop (a copy of its
+//! pattern holding only that track's channel's notes, repeated at its own length from the tick it was launched at),
+//! so three tracks with three clips at three lengths play together, each looping on its own. The transport loops the
+//! whole window ([`window`]) so the set never runs out; when a track launches a different clip only that track's row
+//! changes.
+//!
+//! The limit of that shortcut: the window is a common multiple of the clips' lengths, so a clip launched part-way
+//! into a longer one re-aligns at the window's end (Bitwig's engine loops each clip on its own forever). See
+//! docs/clip-launcher.md.
 //!
 //! Tab flips the Playlist window between the arrangement and the launcher ([`crate::app::State::launcher_open`]).
-//!
-//! What is *not* here yet (docs/clip-launcher.md §2): independent playback per track. The engine plays one pattern
-//! at a time, so launching clip B on the drum track while clip A loops on the bass does not stack them; the launcher
-//! records what each track is playing and starts the pattern, and the stacking is the engine work the plan stages.
 
 use std::collections::BTreeMap;
 
+use os_model::{Clip, ClipSource, Project};
+
 use crate::app::{Action, App, State};
 
-/// How many scenes a launcher has.
+/// How many scenes a launcher has (Bitwig's scenes are columns; these are its slots).
 pub const SCENES: usize = 8;
 
-/// One clip: the pattern its slot plays (1-based, as `Project::current_pattern` is).
+/// How long the launcher's play window grows at most, in bars: the common multiple of the playing clips' lengths
+/// (so the transport's loop is seamless) capped here.
+const MAX_WINDOW_BARS: u32 = 64;
+
+// ---------------------------------------------------------------------------------------------------------------
+// The launch parameters (Bitwig: "Launcher Clip Parameters")
+
+/// Launch quantization: the grid line a launch waits for (`Lexicon` in docs/clip-launcher.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LaunchQ {
+    /// `Off`: the clip starts the moment it is triggered.
+    Off,
+    Sixteenth,
+    Eighth,
+    Quarter,
+    Half,
+    #[default]
+    Bar,
+    Bars2,
+    Bars4,
+    Bars8,
+}
+
+impl LaunchQ {
+    pub const ALL: [LaunchQ; 9] =
+        [LaunchQ::Off, LaunchQ::Sixteenth, LaunchQ::Eighth, LaunchQ::Quarter, LaunchQ::Half, LaunchQ::Bar, LaunchQ::Bars2, LaunchQ::Bars4, LaunchQ::Bars8];
+
+    /// The name the menus show ("1/16", "1 bar", "Off").
+    pub fn name(self) -> &'static str {
+        match self {
+            LaunchQ::Off => "Off",
+            LaunchQ::Sixteenth => "1/16",
+            LaunchQ::Eighth => "1/8",
+            LaunchQ::Quarter => "1/4",
+            LaunchQ::Half => "1/2",
+            LaunchQ::Bar => "1 bar",
+            LaunchQ::Bars2 => "2 bars",
+            LaunchQ::Bars4 => "4 bars",
+            LaunchQ::Bars8 => "8 bars",
+        }
+    }
+
+    /// The next step of the cycle (a menu item walks the list).
+    pub fn next(self) -> LaunchQ {
+        let i = LaunchQ::ALL.iter().position(|&q| q == self).unwrap_or(5);
+        LaunchQ::ALL[(i + 1) % LaunchQ::ALL.len()]
+    }
+
+    /// Ticks between two lines of this grid (0 for `Off`).
+    pub fn ticks(self, p: &Project) -> u64 {
+        let bar = u64::from(p.bar_ticks().max(1));
+        match self {
+            LaunchQ::Off => 0,
+            LaunchQ::Sixteenth => (bar / 16).max(1),
+            LaunchQ::Eighth => (bar / 8).max(1),
+            LaunchQ::Quarter => (bar / 4).max(1),
+            LaunchQ::Half => (bar / 2).max(1),
+            LaunchQ::Bar => bar,
+            LaunchQ::Bars2 => bar * 2,
+            LaunchQ::Bars4 => bar * 4,
+            LaunchQ::Bars8 => bar * 8,
+        }
+    }
+}
+
+/// Where a launched clip begins playing (Bitwig's Play Mode).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayFrom {
+    /// "Trigger from Start": from its beginning.
+    #[default]
+    Start,
+    /// "Legato from Clip (or Start)": at the playing clip's position (from the start when nothing played).
+    LegatoClip,
+    /// "Legato from Project": at the transport's own position.
+    LegatoProject,
+}
+
+impl PlayFrom {
+    pub const ALL: [PlayFrom; 3] = [PlayFrom::Start, PlayFrom::LegatoClip, PlayFrom::LegatoProject];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            PlayFrom::Start => "From start",
+            PlayFrom::LegatoClip => "Legato (clip)",
+            PlayFrom::LegatoProject => "Legato (project)",
+        }
+    }
+
+    pub fn next(self) -> PlayFrom {
+        let i = PlayFrom::ALL.iter().position(|&m| m == self).unwrap_or(0);
+        PlayFrom::ALL[(i + 1) % PlayFrom::ALL.len()]
+    }
+}
+
+/// What the release of a triggering gesture does (Bitwig's "on Release").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OnRelease {
+    /// "Continue": the clip plays on.
+    #[default]
+    Continue,
+    /// "Stop": the clip stops.
+    Stop,
+    /// "Return": the clip that played before comes back (the arrangement when it was playing last).
+    Return,
+    /// "Next Action": the clip's next action runs at once.
+    NextAction,
+}
+
+impl OnRelease {
+    pub const ALL: [OnRelease; 4] = [OnRelease::Continue, OnRelease::Stop, OnRelease::Return, OnRelease::NextAction];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            OnRelease::Continue => "Continue",
+            OnRelease::Stop => "Stop",
+            OnRelease::Return => "Return",
+            OnRelease::NextAction => "Next action",
+        }
+    }
+
+    pub fn next(self) -> OnRelease {
+        let i = OnRelease::ALL.iter().position(|&m| m == self).unwrap_or(0);
+        OnRelease::ALL[(i + 1) % OnRelease::ALL.len()]
+    }
+}
+
+/// One launch setting set: the Main column, or its ALT twin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Launch {
+    pub q: LaunchQ,
+    pub play: PlayFrom,
+    pub release: OnRelease,
+    /// "Q to Loop": quantize to the loop's start rather than the clip's.
+    pub q_to_loop: bool,
+}
+
+/// What happens when a clip has played its while (Bitwig's Next Action functions).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NextAction {
+    /// Not enabled (or "none"): the clip plays on.
+    #[default]
+    None,
+    /// Local: the clip stops.
+    Stop,
+    /// Return to the arrangement on this track.
+    ReturnToArrangement,
+    /// The clip that played before this one comes back (none: it stops).
+    ReturnToLastClip,
+    PlayNext,
+    PlayPrevious,
+    PlayFirst,
+    PlayLast,
+    PlayRandom,
+    /// Any other clip of the track at random.
+    PlayOther,
+    /// The next clip, wrapping round at the track's last one.
+    RoundRobin,
+    FirstInBlock,
+    LastInBlock,
+    RandomInBlock,
+    OtherInBlock,
+    RoundRobinInBlock,
+    FirstInNextBlock,
+    RandomInNextBlock,
+    FirstInPreviousBlock,
+    RandomInPreviousBlock,
+    FirstInOtherBlock,
+    RandomInOtherBlock,
+}
+
+impl NextAction {
+    pub const ALL: [NextAction; 22] = [
+        NextAction::None,
+        NextAction::Stop,
+        NextAction::ReturnToArrangement,
+        NextAction::ReturnToLastClip,
+        NextAction::PlayNext,
+        NextAction::PlayPrevious,
+        NextAction::PlayFirst,
+        NextAction::PlayLast,
+        NextAction::PlayRandom,
+        NextAction::PlayOther,
+        NextAction::RoundRobin,
+        NextAction::FirstInBlock,
+        NextAction::LastInBlock,
+        NextAction::RandomInBlock,
+        NextAction::OtherInBlock,
+        NextAction::RoundRobinInBlock,
+        NextAction::FirstInNextBlock,
+        NextAction::RandomInNextBlock,
+        NextAction::FirstInPreviousBlock,
+        NextAction::RandomInPreviousBlock,
+        NextAction::FirstInOtherBlock,
+        NextAction::RandomInOtherBlock,
+    ];
+
+    /// The function's name (Bitwig's own words).
+    pub fn name(self) -> &'static str {
+        match self {
+            NextAction::None => "Off",
+            NextAction::Stop => "Stop",
+            NextAction::ReturnToArrangement => "Return to arrangement",
+            NextAction::ReturnToLastClip => "Return to last clip",
+            NextAction::PlayNext => "Play next",
+            NextAction::PlayPrevious => "Play previous",
+            NextAction::PlayFirst => "Play first",
+            NextAction::PlayLast => "Play last",
+            NextAction::PlayRandom => "Play random",
+            NextAction::PlayOther => "Play other",
+            NextAction::RoundRobin => "Round-robin",
+            NextAction::FirstInBlock => "First in block",
+            NextAction::LastInBlock => "Last in block",
+            NextAction::RandomInBlock => "Random in block",
+            NextAction::OtherInBlock => "Other in block",
+            NextAction::RoundRobinInBlock => "Round-robin in block",
+            NextAction::FirstInNextBlock => "First in next block",
+            NextAction::RandomInNextBlock => "Random in next block",
+            NextAction::FirstInPreviousBlock => "First in previous block",
+            NextAction::RandomInPreviousBlock => "Random in previous block",
+            NextAction::FirstInOtherBlock => "First in other block",
+            NextAction::RandomInOtherBlock => "Random in other block",
+        }
+    }
+
+    pub fn next(self) -> NextAction {
+        let i = NextAction::ALL.iter().position(|&a| a == self).unwrap_or(0);
+        NextAction::ALL[(i + 1) % NextAction::ALL.len()]
+    }
+}
+
+/// When a clip's next action fires: after `loops` whole loops of it, or `ticks` after it started.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NextTiming {
+    /// "Loop Count before Next Action": whole loops of the clip.
+    Loops(u32),
+    /// "Next Action Time": ticks (bars and beats) after the clip started.
+    After(u64),
+}
+
+impl Default for NextTiming {
+    fn default() -> Self {
+        NextTiming::Loops(1)
+    }
+}
+
+impl NextTiming {
+    /// The name the menu shows ("2 loops", "4 bars").
+    pub fn text(self, bar: u64) -> String {
+        match self {
+            NextTiming::Loops(n) => format!("{n} loop{}", if n == 1 { "" } else { "s" }),
+            NextTiming::After(t) => {
+                let bars = t / bar.max(1);
+                if bars > 0 {
+                    format!("{bars} bar{}", if bars == 1 { "" } else { "s" })
+                } else {
+                    format!("{t} ticks")
+                }
+            }
+        }
+    }
+}
+
+/// One clip: the pattern its slot plays (1-based, as `Project::current_pattern` is), the name it was given in the
+/// launcher, its own colour, and its launch parameters.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Slot {
     pub pattern: u16,
+    pub name: Option<String>,
+    pub color: Option<os_model::Rgb>,
+    /// The MAIN launch settings (a right-click cycles them).
+    pub main: Launch,
+    /// The ALT launch settings, for a controller's ALT gesture (and the clip menu's ALT section).
+    pub alt: Launch,
+    /// The clip's next action (runs when its timing is up).
+    pub next: NextAction,
+    pub next_timing: NextTiming,
 }
 
-/// The launcher's grid: the clips by (track id, scene), and the scene each track is playing.
+impl Eq for Slot {}
+
+/// A scene: its name, colour and comment, and the launch settings it forces on the clips it launches.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct Launcher {
-    pub clips: BTreeMap<(u32, usize), Slot>,
-    /// By the track's id: the scene whose clip it plays.
-    pub playing: BTreeMap<u32, usize>,
-    /// By the track's id: the clip waiting for the next bar line (a launch made while the transport runs).
-    pub pending: BTreeMap<u32, Pending>,
-    /// The scenes' names by index; an empty entry reads "Scene N".
-    pub scenes: Vec<String>,
-    /// The transport tick [`advance`] last saw, so the wrap at a looping pattern's end counts as its bar line.
-    last_tick: f64,
+pub struct Scene {
+    pub name: String,
+    pub color: Option<os_model::Rgb>,
+    pub comment: String,
+    /// "Override Launch Settings": the scene's own launch settings are used for the clips it starts.
+    pub override_launch: bool,
+    pub main: Launch,
+    pub alt: Launch,
 }
 
-/// A clip waiting for its bar: which scene it launches, the pattern it plays, and the transport tick it plays at.
+impl Eq for Scene {}
+
+/// What a launcher context menu acts on: a clip cell, a scene's launch button, or a track's row header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuTarget {
+    Clip(u32, usize),
+    Scene(usize),
+    Track(u32),
+}
+
+/// An open context menu (`Launcher::menu`): its target and where it was opened (screen px).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Menu {
+    pub target: MenuTarget,
+    pub at: (f32, f32),
+}
+
+/// The palette the launcher's colour swatches offer, as 0xRRGGBB.
+pub const PALETTE: [u32; 8] = [0xc8504a, 0xd0803c, 0xc8b44a, 0x5a9c4a, 0x3c8c88, 0x4a78b4, 0x8a5aa0, 0x7a8288];
+
+/// Palette entry `i`.
+pub fn palette(i: usize) -> os_model::Rgb {
+    let c = PALETTE[i.min(PALETTE.len() - 1)];
+    os_model::Rgb::new((c >> 16) as u8, (c >> 8) as u8, c as u8)
+}
+
+/// A clip on the air on one track.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Playing {
+    pub scene: usize,
+    /// The transport tick the clip started at (its own loop's phase).
+    pub since: u64,
+    /// The scene it replaced, for "Return to last clip" (`None`: nothing was playing on the track).
+    pub previous: Option<usize>,
+}
+
+/// A clip waiting for its grid line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pending {
     pub scene: usize,
     pub pattern: u16,
+    /// The transport tick it launches at.
     pub at: u64,
+    /// The ALT launch settings (a controller's shift gesture), else the MAIN ones.
+    pub alt: bool,
+}
+
+/// The launcher's grid: the clips by (track id, scene), the scene each track is playing, and the open menu.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Launcher {
+    pub clips: BTreeMap<(u32, usize), Slot>,
+    /// By the track's id: the clip it plays.
+    pub playing: BTreeMap<u32, Playing>,
+    /// By the track's id: the clip waiting for its grid line (a launch made while the transport runs).
+    pub pending: BTreeMap<u32, Pending>,
+    /// The scenes by index.
+    pub scenes: Vec<Scene>,
+    /// The context menu a right-click opened, if any.
+    pub menu: Option<Menu>,
+    /// The clip a mouse press launched, for the release gesture (`OnRelease`): (track, scene).
+    pub pressed: Option<(u32, usize)>,
+    /// The transport tick [`advance`] last saw, so the wrap at the looping window's end counts as its grid line.
+    last_tick: f64,
 }
 
 /// A launcher column: one track, in the mixer's order.
@@ -58,6 +402,8 @@ pub struct Column {
     pub color: Option<os_model::Rgb>,
     /// A MIDI track whose instrument slot is empty: it has nothing to play its clips through, so its header says so.
     pub no_instrument: bool,
+    /// The track's channel (`Track::channel`), by its index: what its clips' notes are picked out by.
+    pub channel: Option<u16>,
 }
 
 /// The launcher's actions (its cells, scene buttons and track headers).
@@ -65,14 +411,42 @@ pub struct Column {
 pub enum Act {
     /// Launch the clip at (track id, scene); an empty slot stops the track.
     Launch(u32, usize),
+    /// The ALT launch settings of the same clip (a controller's ALT gesture).
+    LaunchAlt(u32, usize),
+    /// The press on a clip was released: `OnRelease` does its thing.
+    Release(u32, usize),
     /// Stop one track's clip.
     Stop(u32),
     /// Launch every clip of a scene.
     LaunchScene(usize),
     /// Stop every track.
     StopAll,
-    /// Put the current pattern in the slot, or clear it when it already holds that pattern (right-click).
+    /// Put the current pattern in the slot, or clear it when it already holds that pattern.
     Set(u32, usize),
+    /// A click on a track's row header: its lane is selected in the arrangement (so the device rack follows it).
+    SelectTrack(u32),
+    /// A right-click: open the context menu of a clip, a scene or a track.
+    Menu(MenuTarget, (f32, f32)),
+    /// Close the open context menu.
+    MenuClose,
+    /// Empty a clip's slot.
+    Clear(u32, usize),
+    /// Rename a clip in place (an inline text box, `crate::playlist::start_edit`).
+    RenameClip(u32, usize),
+    RenameScene(usize),
+    RenameTrack(u32),
+    /// Give a clip, a scene or a track a colour (`None`: back to the default).
+    ColorClip(u32, usize, Option<os_model::Rgb>),
+    ColorScene(usize, Option<os_model::Rgb>),
+    ColorTrack(u32, Option<os_model::Rgb>),
+    /// Walk a clip's launch setting to its next value: quantize (`0`), play mode (`1`), on release (`2`).
+    CycleLaunch(u32, usize, u8),
+    /// Walk a clip's next action to the next function.
+    CycleNext(u32, usize),
+    /// Walk a clip's next action timing: 1 loop, 2, 4, 8, then 1, 2, 4, 8, 16 bars.
+    CycleNextTiming(u32, usize),
+    /// Turn the scene's "Override Launch Settings" on / off.
+    SceneOverride(usize),
 }
 
 /// The tracks the launcher has a column for, in the mixer's order (`mixer_strip`), so a column sits over the strip
@@ -93,6 +467,7 @@ pub fn columns(s: &State) -> Vec<Column> {
                     name: crate::playlist::track_name(s, lane),
                     color: crate::playlist::track_info(s, lane).and_then(|i| i.color),
                     no_instrument: instrument_missing(s, t),
+                    channel: t.channel,
                 },
             )
         })
@@ -101,7 +476,6 @@ pub fn columns(s: &State) -> Vec<Column> {
     v.into_iter().map(|(_, c)| c).collect()
 }
 
-/// The clip in (track, scene), when the slot holds one.
 /// Whether a MIDI track's instrument slot is empty: no channel plays it (the same test the device rack's
 /// `device_rack::DeviceKind::NoInstrument` tile makes, so the two never disagree).
 fn instrument_missing(s: &State, t: &os_model::Track) -> bool {
@@ -111,50 +485,241 @@ fn instrument_missing(s: &State, t: &os_model::Track) -> bool {
             .is_none()
 }
 
+/// The clip in (track, scene), when the slot holds one.
 pub fn clip(s: &State, track: u32, scene: usize) -> Option<Slot> {
-    s.launcher.clips.get(&(track, scene)).copied()
+    s.launcher.clips.get(&(track, scene)).cloned()
 }
 
-/// The scene a track is playing, when it is playing one.
+/// The track's playlist lane (`Track::playlist_lane`), by its id.
+pub fn lane_of(s: &State, track: u32) -> Option<u16> {
+    let tr = s.project.tracks.iter().find(|t| t.id.0 == track && t.playlist_lane > 0)?;
+    Some(tr.playlist_lane as u16 - 1)
+}
+
+/// The track's channel, by its id.
+pub fn channel_of(s: &State, track: u32) -> Option<u16> {
+    s.project.tracks.iter().find(|t| t.id.0 == track)?.channel
+}
+
+/// A clip's name: the one it was given, else its pattern's name.
+pub fn clip_name(s: &State, track: u32, scene: usize) -> String {
+    match clip(s, track, scene) {
+        Some(sl) => sl.name.clone().unwrap_or_else(|| crate::playlist::source_name(s, os_model::ClipSource::Pattern(sl.pattern))),
+        None => String::new(),
+    }
+}
+
+/// A clip's colour: its own, else its track's.
+pub fn clip_color(s: &State, track: u32, scene: usize) -> Option<os_model::Rgb> {
+    let own = clip(s, track, scene).and_then(|c| c.color);
+    own.or_else(|| lane_of(s, track).and_then(|lane| crate::playlist::track_color(s, lane)))
+}
+
+/// A scene's colour.
+pub fn scene_color(s: &State, scene: usize) -> Option<os_model::Rgb> {
+    s.launcher.scenes.get(scene).and_then(|sc| sc.color)
+}
+
+/// The scene's name ("Scene 3" when it has none).
+pub fn scene_name(s: &State, scene: usize) -> String {
+    match s.launcher.scenes.get(scene).map(|sc| sc.name.as_str()).filter(|n| !n.is_empty()) {
+        Some(n) => n.to_string(),
+        None => format!("Scene {}", scene + 1),
+    }
+}
+
+/// A clip's name as the text box opens with it (an empty one lets the pattern's name show through).
+pub fn set_clip_name(s: &mut State, track: u32, scene: usize, text: &str) {
+    if let Some(sl) = s.launcher.clips.get_mut(&(track, scene)) {
+        sl.name = (!text.trim().is_empty()).then(|| text.trim().to_string());
+    }
+}
+
+/// A scene's name: an empty one reads "Scene N" again.
+pub fn set_scene_name(s: &mut State, scene: usize, text: &str) {
+    let scenes = &mut s.launcher.scenes;
+    while scenes.len() <= scene {
+        scenes.push(Scene::default());
+    }
+    scenes[scene].name = text.trim().to_string();
+    normalize(s);
+}
+
+/// Grows the scene list to `SCENES` and drops trailing empty ones.
+fn normalize(s: &mut State) {
+    let v = &mut s.launcher.scenes;
+    while v.len() < SCENES {
+        v.push(Scene::default());
+    }
+    while v.len() > SCENES && v.last().is_some_and(|sc| sc == &Scene::default()) {
+        v.pop();
+    }
+}
+
+/// The rows of the context menu a right-click opened: the target's own commands (the colour swatches follow them in
+/// the view, `views::launcher::menu_paint`).
+pub fn menu_items(s: &State, target: MenuTarget) -> Vec<(&'static str, String, Act)> {
+    match target {
+        MenuTarget::Clip(track, scene) => {
+            let Some(sl) = clip(s, track, scene) else {
+                return vec![("Set current pattern".into(), String::new(), Act::Set(track, scene))];
+            };
+            vec![
+                ("Set current pattern", String::new(), Act::Set(track, scene)),
+                // Bitwig's Launch section: each row shows what it holds and a click walks it to the next value.
+                ("Quantize", sl.main.q.name().to_string(), Act::CycleLaunch(track, scene, 0)),
+                ("Play mode", sl.main.play.name().to_string(), Act::CycleLaunch(track, scene, 1)),
+                ("On release", sl.main.release.name().to_string(), Act::CycleLaunch(track, scene, 2)),
+                ("Next action", sl.next.name().to_string(), Act::CycleNext(track, scene)),
+                ("Next action after", sl.next_timing.text(u64::from(s.project.bar_ticks())), Act::CycleNextTiming(track, scene)),
+                ("Q to loop", if sl.main.q_to_loop { "On".into() } else { "Off".into() }, Act::CycleLaunch(track, scene, 3)),
+                // Bitwig duplicates the whole launch section for the ALT gesture.
+                ("ALT quantize", sl.alt.q.name().to_string(), Act::CycleLaunch(track, scene, 4)),
+                ("ALT play mode", sl.alt.play.name().to_string(), Act::CycleLaunch(track, scene, 5)),
+                ("ALT on release", sl.alt.release.name().to_string(), Act::CycleLaunch(track, scene, 6)),
+                ("Rename...", String::new(), Act::RenameClip(track, scene)),
+                ("Clear clip", String::new(), Act::Clear(track, scene)),
+            ]
+        }
+        MenuTarget::Scene(scene) => {
+            let sc = s.launcher.scenes.get(scene).cloned().unwrap_or_default();
+            vec![
+                ("Launch scene", String::new(), Act::LaunchScene(scene)),
+                ("Override launch settings", if sc.override_launch { "On".into() } else { "Off".into() }, Act::SceneOverride(scene)),
+                ("Rename...", String::new(), Act::RenameScene(scene)),
+            ]
+        }
+        MenuTarget::Track(track) => vec![
+            ("Rename...", String::new(), Act::RenameTrack(track)),
+            ("Select in the playlist", String::new(), Act::SelectTrack(track)),
+            ("Stop", String::new(), Act::Stop(track)),
+        ],
+    }
+}
+
+/// The act that gives `target` `color`, for the menu's swatches.
+pub fn color_act(target: MenuTarget, color: Option<os_model::Rgb>) -> Act {
+    match target {
+        MenuTarget::Clip(track, scene) => Act::ColorClip(track, scene, color),
+        MenuTarget::Scene(scene) => Act::ColorScene(scene, color),
+        MenuTarget::Track(track) => Act::ColorTrack(track, color),
+    }
+}
+
+/// The clip a track plays, when it plays one.
 pub fn playing(s: &State, track: u32) -> Option<usize> {
-    s.launcher.playing.get(&track).copied()
+    s.launcher.playing.get(&track).map(|p| p.scene)
 }
 
-/// The scene a track is waiting to launch at the next bar line, when it has one queued.
+/// The scene a track is waiting to launch at its grid line, when it has one queued.
 pub fn pending(s: &State, track: u32) -> Option<usize> {
     s.launcher.pending.get(&track).map(|p| p.scene)
 }
 
-/// The tick of the first bar line after `tick`: a launch made on a bar line waits for the next one, as Bitwig's
-/// default quantisation does.
-fn next_bar(tick: f64, bar: u32) -> u64 {
-    let bar = f64::from(bar.max(1));
-    (((tick / bar).floor() + 1.0) * bar).max(0.0) as u64
+/// Whether any track plays a launcher clip: the transport then plays the launcher's window ([`shadow`]).
+pub fn live(s: &State) -> bool {
+    !s.launcher.playing.is_empty()
 }
 
-/// Whether a launch has to wait: the transport runs (a stopped transport starts the clip at once — there is no bar
+/// The tick of the next grid line `step` ticks apart after `tick`: a launch made on a line waits for the next one, as
+/// Bitwig's quantization does.
+fn next_line(tick: f64, step: u64) -> u64 {
+    if step == 0 {
+        return tick.max(0.0) as u64;
+    }
+    let step = step as f64;
+    (((tick / step).floor() + 1.0) * step).max(0.0) as u64
+}
+
+/// The grid a launch waits for: its own quantization, or the loop's start when `Q to Loop` is on (the whole window is
+/// the launcher's loop, so the clip waits for the window to wrap).
+fn grid_step(s: &State, l: Launch) -> u64 {
+    if l.q_to_loop {
+        window(s).max(1)
+    } else {
+        l.q.ticks(&s.project)
+    }
+}
+
+/// Whether a launch has to wait: the transport runs (a stopped transport starts the clip at once — there is no grid
 /// line to wait for).
 fn waiting(app: &App) -> bool {
     app.transport.playing() && !app.transport.paused()
 }
 
-/// Puts (track, scene) on the air now.
-fn play_now(app: &mut App, track: u32, scene: usize, pattern: u16) {
+/// The clip's length in ticks: its pattern's (`Project::pattern_length`).
+pub fn clip_len(s: &State, pattern: u16) -> u64 {
+    u64::from(s.project.pattern_length(pattern).max(1))
+}
+
+/// Where a new clip starts inside itself (Bitwig's Play Mode): 0 from its start, the playing clip's phase for
+/// "legato from clip", the transport's own position for "legato from project".
+fn legato_phase(app: &App, track: u32, play: PlayFrom, len: u64) -> u64 {
+    let len = len.max(1);
+    let now = app.transport.tick().max(0.0) as u64;
+    match play {
+        PlayFrom::Start => 0,
+        PlayFrom::LegatoClip => match app.state.launcher.playing.get(&track) {
+            Some(p) => now.saturating_sub(p.since) % len,
+            None => 0,
+        },
+        PlayFrom::LegatoProject => now % len,
+    }
+}
+
+/// The launch settings a clip launches with: the scene's when it overrides, else the clip's own (MAIN or ALT).
+fn settings(s: &State, track: u32, scene: usize, alt: bool) -> Launch {
+    let sc = s.launcher.scenes.get(scene).cloned().unwrap_or_default();
+    if sc.override_launch {
+        return if alt { sc.alt } else { sc.main };
+    }
+    match clip(s, track, scene) {
+        Some(sl) => {
+            let l = if alt { sl.alt } else { sl.main };
+            // "Use Project Setting": a default clip takes the project's own launch quantization.
+            l
+        }
+        None => Launch::default(),
+    }
+}
+
+/// Puts (track, scene) on the air now, at tick `at`.
+fn play_now(app: &mut App, track: u32, scene: usize, pattern: u16, alt: bool, at: u64) {
+    let previous = app.state.launcher.playing.get(&track).map(|p| p.scene);
+    // Bitwig's Play Mode: where in itself the clip starts.
+    let play = settings(&app.state, track, scene, alt).play;
+    let len = clip_len(&app.state, pattern);
+    let offset = legato_phase(app, track, play, len);
+    let since = at.saturating_sub(offset);
     app.state.launcher.pending.remove(&track);
-    app.state.launcher.playing.insert(track, scene);
+    app.state.launcher.playing.insert(track, Playing { scene, since, previous });
     play_pattern(app, pattern);
 }
 
-/// The scene's name ("Scene 3" when it has none).
-pub fn scene_name(s: &State, scene: usize) -> String {
-    s.launcher.scenes.get(scene).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| format!("Scene {}", scene + 1))
+/// The clip's pattern becomes the current one, the launcher's mode takes over playback and the transport starts
+/// when it is stopped. The engine's project is rebuilt from the launcher's window (`shadow`).
+fn play_pattern(app: &mut App, pattern: u16) {
+    app.state.pattern = pattern;
+    app.state.project.current_pattern = Some(pattern);
+    if !app.transport.playing() {
+        app.act(Action::Play);
+    } else {
+        // Clips already run: the playing project's tracks change, so the engine is given the new one.
+        let p = crate::rack::play_project(&app.state);
+        app.transport.update(&p);
+    }
+    app.invalidate();
 }
 
 /// Puts `pattern` in (track, scene), or empties the slot with `None`.
 pub fn set(app: &mut App, track: u32, scene: usize, pattern: Option<u16>) {
     match pattern {
         Some(p) => {
-            app.state.launcher.clips.insert((track, scene), Slot { pattern: p });
+            let old = clip(&app.state, track, scene);
+            app.state.launcher.clips.insert(
+                (track, scene),
+                Slot { pattern: p, ..old.unwrap_or_default() },
+            );
         }
         None => {
             app.state.launcher.clips.remove(&(track, scene));
@@ -167,24 +732,46 @@ pub fn set(app: &mut App, track: u32, scene: usize, pattern: Option<u16>) {
     app.invalidate();
 }
 
-/// Launches (track, scene): the track's column lights up for that scene and the clip's pattern starts. An empty slot
-/// stops the track (Bitwig's empty-slot stop).
+/// Launches (track, scene) with the clip's MAIN launch settings: it waits for the next grid line of its
+/// quantization while the transport runs, and starts at once when it is stopped. An empty slot stops the track.
 pub fn launch(app: &mut App, track: u32, scene: usize) {
+    launch_with(app, track, scene, false);
+}
+
+/// [`launch`] with the ALT launch settings.
+pub fn launch_alt(app: &mut App, track: u32, scene: usize) {
+    launch_with(app, track, scene, true);
+}
+
+fn launch_with(app: &mut App, track: u32, scene: usize, alt: bool) {
     let Some(slot) = clip(&app.state, track, scene) else {
         stop(app, track);
         return;
     };
+    let l = settings(&app.state, track, scene, alt);
     if waiting(app) {
-        queue(app, track, scene, slot.pattern);
+        let at = next_line(app.transport.tick(), grid_step(&app.state, l));
+        app.state.launcher.pending.insert(track, Pending { scene, pattern: slot.pattern, at, alt });
+        app.invalidate();
         return;
     }
-    play_now(app, track, scene, slot.pattern);
+    play_now(app, track, scene, slot.pattern, alt, app.transport.tick().max(0.0) as u64);
 }
 
-/// Queues (track, scene) for the next bar line of the running transport.
-fn queue(app: &mut App, track: u32, scene: usize, pattern: u16) {
-    let at = next_bar(app.transport.tick(), app.state.project.bar_ticks());
-    app.state.launcher.pending.insert(track, Pending { scene, pattern, at });
+/// The press on a clip was released: Bitwig's "on Release". `Continue` leaves it playing, `Stop` stops the track,
+/// `Return` brings back the clip it replaced, `Next action` runs the clip's next action now.
+pub fn release(app: &mut App, track: u32, scene: usize) {
+    if app.state.launcher.pressed.take() != Some((track, scene)) {
+        return;
+    }
+    let Some(sl) = clip(&app.state, track, scene) else { return };
+    let l = settings(&app.state, track, scene, false);
+    match l.release {
+        OnRelease::Continue => {}
+        OnRelease::Stop => stop(app, track),
+        OnRelease::Return => return_to_last(app, track),
+        OnRelease::NextAction => run_next(app, track, sl.next),
+    }
     app.invalidate();
 }
 
@@ -195,30 +782,47 @@ pub fn stop(app: &mut App, track: u32) {
     app.invalidate();
 }
 
-/// Launches every clip of a scene (one pattern, so the first clip's pattern is what the engine plays): at the next
-/// bar line while the transport runs, at once when it is stopped.
+/// Brings back the clip a track played before the current one (the track stops when there was none).
+fn return_to_last(app: &mut App, track: u32) {
+    let previous = app.state.launcher.playing.get(&track).and_then(|p| p.previous);
+    match previous.and_then(|sc| clip(&app.state, track, sc).map(|sl| (sc, sl))) {
+        Some((sc, sl)) => {
+            let at = app.transport.tick().max(0.0) as u64;
+            let old = playing(&app.state, track);
+            app.state.launcher.playing.insert(track, Playing { scene: sc, since: at, previous: old });
+            play_pattern(app, sl.pattern);
+        }
+        None => stop(app, track),
+    }
+}
+
+/// Launches every clip of a scene: at the next grid line while the transport runs, at once when it is stopped. The
+/// scene's launch settings apply when it overrides them.
 pub fn launch_scene(app: &mut App, scene: usize) {
     let cols = columns(&app.state);
     let clips: Vec<(u32, u16)> = cols
         .iter()
         .filter_map(|c| clip(&app.state, c.id, scene).map(|slot| (c.id, slot.pattern)))
         .collect();
+    if clips.is_empty() {
+        app.invalidate();
+        return;
+    }
+    let l = settings(&app.state, clips[0].0, scene, false);
     if waiting(app) {
-        if clips.is_empty() {
-            app.invalidate();
-            return;
-        }
-        let at = next_bar(app.transport.tick(), app.state.project.bar_ticks());
+        let at = next_line(app.transport.tick(), grid_step(&app.state, l));
         for (track, pattern) in clips {
-            app.state.launcher.pending.insert(track, Pending { scene, pattern, at });
+            app.state.launcher.pending.insert(track, Pending { scene, pattern, at, alt: false });
         }
         app.invalidate();
         return;
     }
+    let at = app.transport.tick().max(0.0) as u64;
     let mut first: Option<u16> = None;
     for (track, pattern) in clips {
+        let previous = playing(&app.state, track);
         app.state.launcher.pending.remove(&track);
-        app.state.launcher.playing.insert(track, scene);
+        app.state.launcher.playing.insert(track, Playing { scene, since: at, previous });
         first.get_or_insert(pattern);
     }
     match first {
@@ -234,15 +838,27 @@ pub fn stop_all(app: &mut App) {
     app.invalidate();
 }
 
-/// Applies the clips waiting for their bar line (called from `App::tick`). True when one went on the air.
+/// Applies the clips waiting for their grid line (called from `App::tick`). True when one went on the air.
 pub fn advance(app: &mut App) -> bool {
     let running = waiting(app);
-    advance_at(app, app.transport.tick(), running)
+    let now = app.transport.tick();
+    let before = app.state.launcher.playing.clone();
+    let launched = advance_at(app, now, running);
+    let fired = next_actions(app, now);
+    // A launch that changed what plays needs the engine's project rebuilt (the window's tracks changed).
+    if app.state.launcher.playing != before {
+        // The window (and so the transport's loop) follows what is on the air.
+        app.sync_loop_range();
+        if live(&app.state) {
+            let p = crate::rack::play_project(&app.state);
+            app.transport.update(&p);
+        }
+    }
+    launched || fired
 }
 
-/// [`advance`] at a given transport tick, for the tests and for `advance` itself. A launch lands when its bar line
-/// is reached, when a looping pattern wrapped past it, or as soon as the transport stops (it starts at once then:
-/// no bar line is coming).
+/// [`advance`] at a given transport tick, for the tests and for `advance` itself. A launch lands when its grid line
+/// is reached, when a looping window wrapped past it, or as soon as the transport stops.
 fn advance_at(app: &mut App, tick: f64, running: bool) -> bool {
     let last = app.state.launcher.last_tick;
     app.state.launcher.last_tick = tick;
@@ -262,49 +878,329 @@ fn advance_at(app: &mut App, tick: f64, running: bool) -> bool {
         return false;
     }
     let mut pattern = None;
+    let at = tick.max(0.0) as u64;
     for (track, p) in due {
+        let previous = playing(&app.state, track);
         app.state.launcher.pending.remove(&track);
-        app.state.launcher.playing.insert(track, p.scene);
+        app.state.launcher.playing.insert(track, Playing { scene: p.scene, since: at, previous });
         pattern = Some(p.pattern);
     }
-    // One pattern plays at a time (the honest limit, docs/clip-launcher.md): the last launch to fall due leads.
     if let Some(pattern) = pattern {
-        play_pattern(app, pattern);
+        app.state.pattern = pattern;
+        app.state.project.current_pattern = Some(pattern);
     }
     app.invalidate();
     true
 }
 
-/// The current pattern goes on the air: PAT mode at that pattern's number (song playback would ignore the launcher),
-/// starting the transport when it is stopped.
-fn play_pattern(app: &mut App, pattern: u16) {
-    app.state.pattern = pattern;
-    app.state.project.current_pattern = Some(pattern);
-    if app.state.song_mode {
-        app.act(Action::PatSong(false));
+/// Runs the next actions whose time is up (Bitwig: "Next Action ... executed at a set time after the clip started
+/// playing"): after the clip's whole loops, or the ticks it was given. True when one ran.
+fn next_actions(app: &mut App, tick: f64) -> bool {
+    let due: Vec<(u32, usize, NextAction)> = app
+        .state
+        .launcher
+        .playing
+        .iter()
+        .filter_map(|(track, p)| {
+            let sl = clip(&app.state, *track, p.scene)?;
+            if sl.next == NextAction::None {
+                return None;
+            }
+            let len = clip_len(&app.state, sl.pattern);
+            let at = match sl.next_timing {
+                NextTiming::Loops(n) => p.since + len * u64::from(n.max(1)),
+                NextTiming::After(t) => p.since + t.max(1),
+            };
+            (tick >= at as f64).then_some((*track, p.scene, sl.next))
+        })
+        .collect();
+    if due.is_empty() {
+        return false;
     }
-    if !app.transport.playing() {
-        app.act(Action::Play);
+    for (track, _, action) in due {
+        run_next(app, track, action);
     }
-    app.invalidate();
-}
-
-/// Opens (track, scene)'s clip in the piano roll: its pattern becomes the current one and the window comes up. False
-/// when the slot is empty.
-pub fn open(app: &mut App, track: u32, scene: usize) -> bool {
-    let Some(slot) = clip(&app.state, track, scene) else { return false };
-    app.state.launcher.pending.remove(&track);
-    app.state.pattern = slot.pattern;
-    app.state.project.current_pattern = Some(slot.pattern);
-    app.state.launcher.playing.insert(track, scene);
-    app.state.piano.dirty = true;
-    app.state.raise(crate::app::Win::PianoRoll);
     app.invalidate();
     true
 }
+
+/// Runs a clip's next action on its track.
+fn run_next(app: &mut App, track: u32, action: NextAction) {
+    let Some(current) = playing(&app.state, track) else { return };
+    match action {
+        NextAction::None => {}
+        NextAction::Stop => stop(app, track),
+        NextAction::ReturnToArrangement => {
+            // The arrangement takes this track back: its launcher clip stops (the arrangement's own clips play on).
+            stop(app, track);
+        }
+        NextAction::ReturnToLastClip => return_to_last(app, track),
+        NextAction::PlayNext => follow(app, track, current, Follow::Next),
+        NextAction::PlayPrevious => follow(app, track, current, Follow::Previous),
+        NextAction::PlayFirst => follow(app, track, current, Follow::First),
+        NextAction::PlayLast => follow(app, track, current, Follow::Last),
+        NextAction::PlayRandom => follow(app, track, current, Follow::Random),
+        NextAction::PlayOther => follow(app, track, current, Follow::Other),
+        NextAction::RoundRobin => follow(app, track, current, Follow::RoundRobin),
+        NextAction::FirstInBlock => follow(app, track, current, Follow::InBlock(BlockRule::First)),
+        NextAction::LastInBlock => follow(app, track, current, Follow::InBlock(BlockRule::Last)),
+        NextAction::RandomInBlock => follow(app, track, current, Follow::InBlock(BlockRule::Random)),
+        NextAction::OtherInBlock => follow(app, track, current, Follow::InBlock(BlockRule::Other)),
+        NextAction::RoundRobinInBlock => follow(app, track, current, Follow::InBlock(BlockRule::RoundRobin)),
+        NextAction::FirstInNextBlock => follow(app, track, current, Follow::NextBlock(BlockRule::First)),
+        NextAction::RandomInNextBlock => follow(app, track, current, Follow::NextBlock(BlockRule::Random)),
+        NextAction::FirstInPreviousBlock => follow(app, track, current, Follow::PreviousBlock(BlockRule::First)),
+        NextAction::RandomInPreviousBlock => follow(app, track, current, Follow::PreviousBlock(BlockRule::Random)),
+        NextAction::FirstInOtherBlock => follow(app, track, current, Follow::OtherBlock(BlockRule::First)),
+        NextAction::RandomInOtherBlock => follow(app, track, current, Follow::OtherBlock(BlockRule::Random)),
+    }
+}
+
+/// A rule inside a block of clips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlockRule {
+    First,
+    Last,
+    Random,
+    Other,
+    RoundRobin,
+}
+
+/// How a next action picks the next clip of its track.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Follow {
+    Next,
+    Previous,
+    First,
+    Last,
+    Random,
+    Other,
+    RoundRobin,
+    InBlock(BlockRule),
+    NextBlock(BlockRule),
+    PreviousBlock(BlockRule),
+    OtherBlock(BlockRule),
+}
+
+/// The scenes a track has clips in, as clip blocks: runs of neighbouring scenes holding clips.
+fn blocks(s: &State, track: u32) -> Vec<Vec<usize>> {
+    let scenes: Vec<usize> = (0..SCENES).filter(|&sc| clip(s, track, sc).is_some()).collect();
+    let mut out: Vec<Vec<usize>> = Vec::new();
+    for sc in scenes {
+        match out.last_mut() {
+            Some(b) if b.last().is_some_and(|&last| last + 1 == sc) => b.push(sc),
+            _ => out.push(vec![sc]),
+        }
+    }
+    out
+}
+
+/// The block a scene sits in, with the list of blocks.
+fn block_of(s: &State, track: u32, scene: usize) -> (Vec<Vec<usize>>, usize) {
+    let bl = blocks(s, track);
+    let i = bl.iter().position(|b| b.contains(&scene)).unwrap_or(0);
+    (bl, i)
+}
+
+/// A deterministic "random" choice for `n` items (the transport tick keeps it from flickering).
+fn pick(n: usize, salt: u64) -> usize {
+    if n == 0 {
+        return 0;
+    }
+    (salt.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407) >> 33) as usize % n
+}    /// Runs a follow action: which clip the track plays next, out of its own clips.
+fn follow(app: &mut App, track: u32, current: usize, how: Follow) {
+    let all: Vec<usize> = (0..SCENES).filter(|&sc| clip(&app.state, track, sc).is_some()).collect();
+    if all.is_empty() {
+        stop(app, track);
+        return;
+    }
+    let at = app.transport.tick().max(0.0) as u64;
+    let salt = at / u64::from(app.state.project.bar_ticks().max(1));
+    let target: Option<usize> = match how {
+        Follow::Next => all.iter().find(|&&sc| sc > current).copied(),
+        Follow::Previous => all.iter().rev().find(|&&sc| sc < current).copied(),
+        Follow::First => all.first().copied(),
+        Follow::Last => all.last().copied(),
+        Follow::Random => Some(all[pick(all.len(), salt)]),
+        Follow::Other => {
+            let others: Vec<usize> = all.iter().copied().filter(|&sc| sc != current).collect();
+            others.get(pick(others.len(), salt)).copied()
+        }
+        Follow::RoundRobin => Some(*all.iter().find(|&&sc| sc > current).unwrap_or(&all[0])),
+        Follow::InBlock(rule) => {
+            let (bl, i) = block_of(&app.state, track, current);
+            pick_in(&bl[i], current, rule, salt)
+        }
+        Follow::NextBlock(rule) => {
+            let (bl, i) = block_of(&app.state, track, current);
+            bl.get(i + 1).and_then(|b| pick_in(b, usize::MAX, rule, salt))
+        }
+        Follow::PreviousBlock(rule) => {
+            let (bl, i) = block_of(&app.state, track, current);
+            let j = i.saturating_sub(1);
+            bl.get(j).and_then(|b| pick_in(b, usize::MAX, rule, salt))
+        }
+        Follow::OtherBlock(rule) => {
+            let (bl, i) = block_of(&app.state, track, current);
+            let others: Vec<usize> = (0..bl.len()).filter(|&j| j != i).collect();
+            others.get(pick(others.len(), salt)).and_then(|&j| pick_in(&bl[j], usize::MAX, rule, salt))
+        }
+    };
+    match target.and_then(|sc| clip(&app.state, track, sc).map(|sl| (sc, sl))) {
+        Some((sc, sl)) => {
+            let previous = playing(&app.state, track);
+            app.state.launcher.playing.insert(track, Playing { scene: sc, since: at, previous });
+            play_pattern(app, sl.pattern);
+        }
+        None => stop(app, track),
+    }
+}
+
+/// A clip inside one block, by the rule (`current` = the clip playing, `usize::MAX` for "none").
+fn pick_in(block: &[usize], current: usize, rule: BlockRule, salt: u64) -> Option<usize> {
+    let at = |i: usize| block.get(i).copied();
+    match rule {
+        BlockRule::First => at(0),
+        BlockRule::Last => block.last().copied(),
+        BlockRule::Random => at(pick(block.len(), salt)),
+        BlockRule::Other => {
+            let others: Vec<usize> = block.iter().copied().filter(|&sc| sc != current).collect();
+            others.get(pick(others.len(), salt)).copied()
+        }
+        BlockRule::RoundRobin => {
+            let i = block.iter().position(|&sc| sc == current);
+            match i {
+                Some(i) => at((i + 1) % block.len()),
+                None => at(0),
+            }
+        }
+    }
+}
+
+/// The common multiple of two lengths (the loop window's step).
+fn lcm(a: u64, b: u64) -> u64 {
+    if a == 0 || b == 0 {
+        return a.max(b);
+    }
+    let (mut x, mut y) = (a, b);
+    while y != 0 {
+        let t = x % y;
+        x = y;
+        y = t;
+    }
+    a / x * b
+}
+
+/// The window the launcher's tracks loop over: the common multiple of the playing clips' lengths (so the transport's
+/// own loop is seamless), capped at [`MAX_WINDOW_BARS`] bars.
+pub fn window(s: &State) -> u64 {
+    let bar = u64::from(s.project.bar_ticks().max(1));
+    let mut l = bar;
+    for (track, p) in &s.launcher.playing {
+        if let Some(sl) = clip(s, *track, p.scene) {
+            l = lcm(l, clip_len(s, sl.pattern));
+        }
+    }
+    l.min(bar * u64::from(MAX_WINDOW_BARS))
+}
+
+/// The project the transport plays while launcher clips run: `base` with the playing tracks' arrangement clips
+/// replaced by their clips' loops. `None` when no clip plays.
+///
+/// For every playing track the track's lane gets copies of a shadow pattern — a copy of the clip's pattern holding
+/// only that track's channel's notes — repeated at the clip's own length from the tick it was launched at, over the
+/// window [`window`]. So the tracks play together, each looping at its own length, and the shadows stay out of the
+/// project's own patterns (the piano roll, the channel rack and a save see the real ones).
+pub fn shadow(s: &State, base: &Project) -> Option<Project> {
+    if !live(s) {
+        return None;
+    }
+    let w = window(s);
+    if w == 0 {
+        return None;
+    }
+    let mut p = base.clone();
+    // A project without an arrangement (a new one) gets one: the launcher's clips need somewhere to run.
+    if p.arrangements.is_empty() {
+        p.arrangements.push(os_model::Arrangement { number: 1, ..Default::default() });
+    }
+    // Number the shadow patterns past every pattern the project has (they must not collide), and build them off the
+    // project's own patterns before the arrangement is touched.
+    let mut next_no = p.patterns.iter().map(|q| q.number).max().unwrap_or(0).saturating_add(1).max(1);
+    let mut shadows: Vec<(u16, u16, os_model::Pattern, u64, u64)> = Vec::new();
+    for (track, now) in s.launcher.playing.clone() {
+        let Some(sl) = clip(s, track, now.scene) else { continue };
+        let Some(lane) = lane_of(s, track) else { continue };
+        let channel = channel_of(s, track);
+        let len = clip_len(s, sl.pattern);
+        let Some(src) = p.patterns.iter().find(|pat| pat.number == sl.pattern) else { continue };
+        let trimmed: Vec<os_model::Note> = src
+            .notes
+            .iter()
+            .filter(|n| channel.is_none_or(|c| n.channel == c) && u64::from(n.position) < len)
+            .copied()
+            .collect();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let no = next_no;
+        next_no += 1;
+        let mut pat = src.clone();
+        pat.number = no;
+        pat.notes = trimmed;
+        pat.length = Some(len as u32);
+        shadows.push((lane, no, pat, now.since, len));
+    }
+    if shadows.is_empty() {
+        return None;
+    }
+    let idx = p.arrangement_index();
+    let arr = p.arrangements.get_mut(idx)?;
+    // A lane per playing track (an arrangement may be shorter than the playlist).
+    for &(lane, ..) in &shadows {
+        while arr.tracks.len() <= usize::from(lane) {
+            let n = arr.tracks.len() as u32 + 1;
+            arr.tracks.push(os_model::PlaylistTrack::new(n));
+        }
+    }
+    for (lane, no, pat, since, len) in shadows {
+        // The arrangement's own clips leave this lane: the launcher owns it while its clip plays.
+        arr.clips.retain(|c| c.track != lane);
+        p.patterns.push(pat);
+        // From the tick it was launched at, one clip per loop, over the window.
+        let mut at = since % w;
+        while at < w {
+            let length = (w - at).min(len) as u32;
+            let mut clip = Clip::new(at as u32, length, lane, ClipSource::Pattern(no));
+            clip.id = os_model::Id::NONE;
+            arr.clips.push(clip);
+            at += len;
+        }
+    }
+    arr.clips.sort_by_key(|c| c.position);
+    Some(p)
+}
+
+/// The project a launcher clip's notes start relative to (`PlayFrom::LegatoProject`): the transport's position.
 
 /// Runs a launcher action.
 pub fn run(app: &mut App, act: Act) {
+    // Anything but opening a menu, or picking one of its commands, closes the open one.
+    if !matches!(
+        act,
+        Act::Menu(..)
+            | Act::ColorClip(..)
+            | Act::ColorScene(..)
+            | Act::ColorTrack(..)
+            | Act::Set(..)
+            | Act::CycleLaunch(..)
+            | Act::CycleNext(..)
+            | Act::CycleNextTiming(..)
+            | Act::SceneOverride(_)
+    ) {
+        app.state.launcher.menu = None;
+    }
     match act {
         Act::Launch(track, scene) => {
             // A second click on the same slot opens its clip in the piano roll; the first one launches it, as Bitwig's
@@ -317,8 +1213,11 @@ pub fn run(app: &mut App, act: Act) {
             if double && open(app, track, scene) {
                 return;
             }
+            app.state.launcher.pressed = Some((track, scene));
             launch(app, track, scene)
         }
+        Act::LaunchAlt(track, scene) => launch_alt(app, track, scene),
+        Act::Release(track, scene) => release(app, track, scene),
         Act::Stop(track) => stop(app, track),
         Act::LaunchScene(scene) => launch_scene(app, scene),
         Act::StopAll => stop_all(app),
@@ -327,7 +1226,110 @@ pub fn run(app: &mut App, act: Act) {
             let next = (clip(&app.state, track, scene).map(|c| c.pattern) != Some(current)).then_some(current);
             set(app, track, scene, next);
         }
+        Act::SelectTrack(track) => {
+            if let Some(lane) = lane_of(&app.state, track) {
+                app.state.playlist.track = lane;
+            }
+            app.invalidate();
+        }
+        Act::Menu(target, at) => {
+            app.state.launcher.menu = Some(Menu { target, at });
+            app.invalidate();
+        }
+        Act::MenuClose => {
+            app.state.launcher.menu = None;
+            app.invalidate();
+        }
+        Act::Clear(track, scene) => set(app, track, scene, None),
+        Act::RenameClip(track, scene) => rename(app, crate::playlist::EditTarget::LauncherClip(track, scene)),
+        Act::RenameScene(scene) => rename(app, crate::playlist::EditTarget::LauncherScene(scene)),
+        Act::RenameTrack(track) => {
+            if let Some(lane) = lane_of(&app.state, track) {
+                rename(app, crate::playlist::EditTarget::TrackName(lane));
+            }
+        }
+        Act::ColorClip(track, scene, color) => {
+            if let Some(sl) = app.state.launcher.clips.get_mut(&(track, scene)) {
+                sl.color = color;
+            }
+            app.invalidate();
+        }
+        Act::ColorScene(scene, color) => {
+            let scenes = &mut app.state.launcher.scenes;
+            while scenes.len() <= scene {
+                scenes.push(Scene::default());
+            }
+            scenes[scene].color = color;
+            normalize(&mut app.state);
+            app.invalidate();
+        }
+        Act::ColorTrack(track, color) => {
+            if let Some(lane) = lane_of(&app.state, track) {
+                crate::playlist::set_track_color(&mut app.state, lane, color);
+            }
+            app.invalidate();
+        }
+        Act::CycleLaunch(track, scene, which) => {
+            if let Some(sl) = app.state.launcher.clips.get_mut(&(track, scene)) {
+                match which {
+                    0 => sl.main.q = sl.main.q.next(),
+                    1 => sl.main.play = sl.main.play.next(),
+                    2 => sl.main.release = sl.main.release.next(),
+                    3 => sl.main.q_to_loop = !sl.main.q_to_loop,
+                    4 => sl.alt.q = sl.alt.q.next(),
+                    5 => sl.alt.play = sl.alt.play.next(),
+                    _ => sl.alt.release = sl.alt.release.next(),
+                }
+            }
+            app.invalidate();
+        }
+        Act::CycleNext(track, scene) => {
+            if let Some(sl) = app.state.launcher.clips.get_mut(&(track, scene)) {
+                sl.next = sl.next.next();
+            }
+            app.invalidate();
+        }
+        Act::CycleNextTiming(track, scene) => {
+            if let Some(sl) = app.state.launcher.clips.get_mut(&(track, scene)) {
+                let bar = u64::from(app.state.project.bar_ticks().max(1));
+                sl.next_timing = match sl.next_timing {
+                    NextTiming::Loops(n) if n < 8 => NextTiming::Loops(n * 2),
+                    NextTiming::Loops(_) => NextTiming::After(bar),
+                    NextTiming::After(t) if t < bar * 16 => NextTiming::After(t * 2),
+                    NextTiming::After(_) => NextTiming::Loops(1),
+                };
+            }
+            app.invalidate();
+        }
+        Act::SceneOverride(scene) => {
+            let scenes = &mut app.state.launcher.scenes;
+            while scenes.len() <= scene {
+                scenes.push(Scene::default());
+            }
+            scenes[scene].override_launch = !scenes[scene].override_launch;
+            app.invalidate();
+        }
     }
+}
+
+/// Opens the inline name box for `target`, where the menu that asked for it was opened.
+fn rename(app: &mut App, target: crate::playlist::EditTarget) {
+    let at = app.state.launcher.menu.map_or(app.mouse, |m| m.at);
+    crate::playlist::start_edit(&mut app.state, target, at);
+    app.invalidate();
+}
+
+/// Opens (track, scene)'s clip in the piano roll: its pattern becomes the current one and the window comes up. False
+/// when the slot is empty.
+pub fn open(app: &mut App, track: u32, scene: usize) -> bool {
+    let Some(slot) = clip(&app.state, track, scene) else { return false };
+    app.state.launcher.pending.remove(&track);
+    app.state.pattern = slot.pattern;
+    app.state.project.current_pattern = Some(slot.pattern);
+    app.state.piano.dirty = true;
+    app.state.raise(crate::app::Win::PianoRoll);
+    app.invalidate();
+    true
 }
 
 #[cfg(test)]
@@ -339,15 +1341,38 @@ mod tests {
         let mut app = App::new(None);
         app.state.project = crate::app::test_project();
         app.state.project.linear_mode = true;
-        // Two linear tracks: the template arrives with none (the same fixture the device-rack tests use).
         use crate::{playlist::Cmd, track_links::Mode};
         crate::playlist::run(&mut app, Cmd::TrackMode(0, Mode::LinearMidi));
         crate::playlist::run(&mut app, Cmd::TrackMode(1, Mode::LinearMidi));
         app
     }
 
+    /// Gives `pattern` a one-step note on `channel` (so a clip of it has something to play).
+    fn note(app: &mut App, pattern: u16, channel: u16) {
+        if !app.state.project.patterns.iter().any(|p| p.number == pattern) {
+            app.state.project.patterns.push(os_model::Pattern { number: pattern, ..Default::default() });
+        }
+        let p = app.state.project.patterns.iter_mut().find(|p| p.number == pattern).unwrap();
+        p.notes.push(os_model::Note {
+            position: 0,
+            length: 24,
+            channel,
+            key: 36,
+            fine_pitch: 120,
+            release: 64,
+            pan: 64,
+            velocity: 100,
+            mod_x: 128,
+            mod_y: 128,
+            flags: 0,
+            group: 0,
+            unk14: 0,
+            repeat: 0,
+        });
+    }
+
     /// A launched clip puts its pattern on the air: the track's column lights up for that scene, the pattern becomes
-    /// the current one and playback is in PAT mode (song playback would ignore the launcher).
+    /// the current one and the launcher's own playback takes over.
     #[test]
     fn launching_a_slot_plays_its_pattern() {
         let mut app = app();
@@ -357,7 +1382,7 @@ mod tests {
         assert_eq!(playing(&app.state, col.id), Some(1));
         assert_eq!(app.state.pattern, 3);
         assert_eq!(app.state.project.current_pattern, Some(3));
-        assert!(!app.state.song_mode, "PAT mode: the launcher plays the pattern");
+        assert!(!app.state.song_mode, "the launcher plays the clips");
         assert!(app.transport.playing(), "the transport started");
     }
 
@@ -381,13 +1406,43 @@ mod tests {
         assert!(app.state.launcher.playing.is_empty());
     }
 
-    /// A launch while the transport runs waits for the next bar line, then goes on the air; before the line the
-    /// pattern is untouched, so nothing of it is heard early.
+    /// Every launch waits for the next line of its own quantization — 1/16, 1/8, a beat, a bar, 2 or 8 bars — and
+    /// then goes on the air.
+    #[test]
+    fn a_launch_waits_for_its_quantization_line() {
+        let mut app = app();
+        app.act(Action::Play);
+        assert!(app.transport.playing(), "the transport runs");
+        let id = columns(&app.state)[0].id;
+        set(&mut app, id, 1, Some(3));
+        let bar = u64::from(app.state.project.bar_ticks());
+        for (q, want) in [
+            (LaunchQ::Off, 0),
+            (LaunchQ::Quarter, bar / 4),
+            (LaunchQ::Bar, bar),
+            (LaunchQ::Bars2, bar * 2),
+            (LaunchQ::Bars8, bar * 8),
+        ] {
+            app.state.launcher.clips.get_mut(&(id, 1)).unwrap().main.q = q;
+            launch(&mut app, id, 1);
+            assert_eq!(pending(&app.state, id), Some(1));
+            let queued = app.state.launcher.pending[&id];
+            assert_eq!(queued.at, want, "{q:?} waits for its own line");
+            assert!(!advance_at(&mut app, queued.at as f64 - 1.0, true) || q == LaunchQ::Off);
+            if q != LaunchQ::Off {
+                assert!(advance_at(&mut app, queued.at as f64, true));
+                assert_eq!(playing(&app.state, id), Some(1));
+                stop(&mut app, id);
+            }
+        }
+    }
+
+    /// A launch while the transport runs waits for the next bar line (the default quantization), then goes on the
+    /// air; before the line the pattern is untouched, so nothing of it is heard early.
     #[test]
     fn a_launch_while_playing_waits_for_the_next_bar() {
         let mut app = app();
         app.act(Action::Play);
-        assert!(app.transport.playing(), "the transport runs");
         let id = columns(&app.state)[0].id;
         set(&mut app, id, 1, Some(3));
         let before = app.state.project.current_pattern;
@@ -397,7 +1452,6 @@ mod tests {
         let queued = app.state.launcher.pending[&id];
         assert_eq!(queued.at, u64::from(app.state.project.bar_ticks()), "the next bar line");
         assert_eq!(app.state.project.current_pattern, before, "the pattern waits too");
-        // A tick short of the line keeps it waiting; the line itself lets it through.
         assert!(!advance_at(&mut app, queued.at as f64 - 1.0, true));
         assert!(advance_at(&mut app, queued.at as f64, true));
         assert_eq!(playing(&app.state, id), Some(1));
@@ -406,7 +1460,7 @@ mod tests {
         assert!(app.state.launcher.pending.is_empty());
     }
 
-    /// A launch while the transport is stopped starts at once: there is no bar line to wait for.
+    /// A launch while the transport is stopped starts at once: there is no grid line to wait for.
     #[test]
     fn a_launch_while_stopped_starts_at_once() {
         let mut app = app();
@@ -437,7 +1491,8 @@ mod tests {
         assert!(app.state.launcher.pending.is_empty());
     }
 
-    /// A scene launch queues every clip of the scene for the same bar line.
+    /// A scene launch queues every clip of the scene for the same line, and the scene's override setting passes its
+    /// quantization on to the clips it starts.
     #[test]
     fn a_scene_launch_queues_its_clips_for_the_bar() {
         let mut app = app();
@@ -453,12 +1508,19 @@ mod tests {
         assert!(advance_at(&mut app, bar, true));
         assert_eq!((playing(&app.state, a), playing(&app.state, b)), (Some(1), Some(1)));
         assert_eq!(app.state.pattern, 2);
+        // The scene's own override wins over the clips' settings.
+        stop_all(&mut app);
+        run(&mut app, Act::SceneOverride(1));
+        let mut sc = Scene::default();
+        sc.override_launch = true;
+        sc.main.q = LaunchQ::Bars4;
+        app.state.launcher.scenes[1] = sc;
+        assert_eq!(settings(&app.state, a, 1, false).q, LaunchQ::Bars4);
     }
 
-    /// A looping pattern never reports a tick at its own end: the wrap is that bar line, so a clip queued for the
-    /// next bar still lands.
+    /// A looping window that wrapped past a launch's line lands it (the transport never reports a tick at its end).
     #[test]
-    fn a_looping_pattern_wraps_into_the_launch() {
+    fn a_launch_lands_when_the_window_wraps() {
         let mut app = app();
         app.act(Action::Play);
         let id = columns(&app.state)[0].id;
@@ -470,6 +1532,86 @@ mod tests {
         assert_eq!(app.state.pattern, 3);
     }
 
+    /// Clips, scenes and tracks take names and colours of their own: the launcher's menu commands, with a track's
+    /// name and colour being the arrangement's own (the launcher edits the same row).
+    #[test]
+    fn clips_scenes_and_tracks_take_names_and_colours() {
+        let mut app = app();
+        let id = columns(&app.state)[0].id;
+        set(&mut app, id, 1, Some(3));
+        run(&mut app, Act::RenameClip(id, 1));
+        assert!(app.state.playlist.edit.is_some(), "the inline box opened");
+        app.state.playlist.edit.as_mut().unwrap().text = "Verse".into();
+        crate::playlist::commit_edit(&mut app.state);
+        assert_eq!(clip_name(&app.state, id, 1), "Verse");
+        run(&mut app, Act::RenameClip(id, 1));
+        app.state.playlist.edit.as_mut().unwrap().text = String::new();
+        crate::playlist::commit_edit(&mut app.state);
+        assert_eq!(clip_name(&app.state, id, 1), crate::playlist::source_name(&app.state, os_model::ClipSource::Pattern(3)));
+        let own = palette(5);
+        run(&mut app, Act::ColorClip(id, 1, Some(own)));
+        assert_eq!(clip_color(&app.state, id, 1), Some(own));
+        let lane = lane_of(&app.state, id).expect("the track's lane");
+        let track = palette(2);
+        run(&mut app, Act::ColorTrack(id, Some(track)));
+        assert_eq!(crate::playlist::track_color(&app.state, lane), Some(track));
+        run(&mut app, Act::ColorClip(id, 1, None));
+        assert_eq!(clip_color(&app.state, id, 1), Some(track), "the track's colour shows through");
+        run(&mut app, Act::RenameScene(4));
+        app.state.playlist.edit.as_mut().unwrap().text = "Chorus".into();
+        crate::playlist::commit_edit(&mut app.state);
+        assert_eq!(scene_name(&app.state, 4), "Chorus");
+        run(&mut app, Act::ColorScene(4, Some(track)));
+        assert_eq!(scene_color(&app.state, 4), Some(track));
+        run(&mut app, Act::RenameScene(4));
+        app.state.playlist.edit.as_mut().unwrap().text = String::new();
+        crate::playlist::commit_edit(&mut app.state);
+        assert_eq!(scene_name(&app.state, 4), "Scene 5");
+        run(&mut app, Act::RenameTrack(id));
+        app.state.playlist.edit.as_mut().unwrap().text = "Drums".into();
+        crate::playlist::commit_edit(&mut app.state);
+        assert_eq!(crate::playlist::track_name(&app.state, lane), "Drums");
+    }
+
+    /// A right-click opens the target's menu, and its commands act on that clip, scene or track; the clip menu
+    /// carries Bitwig's launch parameters and a click walks each to its next value.
+    #[test]
+    fn a_right_click_opens_the_clips_menu() {
+        let mut app = app();
+        let id = columns(&app.state)[0].id;
+        set(&mut app, id, 0, Some(2));
+        run(&mut app, Act::Menu(MenuTarget::Clip(id, 0), (10.0, 10.0)));
+        assert_eq!(app.state.launcher.menu, Some(Menu { target: MenuTarget::Clip(id, 0), at: (10.0, 10.0) }));
+        let labels: Vec<&str> = menu_items(&app.state, MenuTarget::Clip(id, 0)).into_iter().map(|(l, _, _)| l).collect();
+        assert_eq!(
+            labels,
+            [
+                "Set current pattern",
+                "Quantize",
+                "Play mode",
+                "On release",
+                "Next action",
+                "Next action after",
+                "Q to loop",
+                "ALT quantize",
+                "ALT play mode",
+                "ALT on release",
+                "Rename...",
+                "Clear clip"
+            ]
+        );
+        let q = |s: &State| s.launcher.clips[&(id, 0)].main.q;
+        let before = q(&app.state);
+        run(&mut app, Act::CycleLaunch(id, 0, 0));
+        assert_eq!(q(&app.state), before.next());
+        run(&mut app, Act::CycleNext(id, 0));
+        assert_eq!(app.state.launcher.clips[&(id, 0)].next, NextAction::Stop);
+        run(&mut app, Act::CycleNextTiming(id, 0));
+        assert_eq!(app.state.launcher.clips[&(id, 0)].next_timing, NextTiming::Loops(2));
+        run(&mut app, Act::Clear(id, 0));
+        assert_eq!(clip(&app.state, id, 0), None, "the clip went");
+    }
+
     /// A right-click sets the current pattern into a slot, and clears it when it already holds that pattern.
     #[test]
     fn a_slot_toggles_the_current_pattern() {
@@ -477,22 +1619,180 @@ mod tests {
         let id = columns(&app.state)[0].id;
         app.state.pattern = 4;
         run(&mut app, Act::Set(id, 2));
-        assert_eq!(clip(&app.state, id, 2), Some(Slot { pattern: 4 }));
+        assert_eq!(clip(&app.state, id, 2).map(|c| c.pattern), Some(4));
         run(&mut app, Act::Set(id, 2));
         assert_eq!(clip(&app.state, id, 2), None);
     }
 
-    /// A scene launch lights every track that has a clip in it, and plays that scene's pattern.
+    /// **The launcher's own feature**: each track plays its own clip, so three tracks' clips run together — the
+    /// transport's project is the shadow of the launcher (`shadow`), one lane per playing track, each looping at its
+    /// own length.
     #[test]
-    fn a_scene_launch_starts_its_clips() {
+    fn every_track_plays_its_own_clip() {
         let mut app = app();
         let cols = columns(&app.state);
-        set(&mut app, cols[0].id, 1, Some(2));
-        set(&mut app, cols[1].id, 1, Some(2));
-        launch_scene(&mut app, 1);
-        assert_eq!(playing(&app.state, cols[0].id), Some(1));
-        assert_eq!(playing(&app.state, cols[1].id), Some(1));
+        assert!(cols.len() >= 2);
+        let ch0 = channel_of(&app.state, cols[0].id).expect("a channel");
+        let ch1 = channel_of(&app.state, cols[1].id).expect("a channel");
+        note(&mut app, 1, ch0);
+        note(&mut app, 2, ch1);
+        set(&mut app, cols[0].id, 0, Some(1));
+        set(&mut app, cols[1].id, 0, Some(2));
+        launch(&mut app, cols[0].id, 0);
+        // The first clip starts the transport; the second waits for the bar line it was launched on.
+        launch(&mut app, cols[1].id, 0);
+        assert_eq!(playing(&app.state, cols[1].id), None, "queued for the next bar");
+        let bar = f64::from(app.state.project.bar_ticks());
+        assert!(advance_at(&mut app, bar, true));
+        assert_eq!(playing(&app.state, cols[0].id), Some(0));
+        assert_eq!(playing(&app.state, cols[1].id), Some(0));
+        let base = app.state.project.clone();
+        let p = shadow(&app.state, &base).expect("the launcher's project");
+        let arr = p.arrangement().expect("an arrangement");
+        let lanes: Vec<u16> = arr.clips.iter().map(|c| c.track).collect();
+        for c in &cols {
+            if let Some(lane) = lane_of(&app.state, c.id) {
+                assert!(lanes.contains(&lane), "track {} plays on its own lane {lane}", c.name);
+            }
+        }
+        // Each clip's pattern has a shadow of its own, holding only that track's channel's notes.
+        let ch = channel_of(&app.state, cols[0].id).expect("a channel");
+        let shadow_no = match arr.clips.iter().find(|c| c.track == lane_of(&app.state, cols[0].id).unwrap()).unwrap().source {
+            ClipSource::Pattern(n) => n,
+            _ => panic!("a pattern clip"),
+        };
+        let pat = p.patterns.iter().find(|x| x.number == shadow_no).unwrap();
+        assert!(pat.notes.iter().all(|n| n.channel == ch), "only its track's notes");
+        // The project's own patterns are untouched.
+        assert!(app.state.project.patterns.iter().all(|x| x.number != shadow_no));
+    }
+
+    /// The window is the common multiple of the clips' lengths (so the transport loops seamlessly), capped.
+    #[test]
+    fn the_window_is_the_common_multiple_of_the_clips() {
+        let mut app = app();
+        let cols = columns(&app.state);
+        let bar = u64::from(app.state.project.bar_ticks());
+        set(&mut app, cols[0].id, 0, Some(1));
+        set(&mut app, cols[1].id, 0, Some(2));
+        launch(&mut app, cols[0].id, 0);
+        let one = window(&app.state);
+        launch(&mut app, cols[1].id, 0);
+        let two = window(&app.state);
+        assert_eq!(one, lcm(bar, clip_len(&app.state, 1)));
+        assert_eq!(two, lcm(one, clip_len(&app.state, 2)));
+        assert!(two <= bar * u64::from(MAX_WINDOW_BARS));
+    }
+
+    /// Next actions: a clip's function runs when its timing is up — after its loops, or after the ticks it was
+    /// given — and "play next" moves the track on to the next clip it has.
+    #[test]
+    fn next_actions_move_a_track_on() {
+        let mut app = app();
+        let cols = columns(&app.state);
+        let id = cols[0].id;
+        set(&mut app, id, 0, Some(1));
+        set(&mut app, id, 1, Some(2));
+        launch(&mut app, id, 0);
+        let len = clip_len(&app.state, 1);
+        app.state.launcher.clips.get_mut(&(id, 0)).unwrap().next = NextAction::PlayNext;
+        app.state.launcher.clips.get_mut(&(id, 0)).unwrap().next_timing = NextTiming::Loops(1);
+        let since = app.state.launcher.playing[&id].since;
+        assert!(!next_actions(&mut app, (since + len).saturating_sub(1) as f64), "not yet");
+        assert!(next_actions(&mut app, (since + len) as f64), "its loop is up");
+        assert_eq!(playing(&app.state, id), Some(1), "the next clip of the track");
         assert_eq!(app.state.pattern, 2);
+        // "Return to last clip" comes back.
+        app.state.launcher.clips.get_mut(&(id, 1)).unwrap().next = NextAction::ReturnToLastClip;
+        next_actions(&mut app, 1e9);
+        assert_eq!(playing(&app.state, id), Some(0));
+        // A timed next action fires on the tick it names.
+        app.state.launcher.clips.get_mut(&(id, 0)).unwrap().next = NextAction::Stop;
+        app.state.launcher.clips.get_mut(&(id, 0)).unwrap().next_timing = NextTiming::After(len);
+        let since = app.state.launcher.playing[&id].since;
+        assert!(next_actions(&mut app, (since + len) as f64));
+        assert_eq!(playing(&app.state, id), None, "it stopped");
+    }
+
+    /// Clips run in blocks: "first in next block" moves to the first clip of the next run of neighbouring clips.
+    #[test]
+    fn next_actions_work_on_clip_blocks() {
+        let mut app = app();
+        let id = columns(&app.state)[0].id;
+        for sc in [0, 1, 3, 4] {
+            set(&mut app, id, sc, Some(1));
+        }
+        assert_eq!(blocks(&app.state, id), vec![vec![0, 1], vec![3, 4]]);
+        launch(&mut app, id, 0);
+        app.state.launcher.clips.get_mut(&(id, 0)).unwrap().next = NextAction::FirstInNextBlock;
+        app.state.launcher.clips.get_mut(&(id, 0)).unwrap().next_timing = NextTiming::Loops(1);
+        let since = app.state.launcher.playing[&id].since;
+        let len = clip_len(&app.state, 1);
+        next_actions(&mut app, (since + len) as f64);
+        assert_eq!(playing(&app.state, id), Some(3), "the next block's first clip");
+        // "Other in block" never picks the clip playing, and stays inside the clip's block.
+        for _ in 0..8 {
+            let now = playing(&app.state, id).unwrap();
+            follow(&mut app, id, now, Follow::InBlock(BlockRule::Other));
+            let after = playing(&app.state, id).unwrap();
+            assert_ne!(after, now, "it always moves on");
+            assert!(after == 3 || after == 4, "inside the block, not {after}");
+        }
+    }
+
+    /// Releasing the press runs the clip's "on Release": Stop stops it, Return brings the clip it replaced back.
+    #[test]
+    fn a_release_does_what_on_release_says() {
+        let mut app = app();
+        let id = columns(&app.state)[0].id;
+        set(&mut app, id, 0, Some(1));
+        set(&mut app, id, 1, Some(2));
+        launch(&mut app, id, 0);
+        app.state.launcher.clips.get_mut(&(id, 0)).unwrap().main.release = OnRelease::Stop;
+        app.launcher_click = None;
+        run(&mut app, Act::Launch(id, 0));
+        assert_eq!(app.state.launcher.pressed, Some((id, 0)), "the press is remembered");
+        run(&mut app, Act::Release(id, 0));
+        assert_eq!(playing(&app.state, id), None, "Stop");
+        // The ALT launch settings are their own set.
+        app.state.launcher.clips.get_mut(&(id, 1)).unwrap().alt.release = OnRelease::Stop;
+        launch_alt(&mut app, id, 1);
+        app.state.launcher.pressed = Some((id, 1));
+        release(&mut app, id, 1);
+        assert_eq!(playing(&app.state, id), None, "the ALT release");
+    }
+
+    /// Letting go of the mouse runs the clip's "on Release": with Stop, the click's own release stops the clip it
+    /// just started (Continue, the default, leaves it playing).
+    #[test]
+    fn the_mouse_release_runs_on_release() {
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = app();
+        app.state.z = vec![crate::app::Win::Playlist];
+        app.key(&Key::Named(NamedKey::Tab), false, false);
+        let id = columns(&app.state)[0].id;
+        set(&mut app, id, 1, Some(2));
+        app.paint(&mut c, None);
+        let cell = app
+            .hits
+            .iter()
+            .find(|h| h.action == Action::Launcher(Act::Launch(id, 1)))
+            .expect("the slot is painted")
+            .rect;
+        let at = (cell.cx(), cell.cy());
+        app.mouse_move(at.0, at.1);
+        app.mouse_down();
+        app.mouse_up();
+        assert_eq!(playing(&app.state, id), Some(1), "Continue: it keeps playing");
+        // With Stop the release takes it away again; the transport is stopped first so the press starts at once.
+        stop(&mut app, id);
+        app.transport.stop();
+        app.state.launcher.clips.get_mut(&(id, 1)).unwrap().main.release = OnRelease::Stop;
+        app.launcher_click = None;
+        app.mouse_down();
+        assert_eq!(playing(&app.state, id), Some(1), "the press launched it");
+        app.mouse_up();
+        assert_eq!(playing(&app.state, id), None, "the release stopped it");
     }
 
     /// Tab flips the Playlist window from the arrangement to the launcher and back. The launcher paints a slot per
@@ -510,10 +1810,13 @@ mod tests {
         let cols = columns(&app.state).len();
         let slots = app.hits.iter().filter(|h| matches!(h.action, Action::Launcher(Act::Launch(..)))).count();
         assert_eq!(slots, cols * SCENES, "a slot per track and scene ({cols} tracks)");
-        assert!(app.hits.iter().any(|h| h.action == Action::Launcher(Act::LaunchScene(0))), "scene 1 launches");
+        let id0 = columns(&app.state)[0].id;
+        let head = app.hits.iter().find(|h| h.action == Action::Launcher(Act::LaunchScene(0))).expect("the first scene").rect;
+        let cell = app.hits.iter().find(|h| h.action == Action::Launcher(Act::Launch(id0, 0))).expect("its first cell").rect;
+        assert!(head.bottom() <= cell.y, "the scene buttons head the grid: {head:?} {cell:?}");
+        assert!(app.hits.iter().any(|h| h.action == Action::Launcher(Act::SelectTrack(id0))), "the track row's header");
         assert!(app.hits.iter().any(|h| h.action == Action::Launcher(Act::StopAll)), "stop all");
 
-        // Fill a slot, paint again, and click it.
         let id = columns(&app.state)[0].id;
         set(&mut app, id, 2, Some(1));
         app.paint(&mut c, None);
@@ -528,7 +1831,6 @@ mod tests {
         assert_eq!(playing(&app.state, id), Some(2), "the click launched it");
         app.mouse_up();
 
-        // Tab goes back to the arrangement.
         app.key(&Key::Named(NamedKey::Tab), false, false);
         assert!(!app.state.launcher_open);
     }
@@ -560,29 +1862,10 @@ mod tests {
         assert!(app.state.shown(crate::app::Win::PianoRoll), "the second click opens it");
         assert_eq!(app.state.pattern, 5, "the clip's own pattern");
         assert_eq!(app.state.project.current_pattern, Some(5));
-        // An empty slot has nothing to open: the double click just stops the track.
         app.state.hide(crate::app::Win::PianoRoll);
         run(&mut app, Act::Launch(id, 6));
         run(&mut app, Act::Launch(id, 6));
         assert!(!app.state.shown(crate::app::Win::PianoRoll));
-    }
-
-    /// A MIDI track with no instrument channel is marked, so the launcher can say so on its header: clips launched
-    /// there would have nothing to play.
-    #[test]
-    fn a_midi_track_without_an_instrument_is_marked() {
-        let mut app = app();
-        assert!(
-            columns(&app.state).iter().all(|c| !c.no_instrument),
-            "the inserted MIDI tracks have their channels"
-        );
-        let id = columns(&app.state)[0].id;
-        let track = app.state.project.tracks.iter_mut().find(|t| t.id.0 == id).expect("the column's track");
-        track.channel = None;
-        assert!(
-            columns(&app.state).iter().find(|c| c.id == id).unwrap().no_instrument,
-            "the emptied instrument slot is marked"
-        );
     }
 
     /// The columns follow the mixer: one per track that has a lane, ordered by its mixer strip.
@@ -593,14 +1876,7 @@ mod tests {
         assert!(!cols.is_empty());
         let strips: Vec<u16> = cols
             .iter()
-            .map(|c| {
-                app.state
-                    .project
-                    .tracks
-                    .iter()
-                    .find(|t| t.id.0 == c.id)
-                    .map_or(0, |t| t.mixer_strip)
-            })
+            .map(|c| app.state.project.tracks.iter().find(|t| t.id.0 == c.id).map_or(0, |t| t.mixer_strip))
             .collect();
         assert!(strips.windows(2).all(|w| w[0] <= w[1]), "{strips:?}");
     }

@@ -1,6 +1,30 @@
 # Lemon Studio — todo.md
 
-## 🎯 Current Session (2026-11-07) — MIDI FX / container editors LIVE
+## 🎯 Current Session (2026-11-09) — Rack shows the plugins' own UI; the launcher is Bitwig's
+- ✅ **Actual plugin UI in the device-rack tiles.** New `crates/os-app/src/rack_ui.rs`: a hosted plugin's name maps
+  to its real editor — the 18 `os-plugkit` "simple" plugins (Lemon Arp, Lemon Transpose, Lemon Chord, the
+  note/audio layer + selector containers) through a new paint-only `os_plugkit::simple::paint(info, canvas, &dyn
+  Values, &ViewState, hint)` with a `Values` trait for the host's parameters (`Logic::paint` now delegates to it,
+  so one paint path serves both), the 13 `lemon-small-fx` plugins (Lemon Filter, …) through `view::paint`, and
+  Lemon Reverb through its own `view::paint` + `room::look`. Rendered into a reused offscreen `Canvas` at the
+  tile's DPI scale, cached by parameter-value signature, blitted with `Canvas::image`; the paint's hit rects become
+  `RackAct::ParamSet` (dial/fader drags) and the new `RackAct::ParamTap` (switches, selector rows). Tile widths now
+  follow each editor (`device_rack::tile_w`, `DEFAULT_H` 336). `Canvas::scale()` added.
+- ✅ **The clip launcher is Bitwig's launcher.** Scenes along the top; every clip and scene has Bitwig's launch
+  parameters (`LaunchQ` Off/1-16…8 bars, `Q to Loop`, Play mode from-start / legato-clip / legato-project, On
+  release Continue/Stop/Return/Next action) as **Main and ALT**, scenes carry Override Launch Settings, and every
+  clip a full **next action** (21 functions incl. the in-block / next / previous / other block sets) with its own
+  timing (Loop Count or Time). Clips, scenes and track headers rename in place and take a colour.
+- ✅ **Tracks play independently** — the item `docs/clip-launcher.md` §S2 called engine work, done without touching
+  the engine: `launcher::shadow` (from `rack::play_project`) gives the transport a project whose lanes hold each
+  playing clip's pattern (that track's channel's notes only) repeated at its own length, and `App::selection_loop`
+  loops their common multiple (`launcher::window`). **Limit:** a clip launched part-way into a longer one re-aligns
+  at the window's end (Bitwig loops each clip on its own forever). See `docs/clip-launcher.md` §1.1.
+- ✅ `cargo test -p os-app` 1120 passed / 0 failed / 62 ignored (20 launcher tests).
+- 📋 Open on the launcher: horizontal scroll for many tracks (S3), recording into slots (S4), persistence (S6), MIDI /
+  key mapping (S7), a scene's own tempo.
+
+## 🎯 Session (2026-11-07) — MIDI FX / container editors LIVE
 - ✅ All 18 "simple" plugins (14 MIDI FX + 4 layer/selector containers) now render real parameter UI: added a
   reusable `os-plugkit::simple::Editor` (opens `simple::win32::open` on spawn, repaints on param changes) and
   replaced every stub `editor.rs` (whose `spawn()` returned `Box::new(())`, leaving the embedded rack frame
@@ -73,7 +97,8 @@
 - [ ] Adopt DAWproject in/out (bitwig/dawproject, MIT) — interop with Bitwig/Cubase/Studio One
 - [ ] Study bitwig-nitro-tools format docs for device/Grid architecture ideas (clean-room: specs only)
 - [ ] Evaluate .flp ↔ DAWproject ↔ .als conversion via DawVert as reference
-- [ ] Session/clip-launcher view: survey suhina-daw, beatlayer, nxtakt for clean-room design ideas
+- [x] Session/clip-launcher view: survey suhina-daw, beatlayer, nxtakt for clean-room design ideas (landed as
+      `docs/clip-launcher.md` + the launcher described above; remaining steps S3, S4, S6, S7 are listed there)
 
 ## New workflow: Bitwig/Ableton-style tracks (in progress)
 - [ ] See `docs/track-model-plan.md` and `docs/sequencing-plan.md` — unified Audio/MIDI/Bus

@@ -159,7 +159,8 @@ How it works — no `os-engine` change, which is the whole point of the design:
 
 ### What is still open
 
-- **The other 14 MIDI FX pass notes through unchanged** (Echo, Note Repeats, Note Delay,
+- **The other 14 MIDI FX pass notes through unchanged** (their UI is live in the rack, their note
+  processing is not — same list, opposite half) (Echo, Note Repeats, Note Delay,
   Strum, Random, Note Length, Quantize, Humanize, Key Filter, Velocity Curve, the N\*
   containers…). The framework is in place: one more `Stage` variant, its `*Values` + atomics,
   a branch in `Plugins::set_note_fx`, and a params decoder next to `arp_values`.
@@ -171,11 +172,37 @@ How it works — no `os-engine` change, which is the whole point of the design:
   their CLAP `process`; the note path does the transform in-process instead, because a
   hosted MIDI-only plugin's note I/O is not reliable through the linked host.
 
+### The rack shows the plugins' own UI
+
+Every hosted plugin tile in the device rack paints the plugin's real editor, not a placeholder:
+`crates/os-app/src/rack_ui.rs` maps a hosted plugin's name to
+
+- the 18 `os-plugkit` "simple" editors (Lemon Arp, Transpose, Chord, … the layer/selector
+  containers) through `os_plugkit::simple::paint(info, canvas, &dyn Values, &view, hint)`, whose
+  `Values` trait is the host's parameter values — `Logic::paint` delegates to the same function,
+  so the plugin's own view and the rack's cannot drift;
+- the 13 `lemon-small-fx` editors (Lemon Filter and friends) through their `view::paint`;
+- Lemon Reverb through `view::paint` with `room::look`.
+
+It renders into a reused offscreen `Canvas` whose DPI scale is the tile's, caches the result by a
+parameter-value signature per device key, and blits it with `Canvas::image`. The paint's hit
+rects become the rack's acts: dials and faders are `RackAct::ParamSet` drags, switches and
+selector rows `RackAct::ParamTap`. Tile widths follow each editor (`device_rack::tile_w`).
+
 ### Also open
 
-- **Clip launcher** — a first version ships (Tab in the Playlist window): scenes × tracks grid,
-  launch/stop, mixer-ordered columns, clips are project patterns. Tracks do not play
-  independently yet; the staged plan is `docs/clip-launcher.md`.
+- **Clip launcher** — Bitwig's model (Tab in the Playlist window): scenes run along the top, one
+  row per track in the mixer's order, clips are project patterns. Every clip and scene carries
+  `LaunchQ` (Off … 8 bars) plus `Q to Loop`, Play mode, On release — Main **and** ALT — and every
+  clip a next action with its own timing (Loop Count or Time), including the in-block /
+  next-block / previous-block / other-block functions. Clips, scenes and track headers rename in
+  place and take a colour.
+  **Tracks play independently**, without an engine change: while clips run,
+  `crate::launcher::shadow` (called from `rack::play_project`) hands the transport a project whose
+  arrangement lanes hold each clip's pattern (that track's channel's notes only), repeated at the
+  clip's own length, and `App::selection_loop` loops the common multiple of those lengths
+  (`launcher::window`). The re-alignment at the window's end is the one compromise — see
+  `docs/clip-launcher.md` §1.1.
 
 - Audio FX chain already works (`crates/os-engine/src/engine/mix.rs:31`, insert effects in
   slot order before the fader).
