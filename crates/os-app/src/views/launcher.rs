@@ -226,6 +226,12 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
             ui.c.fill_rect(Rect::new(client.x, y, client.w, g.row_h), t.s(0x252c30));
             ui.c.fill_rect(Rect::new(client.x, y, 3.0, g.row_h), t.accent);
         }
+        // The track header fills with the track's colour (Bitwig-style), so the launcher's rows read like the
+        // playlist's — brighter while the row is selected.
+        if let Some(col) = c.color {
+            let sel = crate::playlist::track_selected(s, c.lane);
+            ui.c.fill_rrect(row.inset(1.0), 2.0, rgb(col).with_alpha(if sel { 95 } else { 55 }));
+        }
         let hov = hit_in(
             ui,
             row,
@@ -298,24 +304,35 @@ fn slot_paint(ui: &mut Ui, s: &State, c: &launcher::Column, scene: usize, cell: 
                 audio_paint(ui, s, &slot, cell, t.glyph.with_alpha(110));
             }
             let name = launcher::clip_name(s, c.id, scene);
+            // Bitwig-style play/stop button in the top-right corner: a play triangle while the clip is stopped, a
+            // stop square while it plays. While playing it is a `Stop` hit (distinct from the cell's `Launch` hit, so
+            // clicking it stops the clip); while stopped the whole cell already launches, so the button is drawn but
+            // not separately hit.
+            let btn_w = 15.0;
+            let btn = Rect::new(cell.right() - btn_w - 1.0, cell.y + 2.0, btn_w, (cell.h - 5.0).max(10.0));
+            if playing {
+                let bhov = hit_in(ui, btn, area, Action::Launcher(Act::Stop(c.id)), "Stop this clip");
+                ui.c.fill_rrect(btn, 2.0, if bhov { t.s(0x39424a) } else { t.s(0x23282b) });
+                ui.c.fill_rect(btn.inset(3.5), t.glyph);
+            } else {
+                ui.c.fill_rrect(btn, 2.0, t.s(0x23282b));
+                let tri = Rect::new(btn.x + 4.5, btn.y + 3.5, 5.0, 7.0);
+                ui.c.fill_polygon(&[(tri.x, tri.y), (tri.x, tri.y + tri.h), (tri.x + tri.w, tri.cy())], t.text);
+            }
+            if queued && !playing {
+                ui.c.stroke_rrect(btn, 2.0, 1.5, t.accent);
+            }
             if playing {
                 ui.c.stroke_rrect(cell, 2.0, 2.0, t.glyph);
-                ui.c.fill_polygon(
-                    &[
-                        (cell.x + 7.0, cell.cy() - 6.0),
-                        (cell.x + 7.0, cell.cy() + 6.0),
-                        (cell.x + 15.0, cell.cy()),
-                    ],
-                    t.glyph,
-                );
             }
-            let (x, w) = if playing { (cell.x + 19.0, cell.w - 25.0) } else { (cell.x + 7.0, cell.w - 14.0) };
             // A clip with a next action carries a mark, so a follow chain is visible without opening its menu.
             let follow = if slot.next != launcher::NextAction::None { 12.0 } else { 0.0 };
+            let gutter = btn_w + 4.0 + follow;
+            let (x, w) = if playing { (cell.x + 19.0, cell.w - 25.0 - gutter) } else { (cell.x + 7.0, cell.w - 14.0 - gutter) };
             let lh = ui.c.line_height(fnt(13.0));
-            ui.c.text_clip(fnt(13.0), x, (cell.cy() - lh / 2.0).round(), (w - follow).max(1.0), t.text, &name);
+            ui.c.text_clip(fnt(13.0), x, (cell.cy() - lh / 2.0).round(), w.max(1.0), t.text, &name);
             if follow > 0.0 {
-                ui.c.text(fnt(12.0), cell.right() - follow - 2.0, (cell.cy() - lh / 2.0).round(), t.glyph, "\u{2192}");
+                ui.c.text(fnt(12.0), cell.right() - btn_w - 5.0 - follow, (cell.cy() - lh / 2.0).round(), t.glyph, "\u{2192}");
             }
             if queued {
                 ui.c.stroke_rrect(cell, 2.0, 2.0, t.accent);

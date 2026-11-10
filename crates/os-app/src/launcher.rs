@@ -2542,4 +2542,58 @@ mod tests {
             .collect();
         assert!(strips.windows(2).all(|w| w[0] <= w[1]), "{strips:?}");
     }
+
+    /// Every occupied clip cell carries a Bitwig-style play/stop button in its top-right corner: while the clip plays
+    /// it is a `Stop` hit (a small rect inside the cell), and while it is stopped it carries no `Stop` hit (the whole
+    /// cell still launches it, so clicking anywhere plays it, as before).
+    #[test]
+    fn a_clip_cell_shows_a_play_and_stop_button() {
+        let Ok(mut c) = os_ui::Canvas::new(1200, 800, 1.0) else { return };
+        let mut app = app();
+        app.state.z = vec![crate::app::Win::Playlist];
+        app.key(&Key::Named(NamedKey::Tab), false, false);
+        assert!(app.state.launcher_open, "Tab opens the launcher");
+        let id = columns(&app.state)[0].id;
+        set(&mut app, id, 1, Some(3));
+        // A `Stop` hit appears inside the cell only while the clip plays; the track-row stop button (left of the
+        // cells) is always present, so we test the one whose rect sits inside the clip cell.
+        let cell_of = |app: &App| {
+            app.hits
+                .iter()
+                .find(|h| h.action == Action::Launcher(Act::Launch(id, 1)))
+                .expect("the occupied cell")
+                .rect
+        };
+        let stop_in_cell = |app: &App, cell: os_ui::Rect| {
+            app.hits.iter().any(|h| {
+                matches!(h.action, Action::Launcher(Act::Stop(sid)) if sid == id)
+                    && h.rect.x >= cell.x
+                    && h.rect.right() <= cell.right()
+                    && h.rect.y >= cell.y
+                    && h.rect.bottom() <= cell.bottom()
+            })
+        };
+        // Stopped: the cell launches; there is no stop button inside it yet.
+        app.paint(&mut c, None);
+        let cell = cell_of(&app);
+        assert!(!stop_in_cell(&app, cell), "a stopped clip has no stop button inside its cell");
+        // Playing: a stop button appears inside the cell, smaller than the cell.
+        launch(&mut app, id, 1);
+        assert_eq!(playing(&app.state, id), Some(1));
+        app.paint(&mut c, None);
+        let cell = cell_of(&app);
+        let stop = app
+            .hits
+            .iter()
+            .find(|h| {
+                matches!(h.action, Action::Launcher(Act::Stop(sid)) if sid == id)
+                    && h.rect.x >= cell.x
+                    && h.rect.right() <= cell.right()
+                    && h.rect.y >= cell.y
+                    && h.rect.bottom() <= cell.bottom()
+            })
+            .expect("the stop button inside the cell")
+            .rect;
+        assert!(stop.w < cell.w && stop.h < cell.h, "the button is smaller than the cell: {stop:?} in {cell:?}");
+    }
 }
