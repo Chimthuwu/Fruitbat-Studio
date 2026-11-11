@@ -82,10 +82,10 @@ pub enum MCmd {
     UnrouteTo(u16),
     /// The routing arrow's Quick Sidechain (`crate::quick_sidechain`): a keyed Lemon Limiter in `dst`.
     QuickSidechain(u16),
-    /// The Analog Channel Strip's switch on track `.0` (`MixerTrack::strip_bypassed`) and its input gain in dB
-    /// (`MixerTrack::strip[0]`; plan v3 Milestone 0).
+    /// The Analog Channel Strip's switch on track `.0` (`MixerTrack::strip_bypassed`) and its low cut in Hz
+    /// (`MixerTrack::strip[0]`; plan v3 Milestone 1).
     StripBypass(u16),
-    StripInput(u16, i8),
+    StripLowCut(u16, u16),
     Solo(u16),
     /// Solo with the tracks routed into it too (spec: ui/mixer-track-commands.md §5).
     AltSolo(u16),
@@ -1693,18 +1693,18 @@ fn track_items(s: &State, n: u16) -> Vec<PItem> {
         PItem::head("Analog Channel Strip"),
         PItem::new("Analog strip", mx(MCmd::StripBypass(n))).mark(Mark::Check(t.is_some_and(|m| !m.strip_bypassed))),
         PItem::sub(
-            "Input gain",
-            [0i8, 3, 6, 9, 12]
+            "Low cut",
+            [20u16, 40, 60, 80, 120, 160, 240, 350]
                 .into_iter()
-                .map(|db| PItem::new(format!("{db:+} dB"), mx(MCmd::StripInput(n, db))).mark(Mark::Radio(strip_input(t) == db)))
+                .map(|hz| PItem::new(format!("{hz} Hz"), mx(MCmd::StripLowCut(n, hz))).mark(Mark::Radio(strip_low_cut(t) == hz)))
                 .collect(),
         ),
     ]
 }
 
-/// A strip's input gain in dB from control word 0 (the Milestone 0 mapping: 0 at word 0, +12 dB at 65535).
-fn strip_input(t: Option<&os_model::MixerTrack>) -> i8 {
-    t.map_or(0, |m| (f32::from(m.strip[0]) / 65535.0 * 12.0).round() as i8)
+/// A strip's low cut in Hz from control word 0 (`os_dsp::strip::cut_hz`: 20 Hz at word 0, 350 Hz at 65535).
+fn strip_low_cut(t: Option<&os_model::MixerTrack>) -> u16 {
+    t.map_or(20, |m| os_dsp::strip::cut_hz(m.strip[0]).round() as u16)
 }
 
 /// The saved mixer track states, one entry each running `cmd` with its file; a greyed "(no saved states)" without any.
@@ -1972,7 +1972,7 @@ pub fn run(app: &mut App, c: MCmd) -> Option<String> {
     // A slot's sidechain input is the track's own (its slot's saved state).
     // Quick Sidechain changes the destination's chain and the source's routing in one undo step.
     // The Analog Channel Strip is the track's own state: one undo step on that track (plan v3 Milestone 0).
-    if let MCmd::StripBypass(t) | MCmd::StripInput(t, _) = &c {
+    if let MCmd::StripBypass(t) | MCmd::StripLowCut(t, _) = &c {
         let t = *t;
         return crate::control::edit_app(app, "Analog channel strip", Region::Track(t), |app| run_now(app, c));
     }
@@ -2145,9 +2145,9 @@ fn run_now(app: &mut App, c: MCmd) -> Option<String> {
             }
             None
         }
-        MCmd::StripInput(n, db) => {
+        MCmd::StripLowCut(n, hz) => {
             if let Some(t) = track_mut(s, n) {
-                t.strip[0] = (f32::from(db.max(0)) / 12.0 * 65535.0).round().clamp(0.0, 65535.0) as u16;
+                t.strip[0] = os_dsp::strip::cut_word(f32::from(hz));
                 t.strip_bypassed = false;
                 changed(s);
             }
@@ -3785,7 +3785,7 @@ mod tests {
         assert_eq!(col(&a, 4), None);
     }
 
-    /// plan v3 Milestone 0: the Analog Channel Strip's switch and input gain are the track's own state, one undo step
+    /// plan v3 Milestone 1: the Analog Channel Strip's switch and low cut are the track's own state, one undo step
     /// each, through the same `Region::Track` snapshot the fader uses.
     #[test]
     fn the_analog_strip_is_one_undo_step() {
@@ -3805,9 +3805,8 @@ mod tests {
         assert!(t(&a).strip_bypassed, "the switch is back off");
         crate::history::redo(&mut a.state);
         assert!(!t(&a).strip_bypassed);
-        // +6 dB is word 32768 (the Milestone 0 mapping: 0 at word 0, +12 dB at 65535).
-        run(&mut a, MCmd::StripInput(2, 6));
-        assert_eq!(t(&a).strip[0], 32768);
+        run(&mut a, MCmd::StripLowCut(2, 100));
+        assert!((os_dsp::strip::cut_hz(t(&a).strip[0]) - 100.0).abs() < 0.5, "100 Hz on word {}", t(&a).strip[0]);
         assert!(!t(&a).strip_bypassed);
         assert_eq!(a.state.history.at(), steps + 2);
         crate::history::undo(&mut a.state);

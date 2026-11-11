@@ -211,7 +211,7 @@ pub(crate) fn mix_track(lane: Lane, cx: &multicore::MixCx, s: &mut multicore::Mi
     // The Analog Channel Strip, before the insert slots (plan v3 §6.1). A bypassed strip that has faded out is skipped:
     // the track then passes through sample for sample (`Strip::idle`).
     if !track.strip.idle() {
-        track.strip.process(buf, frames, cx.rate);
+        track.strip.process(buf, cx.rate);
     }
     // A slot runs when its own switch is on and the track's slots are enabled (spec: audio/mixer.md).
     if track.slots_enabled && if t == 0 { cx.master_fx } else { cx.insert_fx } {

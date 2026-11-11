@@ -29,7 +29,7 @@ pub(crate) struct MixTrack {
     /// The three-band equaliser, after the slots and before the fader.
     pub(crate) eq: os_dsp::mixer::TrackEq,
     /// The Analog Channel Strip, before the slots (plan v3 §6.1).
-    pub(crate) strip: Strip,
+    pub(crate) strip: os_dsp::strip::Strip,
     /// Insert effects in slot order (applied before the fader).
     pub(crate) effects: Vec<FxSlot>,
     /// Slot switches and stored mix levels (0..12800) by slot, for hosted effects attached later.
@@ -142,62 +142,6 @@ pub(crate) struct FxSlot {
     pub(crate) main_pad: pdc::Pad,
 }
 
-/// The Analog Channel Strip's stage in a track's chain (Lemon Studio's port of the Michael Lane Edition channel
-/// strip; plan v3 Appendix C). Milestone 0 ties its input gain to control word 0; the other sections follow. Bypassed,
-/// it fades the processed signal out to the dry one and then stops touching the buffer, so a bypassed strip passes a
-/// track through sample for sample.
-pub(crate) struct Strip {
-    /// The seven stored control words, as the project keeps them.
-    pub(crate) words: [u16; 7],
-    /// The bypass switch as the project stores it.
-    pub(crate) bypassed: bool,
-    /// The input gain (linear) and the gain as it glides.
-    glide: Glide,
-    /// How much of the processed signal is heard: 0 fully dry, 1 fully processed.
-    wet: Glide,
-}
-
-impl Strip {
-    pub(crate) fn new(words: [u16; 7], bypassed: bool) -> Strip {
-        Strip { words, bypassed, glide: Glide::new(Strip::input_gain(words[0])), wet: Glide::new(if bypassed { 0.0 } else { 1.0 }) }
-    }
-
-    /// The input gain a stored word gives: 1 at 0, 4 (+12 dB) at 65535. A temporary Milestone 0 mapping: low cut takes
-    /// word 0 when it is ported (plan v3 D6, Appendix C).
-    pub(crate) fn input_gain(word: u16) -> f32 {
-        1.0 + 3.0 * (f32::from(word) / 65535.0)
-    }
-
-    /// True when bypassed and faded out: the engine skips the strip and passes the track through.
-    pub(crate) fn idle(&self) -> bool {
-        self.bypassed && self.wet.current == 0.0
-    }
-
-    /// One block: the input gain, crossfaded with the dry signal while the bypass moves (plan v3 §6.3).
-    pub(crate) fn process(&mut self, buf: &mut [f32], frames: usize, rate: u32) {
-        let target = if self.bypassed { 0.0 } else { 1.0 };
-        // A 10 ms crossfade: long enough not to click, short enough to feel immediate.
-        let fade = 1.0 / (0.010 * f64::from(rate.max(1))) as f32;
-        let mut wet = self.wet.block(target, frames, fade);
-        let mut gain = self.glide.block(Strip::input_gain(self.words[0]), frames, os_dsp::glide::engine_limit(rate));
-        if wet.is_flat() && wet.first() == 1.0 && gain.is_flat() && gain.first() == 1.0 {
-            return;
-        }
-        for f in buf.chunks_exact_mut(2) {
-            let w = wet.next();
-            let g = gain.next();
-            // Fully dry: nothing is written, so the samples stay as they arrived.
-            if w == 0.0 {
-                continue;
-            }
-            for s in f.iter_mut() {
-                let dry = *s;
-                *s = if w == 1.0 { dry * g } else { dry * (1.0 - w) + dry * g * w };
-            }
-        }
-    }
-}
-
 impl FxSlot {
     pub(crate) fn new(slot: usize, on: bool, mix: i32, smart: bool, fx: Fx) -> FxSlot {
         let delay = match &fx {
@@ -257,7 +201,7 @@ impl MixTrack {
             slots_enabled: true,
             threaded: true,
             eq: os_dsp::mixer::TrackEq::default(),
-            strip: Strip::new([0; 7], true),
+            strip: os_dsp::strip::Strip::new([0; 7], true),
             effects: Vec::new(),
             slot_on: [true; 10],
             slot_mix: [12800; 10],
@@ -370,34 +314,6 @@ impl MixTrack {
         m
     }
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The bypass crossfade settles within 20 ms, and once it has, the strip writes nothing at all (plan v3 §6.3).
-    #[test]
-    fn a_faded_out_strip_does_not_touch_the_buffer() {
-        let dry: Vec<f32> = (0..960).map(|i| (i as f32 * 0.01).sin() * 0.5).collect();
-        let mut s = Strip::new([65535, 0, 0, 0, 0, 0, 0], false);
-        let mut buf = dry.clone();
-        s.process(&mut buf, 480, 48000);
-        assert!(buf.iter().zip(&dry).all(|(a, b)| (*a - b * 4.0).abs() < 1e-6), "input gain x4");
-        s.bypassed = true;
-        for _ in 0..3 {
-            let mut b = dry.clone();
-            s.process(&mut b, 480, 48000);
-        }
-        assert!(s.idle(), "faded out inside three blocks");
-        // Idle, the engine skips the strip: the buffer is the one that arrived.
-        let mut b = dry.clone();
-        if !s.idle() {
-            s.process(&mut b, 480, 48000);
-        }
-        assert_eq!(b, dry);
-        assert!(b.iter().all(|x| x.is_finite()), "no NaN, no infinity");
-    }
-}
-
 /// Orders tracks so that every track is processed before any track it routes to.
 pub(crate) fn processing_order(tracks: &[MixTrack]) -> Vec<usize> {
     fn visit(t: usize, tracks: &[MixTrack], state: &mut [u8], order: &mut Vec<usize>) {

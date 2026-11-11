@@ -55,7 +55,7 @@ use channel::{Adjust, ChannelState, CtlEvent, CtlTo, stretched_frames};
 use jobs::{InstCx, InstLane, input, input_at, instrument_job, lock_busy};
 pub use live_edit::{LiveEdit, live_edits};
 pub use mix::{DeviceInput, input_channels};
-use mix::{DeviceIo, Fx, FxSlot, MixTrack, Route, Strip, mix_level, processing_order};
+use mix::{DeviceIo, Fx, FxSlot, MixTrack, Route, mix_level, processing_order};
 use render::{Lane, SINC_W, keyed_copy, mix_track, render_voice, render_voice_into};
 pub use sched::{swing_delay};
 use sched::{AutoClip, Sched, clip_audible, ctl_to, fallback_tone, param_points, point_level, schedule, schedule_controls};
@@ -499,7 +499,7 @@ impl Engine {
                         slots_enabled: m.slots_enabled,
                         threaded: m.threaded,
                         eq: os_dsp::mixer::TrackEq::new(m.eq, rate),
-                        strip: Strip::new(m.strip, m.strip_bypassed),
+                        strip: os_dsp::strip::Strip::new(m.strip, m.strip_bypassed),
                         effects,
                         slot_on: m.slot_on,
                         slot_mix: m.slot_mix.map(mix_level),
@@ -6370,29 +6370,30 @@ mod tests {
         e.render_all(512)
     }
 
-    /// plan v3 §6.1: the strip runs before the insert slots. Insert 1's slot 0 clips at ±0.001 and the strip turns the
-    /// level up fourfold before it: strip first, the track stays within the clip's bound; the other way round, the
-    /// clip's output would be turned up fourfold.
+    /// plan v3 §6.1: the strip runs before the insert slots. Slot 0 adds a DC offset: an insert after the strip leaves
+    /// it on the track, while an insert before the strip would have the low cut take it away (a high-pass has no gain
+    /// at DC), so the track's mean would be near zero. The mean is not, so the strip is first.
     #[test]
     fn the_strip_runs_before_the_insert_slots() {
-        struct Clip;
-        impl crate::effects::Effect for Clip {
+        struct Offset;
+        impl crate::effects::Effect for Offset {
             fn process(&mut self, buf: &mut [f32]) {
                 for s in buf.iter_mut() {
-                    *s = s.clamp(-0.001, 0.001);
+                    *s += 1.0;
                 }
             }
         }
         let mut p = insert_project();
-        // Word 65535 is ×4 in the Milestone 0 mapping (`Strip::input_gain`).
-        p.mixer[1].strip = [65535, 0, 0, 0, 0, 0, 0];
+        p.mixer[1].strip[0] = os_dsp::strip::cut_word(350.0);
         p.mixer[1].strip_bypassed = false;
         let mut lib = SampleLibrary::new(None);
         let mut e = Engine::new(&p, &mut lib, 44100, PlayMode::Pattern(1));
-        e.tracks[1].effects = vec![super::mix::FxSlot::new(0, true, 12800, false, super::mix::Fx::Own(Box::new(Clip)))];
+        e.tracks[1].effects = vec![super::mix::FxSlot::new(0, true, 12800, false, super::mix::Fx::Own(Box::new(Offset)))];
         let out = e.render_all(512);
         let peak = out.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
-        assert!(peak > 0.0 && peak <= 1.05e-3, "the clip is after the strip: {peak}");
+        let mean = out.iter().sum::<f32>() / out.len().max(1) as f32;
+        // The offset reaches the master on top of the track (the slot may auto-bypass once its input falls silent).
+        assert!(peak > 0.95, "the strip is before slot 0: the offset survives (peak {peak}, mean {mean})");
     }
 
     /// plan v3 §6.3: a bypassed strip passes the track through sample for sample, whatever its control words hold.

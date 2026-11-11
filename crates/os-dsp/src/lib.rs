@@ -12,6 +12,7 @@
 //! - [`stretch`]: time stretching and pitch shifting (Signalsmith Stretch).
 //! - [`articulator`]: a channel's envelopes and LFOs, stepped once per tick for every voice.
 //! - [`channel_filter`]: the channel filter a voice runs through.
+//! - [`strip`]: the Analog Channel Strip (Lemon Studio's port of the Michael Lane Edition console strip).
 //! - [`tone`]: the spectral make-up of a sound's stretches, for colourful waveforms.
 //! - [`transients`]: Lemon's transient detector and beat finder (auto slicing, Detect beats).
 //! - [`pitch`]: Lemon's pitch tracker (YIN), for Tesla's Detect pitch regions.
@@ -31,5 +32,6 @@ pub mod num;
 pub mod pitch;
 pub mod resample;
 pub mod stretch;
+pub mod strip;
 pub mod tone;
 pub mod transients;
