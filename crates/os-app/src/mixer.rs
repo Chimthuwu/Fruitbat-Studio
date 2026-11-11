@@ -2519,7 +2519,7 @@ fn run_now(app: &mut App, c: MCmd) -> Option<String> {
         // FL's layouts only change how wide the strips are (Michael Lane Edition); the view keeps its place by starting
         // from the left edge again, as the strips' widths have all changed.
         MCmd::Layout(i) => {
-            s.mixer.layout = i.min(7);
+            s.mixer.layout = i.min(LAYOUTS.len() as u8 - 1);
             s.mixer_scroll = 0.0;
             None
         }
@@ -3517,8 +3517,8 @@ mod tests {
         assert!((pts[pts.len() - 1].0 - (to.x + 28.0)).abs() < 0.5, "and plugs into the master's send knob: {} vs {}", pts[pts.len() - 1].0, to.x + 28.0);
     }
 
-    /// The mixer's title-bar layout list (Settings in the Edition): each stock layout sets the strips' width, and
-    /// "Extra large" is left out until its extra column (the plugin list) is ported.
+    /// The mixer's title-bar layout list (Settings in the Edition): each stock layout sets the strips' width, and every
+    /// entry takes — the last two (Extra large and Extra large V2) sit below a separator.
     #[test]
     fn layouts_set_the_strips_width() {
         use crate::app::{Action, Win};
@@ -3531,6 +3531,11 @@ mod tests {
             a.state.mixer.layout = i as u8;
             assert_eq!(strip_w(&a.state), *w, "layout {} ({})", i, LAYOUTS[i]);
         }
+        // Choosing the list's last entry takes it (it used to clamp back to Extra large).
+        run(&mut a, MCmd::Layout(EXTRA_LARGE_V2));
+        assert_eq!(a.state.mixer.layout, EXTRA_LARGE_V2, "Extra large V2 can be clicked");
+        assert_eq!(strip_w(&a.state), 132.0);
+        run(&mut a, MCmd::Layout(WIDE));
         // Drawn at the narrowest layout, every strip's body is that layout's width.
         let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
         a.state.mixer.layout = 0;
