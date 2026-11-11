@@ -875,10 +875,11 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
     let meter = Rect::new(mx - 7.5, ly.y(METER_Y0), 16.0, ly.y(METER_Y1) - ly.y(METER_Y0));
     if console {
         // Extra large keeps its plugin list column on the right, so the console takes the strip's 44 px control column.
-        // Wide 2 and Wide 3 are wide enough to keep the meter beside the console, as their narrow relatives do, so the
-        // level stays visible there too; a strip whose panel button shows the console at a narrower layout gives it the
-        // whole strip.
-        let beside = !extra && matches!(s.mixer.layout, crate::mixer::WIDE_2 | crate::mixer::WIDE_3);
+        // Wide 2, Wide 3 and Wide alt are wide enough to keep the meter beside the console, as their narrow relatives
+        // do, so the level stays visible there too; a strip whose panel button shows the console at a narrower layout
+        // gives it the whole strip.
+        let beside = !extra
+            && matches!(s.mixer.layout, crate::mixer::WIDE_2 | crate::mixer::WIDE_3 | crate::mixer::WIDE_ALT);
         let sw = if extra { 55.0 } else { w - 2.0 - if beside { 18.0 } else { 0.0 } };
         console_panel(ui, s, n, Rect::new(left + 1.0, ly.y(PANEL_Y0) + 2.0, sw, (ly.y(METER_Y1) - ly.y(PANEL_Y0) - 4.0).max(24.0)));
         if beside {
@@ -1381,8 +1382,8 @@ mod tests {
         assert!(has(&app, Action::Fader(2)));
     }
 
-    /// Wide 2 and Wide 3 draw the console and the strip's own meter side by side: the console gives up the meter's
-    /// column at the strip's right edge, so the level stays visible behind the console's sections.
+    /// Wide 2, Wide 3 and Wide alt draw the console and the strip's own meter side by side: the console gives up the
+    /// meter's column at the strip's right edge, so the level stays visible behind the console's sections.
     #[test]
     fn wide_layouts_keep_the_meter_beside_the_console() {
         let mut app = app();
@@ -1391,7 +1392,10 @@ mod tests {
         (ws.maxed, ws.rect) = (false, os_ui::Rect::new(100.0, 83.0, 1400.0, 900.0));
         app.state.z = vec![crate::app::Win::Mixer];
         let rect = |app: &App, a: Action| app.hits.iter().find(|h| h.action == a).map(|h| h.rect);
-        for layout in [crate::mixer::WIDE_2, crate::mixer::WIDE_3] {
+        // Wide alt is narrower than the console is shown at by itself (the layout only splits the strip once the panel
+        // button has asked for the console), so ask for it there.
+        app.state.mixer.console.insert(2, true);
+        for layout in [crate::mixer::WIDE_2, crate::mixer::WIDE_3, crate::mixer::WIDE_ALT] {
             app.state.mixer.layout = layout;
             app.paint(&mut c, None);
             let m = rect(&app, Action::Mix(MHit::Meter(2))).expect("the strip's meter");

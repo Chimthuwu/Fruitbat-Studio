@@ -226,6 +226,9 @@ pub enum MCmd {
     /// The strip meter's right-click menu: the meter's scale law (Settings ▸ General ▸ Miscellaneous' "Alternate meter
     /// scale", the same setting).
     MeterAltScale,
+    /// A meter setting from the meter menu: an index into `crate::meters::k` and the value it takes (the ballistics and
+    /// colours, held in `MixerUi::meter_cfg`).
+    MeterSet(usize, f32),
     /// File ▸ Save mixer track state, File ▸ Open mixer track state ▸ and Insert from state ▸ (Lemon Studio's design,
     /// `crate::mixer_state`): save track `n`'s state under its name; put a saved one on track `n` (its name and colour
     /// stay); insert a new track in front of `n` from one (with the state's name and colour).
@@ -254,9 +257,11 @@ pub const EXTRA_LARGE: u8 = 7;
 pub const EXTRA_LARGE_V2: u8 = 8;
 /// Index of "Wide", the layout the mixer was drawn in before the others were ported.
 pub const WIDE: u8 = 3;
-/// Indexes of "Wide 2" and "Wide 3": wide enough to draw the console and the strip's own meter side by side.
+/// Indexes of "Wide 2", "Wide 3" and "Wide alt": wide enough to draw the console and the strip's own meter side by
+/// side.
 pub const WIDE_2: u8 = 4;
 pub const WIDE_3: u8 = 5;
+pub const WIDE_ALT: u8 = 6;
 
 /// Each layout's strip width, in `LAYOUTS` order (the Michael Lane Edition's stock widths): the strip's columns
 /// follow the width, so a narrower layout shows more inserts and a wider one more room per control.
@@ -2014,12 +2019,28 @@ pub fn options_menu(s: &State, x: f32, y: f32) -> Popup {
 /// The right-click menu on a strip's level meter (§9): its scale and the waveform view, next to the meter they change.
 /// The meter's marks and colours follow the meter settings themselves (Settings ▸ Audio ▸ meters).
 pub fn meter_menu(s: &State, x: f32, y: f32) -> Popup {
+    use crate::meters::k;
+    let cfg = &s.mixer.meter_cfg;
+    let on = |i: usize| cfg.v[i] >= 0.5;
+    let set = |i: usize, v: f32| Cmd::Mixer(MCmd::MeterSet(i, v));
+    let radio = |i: usize, v: f32, label: String| PItem::new(label, set(i, v)).mark(Mark::Radio((cfg.v[i] - v).abs() < 0.01));
     let items = vec![
         PItem::head("Level meter"),
         PItem::new("Alternate meter scale", Cmd::Mixer(MCmd::MeterAltScale))
             .mark(Mark::Check(crate::prefs::check(&crate::prefs::ALTERNATE_METER_SCALE))),
+        // The scale's foot, on the marks beside the meter.
+        // The floor's own range (`meters::PARAMS`): -120 dB at the bottom, -46 at the top.
+        PItem::sub("Meter floor", [-63.0, -57.0, -51.0, -46.0].iter().map(|&db| radio(k::FLOOR_DB, db, format!("{db:.0} dB"))).collect()),
         PItem::sep(),
         PItem::new("Waveforms", Cmd::Mixer(MCmd::ViewWaveforms)).key("Alt+W").mark(Mark::Check(s.mixer.waveforms)),
+        PItem::sep(),
+        // Ballistics: the hold line and how long it stays.
+        PItem::new("Peak hold", set(k::HOLD_ON, if on(k::HOLD_ON) { 0.0 } else { 1.0 })).mark(Mark::Check(on(k::HOLD_ON))),
+        PItem::sub("Peak hold time", [500.0, 1000.0, 1500.0, 3000.0, 5000.0].iter().map(|&ms| radio(k::HOLD_MS, ms, format!("{:.1} s", ms / 1000.0))).collect()),
+        PItem::sep(),
+        // Colours: the gradient down the bars and the darkened cap over the peak.
+        PItem::sub("Colour gradient", [(0.0, "Off"), (1.0, "On"), (2.0, "Strong")].iter().map(|&(v, label)| radio(k::GRADIENT, v, label.to_string())).collect()),
+        PItem::new("Dark cap", set(k::CAP, if on(k::CAP) { 0.0 } else { 1.0 })).mark(Mark::Check(on(k::CAP))),
     ];
     Popup { x, y, items, sub: None, scroll: [0; 2] }
 }
@@ -2471,6 +2492,11 @@ fn run_now(app: &mut App, c: MCmd) -> Option<String> {
         }
         MCmd::MeterAltScale => {
             crate::prefs::toggle(&crate::prefs::ALTERNATE_METER_SCALE);
+            s.piano.dirty = true;
+            None
+        }
+        MCmd::MeterSet(k, v) => {
+            s.mixer.meter_cfg.set(k, v);
             s.piano.dirty = true;
             None
         }
@@ -3597,6 +3623,29 @@ mod tests {
         assert_eq!(prefs::check(&prefs::ALTERNATE_METER_SCALE), !was, "the scale law follows the menu");
         run(&mut a, cmd("Waveforms"));
         assert!(a.state.mixer.waveforms, "and so does the waveform view");
+        // Peak hold, its time and the colours: each entry writes the meter settings the meter is drawn from.
+        let hold = p.items.iter().find(|i| i.label == "Peak hold").unwrap().cmd.clone();
+        let held = a.state.mixer.meter_cfg.v[crate::meters::k::HOLD_ON];
+        if let Cmd::Mixer(c) = hold {
+            run(&mut a, c);
+        }
+        assert_ne!(a.state.mixer.meter_cfg.v[crate::meters::k::HOLD_ON], held, "the hold line toggles");
+        let sub = |label: &str| {
+            let it = p.items.iter().find(|i| i.label == label).unwrap_or_else(|| panic!("{label} in {labels:?}"));
+            it.children.clone()
+        };
+        let hold_ms = sub("Peak hold time").into_iter().find(|i| i.label == "3.0 s").expect("the times").cmd.clone();
+        let Cmd::Mixer(hold_ms) = hold_ms else { panic!("a meter setting") };
+        run(&mut a, hold_ms);
+        assert_eq!(a.state.mixer.meter_cfg.v[crate::meters::k::HOLD_MS], 3000.0);
+        let floor = sub("Meter floor").into_iter().find(|i| i.label == "-51 dB").expect("the floors").cmd.clone();
+        let Cmd::Mixer(floor) = floor else { panic!("a meter setting") };
+        run(&mut a, floor);
+        assert_eq!(a.state.mixer.meter_cfg.v[crate::meters::k::FLOOR_DB], -51.0);
+        let grad = sub("Colour gradient").into_iter().find(|i| i.label == "Off").expect("the gradients").cmd.clone();
+        let Cmd::Mixer(grad) = grad else { panic!("a meter setting") };
+        run(&mut a, grad);
+        assert_eq!(a.state.mixer.meter_cfg.v[crate::meters::k::GRADIENT], 0.0);
         prefs::set_check(&prefs::ALTERNATE_METER_SCALE, was);
     }
 
