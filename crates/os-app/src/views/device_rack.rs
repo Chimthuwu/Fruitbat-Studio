@@ -573,30 +573,23 @@ fn editor_body(ui: &mut Ui, s: &State, plugins: &Plugins, key: usize, editor: cr
     // The editor fills the body: the container keeps its size, only the plugin's UI inside it grows to fill it (a
     // 2 px inset keeps the tile's frame visible).
     let r = Rect::new(body.x + 2.0, body.y + 2.0, (body.w - 4.0).max(1.0), (body.h - 4.0).max(1.0));
-    // Rendered at the larger of the two stretches, so no glyph is drawn from fewer pixels than it covers; the blit
-    // takes it to the body's exact width and height.
+    // The cache key: the stretch the body asks for (it changes when the body does, so the canvas re-renders).
     let k = (r.w / ew).max(r.h / eh).clamp(0.12, 3.0);
-    // Rendered at the app's scale times that: the editor's glyphs are rasterised at the size the tile shows them.
+    // Rendered at the app's scale, covering the body's own size: the editor draws whole at a uniform
+    // scale and its background covers the rest of the canvas, so there are no bars and no squash.
     let scale = ui.c.scale();
-    let Some(img) = crate::rack_ui::image(s, plugins, key, editor.name(), params, k * scale) else {
+    let (cw, ch) = ((r.w * scale).round().max(1.0) as u32, (r.h * scale).round().max(1.0) as u32);
+    let Some(img) = crate::rack_ui::image(s, plugins, key, editor.name(), params, k * scale, cw, ch) else {
         ui.c.text_clip(fnt(13.0), body.x + 10.0, body.y + 9.0, body.w - 20.0, t.text_dim, "This device's editor could not be drawn");
         return;
     };
-    // The editor keeps its own shape in the body (its half, for the drum machine): it fits whole and is
-    // centred, so its layout is never squashed.
-    let (bw, bh) = (img.w as f32 / scale, img.h as f32 / scale);
-    let fit_k = (r.w / bw).min(r.h / bh).max(0.01);
-    let fit = Rect::new(
-        r.x + (r.w - bw * fit_k) * 0.5,
-        r.y + (r.h - bh * fit_k) * 0.5,
-        (bw * fit_k).max(1.0),
-        (bh * fit_k).max(1.0),
-    );
-    ui.c.image(fit, img.w, img.h, &img.px);
+    ui.c.image(r, img.w, img.h, &img.px);
     // The editor's controls, in the tile: a dial or fader drags its parameter, a switch or a selector row sets it.
-    let (kx, ky) = (fit_k, fit_k);
+    // The hits are in the image's device px; the blit maps them onto the body.
+    let kx = r.w / img.w as f32;
+    let ky = r.h / img.h as f32;
     for (hr, id, v) in &img.hits {
-        let cell = Rect::new(fit.x + hr.x * kx, fit.y + hr.y * ky, (hr.w * kx).max(2.0), (hr.h * ky).max(2.0));
+        let cell = Rect::new(r.x + hr.x * kx, r.y + hr.y * ky, (hr.w * kx).max(2.0), (hr.h * ky).max(2.0));
         let n = (*v).unwrap_or(0.0) as u8;
         let act = if *id == EDITOR_TAB {
             RackAct::EditorTab { key, n }

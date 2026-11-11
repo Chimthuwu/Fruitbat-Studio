@@ -363,9 +363,24 @@ impl Cache {
     }
 }
 
-/// The image of the editor of the device hosted under `key`: `name` is the plugin's name, `factor` the device px per
-/// editor px. The cached image is handed back when neither the values nor the scale moved.
-pub fn image(s: &State, plugins: &Plugins, key: usize, name: &str, params: &[RackParam], factor: f32) -> Option<Rc<Image>> {
+/// The image of the editor of the device hosted under `key`: `name` is the plugin's name, `factor` the
+/// cache key (the device px per editor px the caller stretched to), `cw`/`ch` the canvas in device px to
+/// cover — the tile body's own size, so the editor never letterboxes. The cached image is handed back
+/// when neither the values nor the canvas moved.
+///
+/// The editor's own background covers the whole canvas (`paint` clears with it), so a canvas wider or
+/// taller than the editor shows the editor whole at a uniform scale with its background running on —
+/// no bars, no squash. The hits come back in canvas device px, origin at the canvas's top-left.
+pub fn image(
+    s: &State,
+    plugins: &Plugins,
+    key: usize,
+    name: &str,
+    params: &[RackParam],
+    factor: f32,
+    cw: u32,
+    ch: u32,
+) -> Option<Rc<Image>> {
     let ui = ui(name)?;
     let sig = signature(name, params);
     let mut cache = s.rack_ui_cache.borrow_mut();
@@ -382,7 +397,7 @@ pub fn image(s: &State, plugins: &Plugins, key: usize, name: &str, params: &[Rac
         return Some(e.image.clone());
     }
     // The drum machine's editor is painted whole (its cards sit right of its pad grid) and the tile
-    // shows one half of it: the pads, or — flipped — the cards. Everything else paints its whole self.
+    // shows one half of it: the pads, or — flipped — the cards. Everything else covers its canvas whole.
     let drum = matches!(ui, Ui::Drum);
     let flip = matches!(&view, TileView::Drum { flip: true, .. });
     let (dw, dh) = if drum {
@@ -392,14 +407,17 @@ pub fn image(s: &State, plugins: &Plugins, key: usize, name: &str, params: &[Rac
             (lemon_drum_sampler::view::H as f32 * f).round().max(1.0) as u32,
         )
     } else {
-        ui.pixels(factor)
+        (cw.max(1), ch.max(1))
     };
     // Painting in the editor's own logical px with the canvas's device pixels scaled: the glyphs and strokes are
-    // rasterised at the tile's size, so a tile smaller than the editor stays sharp.
+    // rasterised at the tile's size, so a tile smaller than the editor stays sharp. The drum covers its whole
+    // editor (to crop the shown half out of); everything else fits whole and lets its background cover the rest.
     let scale = if drum {
         dw as f32 / lemon_drum_sampler::view::W as f32
     } else {
-        dw as f32 / ui.size().0.max(1.0)
+        (dw as f32 / ui.size().0.max(1.0))
+            .min(dh as f32 / ui.size().1.max(1.0))
+            .max(0.02)
     };
     match &mut e.canvas {
         Some(c) => c.resize(dw, dh, scale),
@@ -413,6 +431,17 @@ pub fn image(s: &State, plugins: &Plugins, key: usize, name: &str, params: &[Rac
     let (px, w, h, hits) = if drum {
         drum_half(&e.buf, dw, scale, flip, hits)
     } else {
+        // The hits, in the canvas's device px: the editor drew in logical px.
+        let hits = hits
+            .into_iter()
+            .map(|(mut r, id, v)| {
+                r.x *= scale;
+                r.y *= scale;
+                r.w = (r.w * scale).max(1.0);
+                r.h = (r.h * scale).max(1.0);
+                (r, id, v)
+            })
+            .collect();
         (e.buf.clone(), dw, dh, hits)
     };
     e.image = Rc::new(Image { w: w as usize, h: h as usize, px, hits });
@@ -586,7 +615,12 @@ fn drum_half(
         .filter_map(|(mut r, id, v)| {
             let inside = r.x >= x0 && r.x + r.w <= x1;
             inside.then(|| {
-                r.x -= x0;
+                // In the half's device px, origin at the half's top-left: the crop moves the hit with
+                // its pixels, and the scale takes it from the editor's logical px.
+                r.x = (r.x - x0) * scale;
+                r.y *= scale;
+                r.w = (r.w * scale).max(1.0);
+                r.h = (r.h * scale).max(1.0);
                 (r, id, v)
             })
         })
