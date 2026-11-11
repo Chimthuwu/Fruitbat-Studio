@@ -241,17 +241,22 @@ pub enum FxReq {
     Remap(Vec<((u16, u8), (u16, u8))>),
 }
 
-pub const LAYOUTS: [&str; 8] = ["Compact", "Compact 2", "Compact alt", "Wide", "Wide 2", "Wide 3", "Wide alt", "Extra large"];
+pub const LAYOUTS: [&str; 9] = ["Compact", "Compact 2", "Compact alt", "Wide", "Wide 2", "Wide 3", "Wide alt", "Extra large", "Extra large V2"];
+/// Index of "Extra large", the first layout with the plugin list column.
+pub const EXTRA_LARGE: u8 = 7;
+/// Index of "Extra large V2": the same columns, with the plugin list moved down beside the fader and the meter up
+/// beside the console's section knobs.
+pub const EXTRA_LARGE_V2: u8 = 8;
 /// Index of "Wide", the layout the mixer was drawn in before the others were ported.
 pub const WIDE: u8 = 3;
 
 /// Each layout's strip width, in `LAYOUTS` order (the Michael Lane Edition's stock widths): the strip's columns
 /// follow the width, so a narrower layout shows more inserts and a wider one more room per control.
-pub const LAYOUT_W: [f32; 8] = [40.0, 48.0, 40.0, 44.0, 64.0, 80.0, 56.0, 132.0];
+pub const LAYOUT_W: [f32; 9] = [40.0, 48.0, 40.0, 44.0, 64.0, 80.0, 56.0, 132.0, 132.0];
 
 /// The width the strips are drawn at: the chosen layout's (`LAYOUTS[s.mixer.layout]`, Wide's 44 px by default).
 pub fn strip_w(s: &State) -> f32 {
-    LAYOUT_W[usize::from(s.mixer.layout.min(7))]
+    LAYOUT_W[usize::from(s.mixer.layout.min(LAYOUTS.len() as u8 - 1))]
 }
 
 /// The strip width from which the strips draw the Analog Channel Strip's console panel on their own: Wide 2 (64 px) and
@@ -1995,8 +2000,8 @@ pub fn options_menu(s: &State, x: f32, y: f32) -> Popup {
     Popup { x, y, items, sub: None, scroll: [0; 2] }
 }
 
-/// Layout combo menu (§6.4): the stock layouts the strips can be drawn in, Extra large last with its plugin list
-/// column (the Michael Lane Edition's set).
+/// Layout combo menu (§6.4): the stock layouts the strips can be drawn in, the two Extra large ones last with their
+/// plugin list column (the Michael Lane Edition's set, plus Lemon Studio's V2).
 pub fn layout_menu(s: &State, x: f32, y: f32) -> Popup {
     let mut items = Vec::new();
     for (i, &l) in LAYOUTS.iter().enumerate() {

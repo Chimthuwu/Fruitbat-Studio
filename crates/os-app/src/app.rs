@@ -616,6 +616,12 @@ fn hover_is_visible(a: &Action) -> bool {
 }
 
 /// Pixels from a note's right end that grab the end for resizing (spec: ui/piano-roll.md §8).
+/// The playlist header's horizontal pan fader: a position within a hair of the middle is centre, as a pan knob's is,
+/// so a channel is easy to zero exactly.
+fn pan_snap(v: f32) -> f32 {
+    if (v - 0.5).abs() < 0.015 { 0.5 } else { v }
+}
+
 fn resize_zone(note_w: f32) -> f32 {
     (note_w / 3.0).clamp(2.0, 8.0)
 }
@@ -6179,7 +6185,7 @@ impl App {
                     self.damage_band(HINT_RECT);
                 }
                 Drag::PlPan { id, r } => {
-                    self.state.set_knob(id, ((x - r.x) / r.w).clamp(0.0, 1.0));
+                    self.state.set_knob(id, pan_snap(((x - r.x) / r.w).clamp(0.0, 1.0)));
                     self.record_knob(id);
                     self.multilink_knob(id.target());
                     self.hint = Cow::Owned(self.state.knob_text(id));
@@ -8763,7 +8769,7 @@ impl App {
                     // Right click: centred, as a knob's menu offers.
                     self.state.set_knob(id, 0.5);
                 } else if let Some(r) = r {
-                    self.state.set_knob(id, ((self.mouse.0 - r.x) / r.w).clamp(0.0, 1.0));
+                    self.state.set_knob(id, pan_snap(((self.mouse.0 - r.x) / r.w).clamp(0.0, 1.0)));
                     self.drag = Some(Drag::PlPan { id, r });
                 }
                 self.hint = Cow::Owned(self.state.knob_text(id));
@@ -12498,6 +12504,14 @@ mod tests {
         assert!((pan(&app).unwrap_or(0.0) - 0.5).abs() < 0.12, "three quarters along reads {:?}", pan(&app));
         app.mouse_move(r.x + r.w * 0.25, r.cy());
         assert!((pan(&app).unwrap_or(0.0) + 0.5).abs() < 0.12, "a quarter along reads {:?}", pan(&app));
+        app.mouse_up();
+        // Near the middle it snaps onto centre, as a pan knob does.
+        let r = hit_rect(&app, &Action::PlPan(strip));
+        app.mouse_move(r.x + r.w * 0.502, r.cy());
+        app.mouse_down();
+        assert_eq!(pan(&app), Some(0.0), "within a hair of the middle, it is centre");
+        app.mouse_move(r.x + r.w * 0.56, r.cy());
+        assert!((pan(&app).unwrap_or(0.0) - 0.12).abs() < 0.05, "clear of it, it follows: {:?}", pan(&app));
         app.mouse_up();
         // A right click centres it.
         let r = hit_rect(&app, &Action::PlPan(strip));

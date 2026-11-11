@@ -427,7 +427,7 @@ fn title_tools(ui: &mut Ui, s: &State, r: Rect) {
     icons::draw(ui.c, Icon::Plus, Rect::new(r.x + 110.0 + px, y - 7.0, 14.0, 14.0), if hov { ui.t.tx(0xffffff) } else { ui.t.tx(0xc4ccd0) });
     let lb = Rect::new(r.x + 130.0 + px, r.y + 2.0, 70.0, 20.0);
     let hov = ui.hit(lb, Action::Mix(MHit::Layout), "Mixer layout");
-    let name = crate::mixer::LAYOUTS[usize::from(s.mixer.layout.min(7))];
+    let name = crate::mixer::LAYOUTS[usize::from(s.mixer.layout.min(crate::mixer::LAYOUTS.len() as u8 - 1))];
     ui.c.text_clip(Font::new(17), r.x + 134.0 + px, r.y + 2.0, 66.0, if hov { ui.t.tx(0xffffff) } else { ui.t.tx(0xb8c4cb) }, name);
 }
 
@@ -449,6 +449,38 @@ fn shade(c: Color, k: f32) -> Color {
 /// View ▸ Waveforms (Lemon Studio's design): the track's recent peaks, one pixel row each, newest at the bottom,
 /// scrolling up; the left side's level grows leftwards from the middle, the right side's rightwards, in the meter's
 /// green (yellow above -6 dBFS, the clip colour above 0 dBFS).
+/// A strip's level meter in `meter`: its recessed slot, the measured tick marks when `ly` is given (the meter column's
+/// own absolute positions), and the two 6 px peak bars on the "C" column's scale (the waveform view when View ▸
+/// Waveforms is on).
+fn meter_body(ui: &mut Ui, s: &State, n: u16, meter: Rect, lemon: bool, ly: Option<&Ly>) {
+    if lemon {
+        ui.c.fill_rrect(meter, lk::r_small(ui.t), ui.t.s(0x191d1e));
+        ui.c.fill_rrect(Rect::new(meter.x + 2.0, meter.y + 2.0, 12.0, meter.h - 4.0), 2.5, ui.t.s(0x232729));
+    } else {
+        ui.c.fill_rrect(meter, 2.0, ui.t.s(0x191d1e));
+        ui.c.fill_rect(Rect::new(meter.x + 2.0, meter.y + 2.0, 11.0, meter.h - 4.0), ui.t.s(0x232729));
+    }
+    if let Some(ly) = ly {
+        for y in [181.0, 230.0, 278.0, 327.0, 375.0, 423.0] {
+            ui.c.fill_rect(Rect::new(meter.x + 3.0, ly.y(y), 9.0, 1.0), ui.t.s(0x111315));
+        }
+    }
+    // Per-track peak meter (spec: ui/mixer.md §9): two 6 px bars on the same scale as the "C" column.
+    ui.live(Live::Meter, meter);
+    if s.mixer.waveforms {
+        wave(ui, s, n, Rect::new(meter.x + 2.0, meter.y + 2.0, 12.0, meter.h - 4.0));
+    } else if let Some(m) = s.mixer.meters.get(usize::from(n)) {
+        let cfg = &s.mixer.meter_cfg;
+        let (top, bot) = (meter.y + 2.0, meter.bottom() - 2.0);
+        let floor = cfg.v[meters::k::FLOOR_DB];
+        let alt = crate::prefs::check(&crate::prefs::ALTERNATE_METER_SCALE);
+        let ys = |db: f32| bot - meters::frac(db, floor, alt) * (bot - top);
+        for i in 0..2 {
+            meter_bar(ui, meter.x + 2.0 + 6.0 * i as f32, 6.0, bot, m.db[i], m.hold[i], cfg, &ys);
+        }
+    }
+}
+
 fn wave(ui: &mut Ui, s: &State, n: u16, r: Rect) {
     let Some(w) = s.mixer.waves.get(usize::from(n)) else { return };
     let mid = r.x + r.w / 2.0;
@@ -836,37 +868,28 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
     // the rotated name: the tracks' sections at a glance, as the Michael Lane Edition's wide strips do. Narrow strips
     // keep the meter until their panel button asks for the console (spec: ui/mixer.md §2).
     let console = shown;
+    let v2 = s.mixer.layout >= crate::mixer::EXTRA_LARGE_V2;
+    let track_y1 = bottom - 99.0;
+    let meter = Rect::new(mx - 7.5, ly.y(METER_Y0), 16.0, ly.y(METER_Y1) - ly.y(METER_Y0));
     if console {
         // Extra large keeps its plugin list column on the right, so the console takes the strip's 44 px control column.
         let sw = if extra { 55.0 } else { w - 2.0 };
         console_panel(ui, s, n, Rect::new(left + 1.0, ly.y(PANEL_Y0) + 2.0, sw, (ly.y(METER_Y1) - ly.y(PANEL_Y0) - 4.0).max(24.0)));
-    } else {
-        // Meter slot with its tick marks; the selected strip gets a green frame.
-        let meter = Rect::new(mx - 7.5, ly.y(METER_Y0), 16.0, ly.y(METER_Y1) - ly.y(METER_Y0));
-        if lemon {
-            ui.c.fill_rrect(meter, lk::r_small(t), ui.t.s(0x191d1e));
-            ui.c.fill_rrect(Rect::new(meter.x + 2.0, meter.y + 2.0, 12.0, meter.h - 4.0), 2.5, ui.t.s(0x232729));
-        } else {
-            ui.c.fill_rrect(meter, 2.0, ui.t.s(0x191d1e));
-            ui.c.fill_rect(Rect::new(meter.x + 2.0, meter.y + 2.0, 11.0, meter.h - 4.0), ui.t.s(0x232729));
-        }
-        for y in [181.0, 230.0, 278.0, 327.0, 375.0, 423.0] {
-            ui.c.fill_rect(Rect::new(meter.x + 3.0, ly.y(y), 9.0, 1.0), ui.t.s(0x111315));
-        }
-        // Per-track peak meter (spec: ui/mixer.md §9): two 6 px bars on the same scale as the "C" column.
-        ui.live(Live::Meter, meter);
-        if s.mixer.waveforms {
-            wave(ui, s, n, Rect::new(meter.x + 2.0, meter.y + 2.0, 12.0, meter.h - 4.0));
-        } else if let Some(m) = s.mixer.meters.get(usize::from(n)) {
-            let cfg = &s.mixer.meter_cfg;
-            let (top, bot) = (meter.y + 2.0, meter.bottom() - 2.0);
-            let floor = cfg.v[meters::k::FLOOR_DB];
-            let alt = crate::prefs::check(&crate::prefs::ALTERNATE_METER_SCALE);
-            let ys = |db: f32| bot - meters::frac(db, floor, alt) * (bot - top);
-            for i in 0..2 {
-                meter_bar(ui, meter.x + 2.0 + 6.0 * i as f32, 6.0, bot, m.db[i], m.hold[i], cfg, &ys);
+        // The console takes the meter's column, but a wide strip has room for the level elsewhere: Extra large puts it
+        // beside the fader (the tall room the plugin list leaves free), V2 beside the console's section knobs, where
+        // the list used to be.
+        if extra {
+            if v2 {
+                let m = Rect::new(left + 58.0, ly.y(PANEL_Y0) + 4.0, 16.0, (ly.y(METER_Y1) - ly.y(PANEL_Y0) - 8.0).max(24.0));
+                meter_body(ui, s, n, m, lemon, Some(ly));
+            } else {
+                let top = ly.y(TRACK_Y0);
+                meter_body(ui, s, n, Rect::new(mx + 12.0, top, 16.0, (track_y1 - top).max(24.0)), lemon, None);
             }
         }
+    } else {
+        // Meter slot with its tick marks; the selected strip gets a green frame.
+        meter_body(ui, s, n, meter, lemon, Some(ly));
         if selected {
             ui.c.stroke_rrect(Rect::new(meter.x - 1.0, meter.y - 2.0, meter.w + 2.0, meter.h + 4.0), if lemon { lk::r_btn(t) } else { 1.0 }, 2.0, t.accent);
         }
@@ -891,13 +914,17 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
         ui.c.text_vertical(Font::new(15), sx - 7.0, meter.bottom() - 1.0 - lead, name_c, &name);
         ui.c.pop_clip();
     }
-    // Extra large (layout 7): the strip's own plugin list, right of its controls (the Michael Lane Edition's column).
+    // The strip's own plugin list, right of its controls (the Michael Lane Edition's column). Extra large keeps it up
+    // beside the console, down to the mute / pan row; V2 drops it into the room beside the fader, which frees the
+    // console's side for the meter.
     if extra {
-        // Down to the mute / pan row, as the Edition's column does: the list had stopped a third of the way up the
-        // strip while there was room below it.
-        let top = ly.y(PANEL_Y0) + 4.0;
-        let lr = Rect::new(left + 57.0, top, (w - 61.0).max(20.0), (ly.y(LED_Y) - 12.0 - top).max(19.0));
-        plugin_list(ui, s, n, lr);
+        let (top, h) = if v2 {
+            (ly.y(TRACK_Y0), (track_y1 - ly.y(TRACK_Y0)).max(19.0))
+        } else {
+            let top = ly.y(PANEL_Y0) + 4.0;
+            (top, (ly.y(LED_Y) - 12.0 - top).max(19.0))
+        };
+        plugin_list(ui, s, n, Rect::new(left + 57.0, top, (w - 61.0).max(20.0), h));
     }
 
     let enabled = track.is_none_or(|m| m.enabled);
@@ -934,7 +961,6 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
     }
 
     // Fader: track, gain marks, handle (green on the selected strip, with the track lit below it).
-    let track_y1 = bottom - 99.0;
     if lemon {
         ui.c.fill_rrect(Rect::new(mx - 2.0, ly.y(TRACK_Y0), 4.0, track_y1 - ly.y(TRACK_Y0)), 2.0, ui.t.s(0x141618));
     } else {
@@ -1343,6 +1369,26 @@ mod tests {
         assert!(!has(&app, Action::Mix(MHit::StripPower(2))), "hidden on that channel");
         assert!(has(&app, Action::Mix(MHit::StripPower(3))), "the rest follow the layout");
         assert!(has(&app, Action::Fader(2)));
+    }
+
+    /// The two Extra large layouts share their columns, but V2 drops the plugin list down beside the fader, which frees
+    /// the console's side for the level meter; Extra large keeps the list up beside the console.
+    #[test]
+    fn extra_large_v2_puts_the_slots_beside_the_fader() {
+        let mut app = app();
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let ws = &mut app.state.wins[crate::app::Win::Mixer.slot().unwrap()];
+        (ws.maxed, ws.rect) = (false, os_ui::Rect::new(100.0, 83.0, 1400.0, 900.0));
+        app.state.z = vec![crate::app::Win::Mixer];
+        let slot = |app: &App| app.hits.iter().find(|h| h.action == Action::Mix(MHit::TrackSlot(2, 0))).map(|h| h.rect);
+        app.state.mixer.layout = crate::mixer::EXTRA_LARGE;
+        app.paint(&mut c, None);
+        let up = slot(&app).expect("Extra large's first slot");
+        app.state.mixer.layout = crate::mixer::EXTRA_LARGE_V2;
+        app.paint(&mut c, None);
+        let down = slot(&app).expect("V2's first slot");
+        assert!(down.y > up.bottom() + 200.0, "V2 drops the list below the console: {up:?} {down:?}");
+        assert!(down.y > 400.0, "and down beside the fader: {down:?}");
     }
 
     /// Classic mode's strips: in index order, as always — the view ordering and the docks are unchanged.

@@ -197,6 +197,9 @@ mod tests {
     }
 
     fn press(app: &mut App, x: f32, y: f32) {
+        // These tests press the same note at the same point again and again, a fraction of a second apart: without this
+        // they would read as one double-click, and the Note properties gesture has its own test (`note_properties`).
+        app.state.piano.properties_click = None;
         app.mouse_move(x, y);
         app.mouse_down();
     }

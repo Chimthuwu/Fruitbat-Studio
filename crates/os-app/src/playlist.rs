@@ -3262,7 +3262,7 @@ pub fn track_menu(s: &State, t: u16, x: f32, y: f32) -> Popup {
     .into_iter()
     .map(|(n, c)| PItem::new(n, Cmd::TrackColor(t, c)))
     .collect();
-    let items = vec![
+    let mut items = vec![
         PItem::head("Track"),
         PItem::new("Rename...", Cmd::TrackRename(t)),
         PItem::sub("Color", colors),
@@ -3286,6 +3286,10 @@ pub fn track_menu(s: &State, t: u16, x: f32, y: f32) -> Popup {
         PItem::sep(),
         PItem::sub("Performance settings", perf_items(s, t)),
     ];
+    // A linear lane's pan fader sits on its mixer channel (the header's fader): reset it from here too, after Solo.
+    if let Some(strip) = crate::track_links::lane_track(s, t).map(|tr| tr.mixer_strip) {
+        items.insert(7, PItem::new("Reset pan", Cmd::Reset(crate::knobs::Control::Knob(crate::knobs::KnobId::MixPan(strip)))));
+    }
     let mut popup = Popup { x, y, items, sub: None, scroll: [0; 2] };
     // The track's automation lanes (Linear mode, spec: model/track-model.md §6b): collapse / expand and unbind each.
     if s.project.linear_mode
@@ -6118,6 +6122,22 @@ mod tests {
         assert!(!app.state.project.tracks.iter().any(|t| t.playlist_lane == 3), "the copy's track went");
         assert!(track_info(&app.state, 2).is_some_and(|t| t.name.is_none()), "the lane went too");
         assert!(app.state.project.tracks.iter().any(|t| t.playlist_lane == 2), "the source's track stayed");
+    }
+
+    /// A lane's header menu resets the pan fader it draws, which is its channel's own pan (Linear mode, the lane's
+    /// track naming a strip); a lane without a channel has no such entry.
+    #[test]
+    fn the_lane_menu_resets_its_channels_pan() {
+        let mut app = app();
+        app.state.project.linear_mode = true;
+        app.state.project.tracks.push(os_model::Track::new(os_model::TrackKind::Midi, 1, 5, Some(1)));
+        if let Some(m) = app.state.project.mixer.iter_mut().find(|m| m.index == 5) {
+            m.pan = Some(-0.7);
+        }
+        let entry = track_menu(&app.state, 0, 0.0, 0.0).items.into_iter().find(|i| i.label == "Reset pan").expect("the lane's Reset pan").cmd;
+        run(&mut app, entry);
+        assert_eq!(crate::mixer::track(&app.state, 5).and_then(|m| m.pan), Some(0.0), "back to centre");
+        assert!(!track_menu(&app.state, 1, 0.0, 0.0).items.iter().any(|i| i.label == "Reset pan"), "no channel, no entry");
     }
 
     /// A lane whose track names a mixer strip shares that strip's mute: the playlist's LED mutes the channel, and the
