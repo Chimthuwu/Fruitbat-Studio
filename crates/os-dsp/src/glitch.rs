@@ -17,6 +17,9 @@ use crate::glide::{Glide, Ramp};
 /// The modules a step can fire, in the order the grid's control word numbers them.
 pub const MODULES: [&str; 6] = ["OFF", "STUT", "CRSH", "RVRS", "GATE", "RING"];
 
+/// The same modules as a grid cell of a strip writes them: two letters, the width a cell has.
+pub const SHORT: [&str; 6] = ["", "ST", "CR", "RV", "GT", "RG"];
+
 /// How many steps a bar of the grid has.
 pub const STEPS: usize = 16;
 

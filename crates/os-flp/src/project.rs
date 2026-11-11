@@ -4320,18 +4320,23 @@ pub fn default_arrangement() -> Arrangement {
 
 /// What `apply` cannot store in `file` yet: the mixer and playlist of a project made by [`create`] (their file
 /// has none). Empty when nothing would be lost.
-/// The Analog Channel Strip's chunk: the eight control words of every track whose strip is not at its default, and
-/// the bypass switch (Lemon Studio's port of the Michael Lane Edition strip; plan v3 §6.4). Version 7 is the first one
-/// with all eight words (the eighth was the de-esser's then and is the table's now); version 4, with seven, is still
-/// read. The fork's versions 5 and 6 add SnapTune's four
-/// words, which this port does not have, so those chunks are left alone and 5 and 6 are skipped.
+/// The strips' chunk: the eight control words of every track whose Analog Channel Strip is not at its default, its
+/// bypass switch (Lemon Studio's port of the Michael Lane Edition strip; plan v3 §6.4), and — since version 8 — the
+/// track's Glitch strip: its sixteen steps, its amount and which of the two strips the track has. Version 7 is the first
+/// one with all eight words (the eighth was the de-esser's then and is the table's now) and is still read, as is version
+/// 4 with seven. The fork's versions 5 and 6 add SnapTune's four words, which this port does not have, so those chunks
+/// are left alone and 5 and 6 are skipped.
 const STRIP_TAG: [u8; 4] = *b"LSCS";
-const STRIP_VERSION: u8 = 7;
+const STRIP_VERSION: u8 = 8;
 
-/// The strip chunk's payload, or `None` when no track has strip state: payload version, count, then per track its
-/// index, eight words and the bypass flag.
+/// The strips' chunk payload, or `None` when no track has strip state: payload version, count, then per track its
+/// index, eight words, the bypass flag, its sixteen grid steps, the grid's amount and the style flag.
 fn strip_payload(project: &Project) -> Option<Vec<u8>> {
-    let tracks: Vec<&MixerTrack> = project.mixer.iter().filter(|m| m.strip != [0; 8] || !m.strip_bypassed).collect();
+    let tracks: Vec<&MixerTrack> = project
+        .mixer
+        .iter()
+        .filter(|m| m.strip != [0; 8] || !m.strip_bypassed || m.glitch != [0; 16] || m.glitch_amount != 0 || m.glitch_style)
+        .collect();
     if tracks.is_empty() {
         return None;
     }
@@ -4343,18 +4348,22 @@ fn strip_payload(project: &Project) -> Option<Vec<u8>> {
             out.extend_from_slice(&w.to_le_bytes());
         }
         out.push(u8::from(m.strip_bypassed));
+        out.extend_from_slice(&m.glitch);
+        out.extend_from_slice(&m.glitch_amount.to_le_bytes());
+        out.push(u8::from(m.glitch_style));
     }
     Some(out)
 }
 
 /// Writes the project's strip state into `file`, or removes the chunk when no track has any. A chunk written by
 /// another build (a fork's version 5 or 6, with SnapTune's words) is left as it is: its state is not this build's.
-/// A version 4 chunk, from a build before the eighth word, is this build's and is written again at the current version.
+/// A version 4 chunk, from a build before the eighth word, is this build's and is written again at the current version,
+/// and so is a version 7 one, from a build before the glitch strip.
 fn store_strip(project: &Project, file: &mut FlpFile) {
     use crate::container::{Chunk, ChunkBody, Tag};
     let at = file.chunks.iter().position(|c| c.tag.0 == STRIP_TAG);
     if let Some(i) = at {
-        let ours = matches!(&file.chunks[i].body, ChunkBody::Raw(d) if d.first() == Some(&4) || d.first() == Some(&STRIP_VERSION));
+        let ours = matches!(&file.chunks[i].body, ChunkBody::Raw(d) if matches!(d.first(), Some(&v) if v == 4 || v == 7 || v == STRIP_VERSION));
         if !ours {
             return;
         }
@@ -4379,17 +4388,18 @@ fn read_strip(file: &FlpFile, mixer: &mut [MixerTrack]) {
     }) else {
         return;
     };
-    // Version 4 wrote seven words; the eighth arrived later (the de-esser's, now the table's). Anything else is another
-    // build's and is left alone.
-    let words = match data.first() {
-        Some(4) => 7,
-        Some(&STRIP_VERSION) => 8,
+    // Version 4 wrote seven words; the eighth arrived later (the de-esser's, now the table's). Version 7 has all eight
+    // but no glitch state. Anything else is another build's and is left alone.
+    let (words, grid) = match data.first() {
+        Some(4) => (7, false),
+        Some(7) => (8, false),
+        Some(&STRIP_VERSION) => (8, true),
         _ => return,
     };
     if data.len() < 3 {
         return;
     }
-    let record = 2 + 2 * words + 1;
+    let record = 2 + 2 * words + 1 + if grid { 16 + 2 + 1 } else { 0 };
     let n = usize::from(u16::from_le_bytes([data[1], data[2]]));
     let mut at = 3;
     for _ in 0..n {
@@ -4400,10 +4410,22 @@ fn read_strip(file: &FlpFile, mixer: &mut [MixerTrack]) {
             *w = u16::from_le_bytes([head[2 + 2 * k], head[3 + 2 * k]]);
         }
         let bypassed = head[2 + 2 * words] & 1 != 0;
+        let mut grid = [0u8; 16];
+        let mut gamount = 0u16;
+        let mut gstyle = false;
+        if record > 2 + 2 * words + 1 {
+            let g = 2 + 2 * words + 1;
+            grid.copy_from_slice(&head[g..g + 16]);
+            gamount = u16::from_le_bytes([head[g + 16], head[g + 17]]);
+            gstyle = head[g + 18] & 1 != 0;
+        }
         at += record;
         if let Some(m) = mixer.iter_mut().find(|m| m.index == index) {
             m.strip = strip;
             m.strip_bypassed = bypassed;
+            m.glitch = grid;
+            m.glitch_amount = gamount;
+            m.glitch_style = gstyle;
         }
     }
 }
@@ -6235,6 +6257,48 @@ mod tests {
         p.mixer[1].strip_bypassed = true;
         apply(&p, &mut f).unwrap();
         assert!(!f.chunks.iter().any(|c| c.tag.0 == *b"LSCS"), "no strip state: the chunk goes");
+    }
+
+    /// The Glitch strip is stored in the same chunk, for a track that chose it without touching the analog strip, and
+    /// a version 7 chunk (from before the glitch strip) is still read: its eight words and its switch, no grid.
+    #[test]
+    fn the_glitch_strip_is_stored_beside_the_analog_one() {
+        use crate::container::ChunkBody;
+        use os_model::MixerTrack;
+        let mut p = new_project();
+        p.mixer = (0..3).map(MixerTrack::new).collect();
+        p.arrangements.push(default_arrangement());
+        let bare = create(&p).unwrap();
+        assert!(!bare.chunks.iter().any(|c| c.tag.0 == *b"LSCS"), "a default project stores no chunk");
+
+        p.mixer[2].glitch = [0, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4];
+        p.mixer[2].glitch_amount = 40_000;
+        p.mixer[2].glitch_style = true;
+        let file = create(&p).unwrap();
+        let back = load(&FlpFile::parse(&file.to_bytes().unwrap()).unwrap()).unwrap();
+        assert_eq!(back.mixer[2].glitch, p.mixer[2].glitch);
+        assert_eq!(back.mixer[2].glitch_amount, 40_000);
+        assert!(back.mixer[2].glitch_style);
+        assert!(back.mixer[2].strip_bypassed, "the analog strip is untouched");
+        assert_eq!(back.mixer[1].glitch, [0; 16]);
+        assert!(!back.mixer[1].glitch_style);
+
+        // A version 7 chunk, from a build before the glitch strip: its eight words and its switch, and an empty grid.
+        let mut f = create(&p).unwrap();
+        let mut data = vec![7u8];
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&1u16.to_le_bytes());
+        for w in [1234u16, 2, 3, 4, 5, 6, 7, 8] {
+            data.extend_from_slice(&w.to_le_bytes());
+        }
+        data.push(0);
+        let i = f.chunks.iter().position(|c| c.tag.0 == *b"LSCS").expect("the chunk");
+        f.chunks[i].body = ChunkBody::Raw(data);
+        let back = load(&FlpFile::parse(&f.to_bytes().unwrap()).unwrap()).unwrap();
+        assert_eq!(back.mixer[1].strip, [1234, 2, 3, 4, 5, 6, 7, 8]);
+        assert!(!back.mixer[1].strip_bypassed);
+        assert_eq!(back.mixer[1].glitch, [0; 16]);
+        assert!(!back.mixer[1].glitch_style);
     }
 
     /// plan v3 §6.4: a chunk this build does not know survives load and save, with the strip chunk beside it.

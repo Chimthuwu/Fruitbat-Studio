@@ -1601,6 +1601,13 @@ pub struct MixerTrack {
     /// The strip's bypass switch: `true` (the default) passes the track through untouched, and a track that never
     /// turned the strip on stores nothing (`LSCS`, plan v3 §6.4).
     pub strip_bypassed: bool,
+    /// The Glitch strip's grid (Lemon Studio's own, after dblue Glitch): sixteen steps, each a module's number in
+    /// `os_dsp::glitch::MODULES` order (0 = the step fires nothing), the amount the whole grid is heard at
+    /// (`os_dsp::glitch::glitch_amount`: 0 is the section off) and which of the two strips the track has — `false` the
+    /// Analog Channel Strip above, `true` the glitcher. A track that never chose the glitcher holds an empty grid.
+    pub glitch: [u8; 16],
+    pub glitch_amount: u16,
+    pub glitch_style: bool,
     /// The three-band equaliser as stored, per band `[gain, frequency, width]`: gain -1800..=1800 in 0.01 dB,
     /// frequency and width 0..=65536 (spec: audio/mixer.md "Equaliser"). Band 1 low shelf, 2 peaking, 3 high shelf.
     pub eq: [[i32; 3]; 3],
@@ -1657,6 +1664,9 @@ impl PartialEq for MixerTrack {
             slot_mix,
             strip,
             strip_bypassed,
+            glitch,
+            glitch_amount,
+            glitch_style,
             eq,
             latency_out,
             latency_in,
@@ -1689,6 +1699,9 @@ impl PartialEq for MixerTrack {
             && *slot_mix == o.slot_mix
             && *strip == o.strip
             && *strip_bypassed == o.strip_bypassed
+            && *glitch == o.glitch
+            && *glitch_amount == o.glitch_amount
+            && *glitch_style == o.glitch_style
             && *eq == o.eq
             && *latency_out == o.latency_out
             && *latency_in == o.latency_in
@@ -1734,6 +1747,9 @@ impl MixerTrack {
             polarity: false,
             strip: [0; 8],
             strip_bypassed: true,
+            glitch: [0; 16],
+            glitch_amount: 0,
+            glitch_style: false,
             swap: false,
             slots_enabled: true,
             separator: false,

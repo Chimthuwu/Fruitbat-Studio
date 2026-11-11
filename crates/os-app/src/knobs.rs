@@ -39,6 +39,10 @@ pub enum KnobId {
     /// 7 the table) as a 0..1 knob, its own word over 65535 (the only word a section turns up in a menu; the strip's
     /// console panel, `views::mixer::console_panel`).
     Strip(u16, u8),
+    /// Mixer track `.0`'s Glitch strip: the grid's amount as a 0..1 knob over 65535 (`MixerTrack::glitch_amount`). The
+    /// grid itself is the strip's console (`views::mixer::glitch_panel`), and a turn switches the glitcher in
+    /// (`glitch_style`).
+    Glitch(u16),
     /// A knob of the piano roll's Strum dialog (dialog state, not project data; spec: ui/piano-strum.md §1).
     Strum(crate::strum::Knob),
     /// A knob (or the Range box) of the piano roll's Arpeggiate dialog (dialog state; spec: ui/piano-arpeggiate.md §1).
@@ -198,7 +202,7 @@ impl KnobId {
             KnobId::AutoLfo(_, k) => k.pos(&os_model::clip_lfo::ClipLfo::default()),
             KnobId::MidiOut(_, k) => k.pos(&crate::lemon_midi_out::Settings::default()),
             KnobId::Eq(_, b, f) => eq_pos(f, os_model::EQ_DEFAULT[usize::from(b.min(2))][usize::from(f.min(2))]),
-            KnobId::Strip(..) => 0.0,
+            KnobId::Strip(..) | KnobId::Glitch(_) => 0.0,
             _ => 0.5,
         }
     }
@@ -278,6 +282,10 @@ impl State {
             }
             KnobId::Strip(t, w) => {
                 let word = self.project.mixer.iter().find(|m| m.index == t).map_or(0, |m| m.strip[usize::from(w.min(7))]);
+                f32::from(word) / 65535.0
+            }
+            KnobId::Glitch(t) => {
+                let word = self.project.mixer.iter().find(|m| m.index == t).map_or(0, |m| m.glitch_amount);
                 f32::from(word) / 65535.0
             }
             KnobId::Strum(k) => (self.strum.set.get(k) + 1.0) / 2.0,
@@ -384,6 +392,14 @@ impl State {
                 if let Some(m) = self.project.mixer.iter_mut().find(|m| m.index == t) {
                     m.strip[usize::from(w.min(7))] = (v * 65535.0).round() as u16;
                     m.strip_bypassed = false;
+                    self.piano.dirty = true;
+                }
+            }
+            // The glitcher switches itself in the same way: a turn of its amount is the style choice.
+            KnobId::Glitch(t) => {
+                if let Some(m) = self.project.mixer.iter_mut().find(|m| m.index == t) {
+                    m.glitch_amount = (v * 65535.0).round() as u16;
+                    m.glitch_style = true;
                     self.piano.dirty = true;
                 }
             }
@@ -501,6 +517,9 @@ impl State {
                     _ => format!("Table: {:.0}%", os_dsp::strip::table_amount(word) * 100.0),
                 }
             }
+            // "Glitch: 40%", "Glitch: off".
+            KnobId::Glitch(_) if n <= 0.0 => "Glitch: off".into(),
+            KnobId::Glitch(_) => format!("Glitch: {:.0}%", n * 100.0),
             KnobId::Strum(_) | KnobId::Arp(_) | KnobId::PianoDlg(_) | KnobId::AutoLfo(..) | KnobId::MidiOut(..) => return None,
         })
     }
@@ -640,6 +659,9 @@ mod tests {
         s.set_knob(KnobId::Strip(t, 2), 0.5);
         assert_eq!(s.knob_text(KnobId::Strip(t, 2)), "Drive: 50%");
         assert!(s.knob(KnobId::Strip(t, 3)) > 0.7);
+        s.set_knob(KnobId::Glitch(t), 0.4);
+        assert!(s.knob_text(KnobId::Glitch(t)).starts_with("Glitch: 4"), "{}", s.knob_text(KnobId::Glitch(t)));
+        assert!(s.project.mixer.iter().find(|m| m.index == t).unwrap().glitch_style, "a turn switches the glitcher in");
         assert!(s.piano.dirty);
     }
 

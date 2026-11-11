@@ -705,6 +705,50 @@ fn console_switch(ui: &mut Ui, r: Rect, on: bool, st: &ConsoleStyle) {
     ui.c.line(rocker.x, rocker.cy(), rocker.right(), rocker.cy(), 1.0, st.edge);
 }
 
+/// A grid module's colour: orange retriggers, yellow crushes, blue reverses, grey gates and green rings; a step that
+/// fires nothing is the plate's own dark.
+fn glitch_ink(ui: &Ui, module: usize) -> Color {
+    match module {
+        1 => ui.t.h(0xf09a28),
+        2 => ui.t.h(0xe8c74f),
+        3 => ui.t.h(0x5fb6f0),
+        4 => ui.t.h(0x9aa3a8),
+        5 => ui.t.h(0x7bd88f),
+        _ => ui.t.s(0x3a4042),
+    }
+}
+
+/// The glitch console: the grid's amount over the sixteen steps as a 4×4 grid. A cell carries its module's two letters
+/// in that module's colour and is filled in when the step fires, so a bar reads at a glance; a click cycles it
+/// (`MCmd::GlitchStep`), which is the whole editor — there is no knob per module, and no menu behind it.
+fn glitch_panel(ui: &mut Ui, s: &State, n: u16, m: &os_model::MixerTrack, r: Rect) {
+    let st = console_style(ui);
+    let amount = Rect::new(r.x, r.y, r.w, 26.0);
+    console_plate(ui, amount, &st);
+    console_knob(ui, s, amount, 0.5, KnobId::Glitch(n), st.ds, r.w >= 50.0);
+    let grid = Rect::new(r.x, amount.bottom() + 3.0, r.w, (r.bottom() - amount.bottom() - 3.0).max(24.0));
+    let cw = grid.w / 4.0;
+    let ch = (grid.h / 4.0).min(cw * 1.5).max(9.0);
+    let count = os_dsp::glitch::MODULES.len();
+    for i in 0..os_dsp::glitch::STEPS {
+        let b = Rect::new(grid.x + cw * (i % 4) as f32, grid.y + ch * (i / 4) as f32, (cw - 1.0).max(4.0), (ch - 1.0).max(6.0));
+        let module = usize::from(m.glitch[i]).min(count - 1);
+        let ink = glitch_ink(ui, module);
+        let hov = ui.hovering(b);
+        ui.c.fill_rrect(b, 2.0, if module == 0 { ui.t.s(0x1a1d1f) } else { ink.mix(ui.t.s(0x14171a), 0.58) });
+        if module > 0 {
+            ui.c.stroke_rrect(b, 2.0, 1.0, ink.with_alpha(if hov { 255 } else { 150 }));
+        }
+        ui.c.text_center(Font::new(8).bold(), b, ink, os_dsp::glitch::SHORT[module]);
+        let hint = if module == 0 {
+            format!("Step {}: off (click to place {})", i + 1, os_dsp::glitch::MODULES[1])
+        } else {
+            format!("Step {}: {} (click for the next module)", i + 1, os_dsp::glitch::MODULES[module])
+        };
+        ui.hit(b, Action::Mix(MHit::GlitchCell(n, i as u8)), hint);
+    }
+}
+
 /// The Analog Channel Strip's console: the STRIP switch, then the Edition's four rows of section controls — low cut
 /// and OTT, drive with its character's button, compressor (its profile cycles from the label, as the Edition's little
 /// triangle says) and TAME, and the table. Every control writes a word of the track's strip, so the panel and the
@@ -726,7 +770,24 @@ fn console_panel(ui: &mut Ui, s: &State, n: u16, r: Rect) {
     // own compact strips.
     let wide = r.w >= 64.0;
     let values = r.w >= 50.0;
-    let body = Rect::new(r.x, top.bottom() + 3.0, r.w, (r.bottom() - top.bottom() - 3.0).max(40.0));
+    // The style bar: which of the two strips the track has. A click hands the console to the other one — the glitcher's
+    // grid in place of the analog sections (`MixerTrack::glitch_style`), so a strip carries either of them.
+    let glitch = m.glitch_style;
+    let bar = Rect::new(r.x, top.bottom(), r.w, 14.0);
+    let hov = ui.hit(
+        bar,
+        Action::Mix(MHit::GlitchMode(n)),
+        if glitch { "Glitch strip (click for the analog strip)" } else { "Analog strip (click for the glitch strip)" },
+    );
+    ui.c.fill_rrect(bar.inset(1.0), 2.0, if hov { ui.t.button_hi } else { ui.t.s(0x202628) });
+    ui.c.line(bar.x + 2.0, bar.bottom(), bar.right() - 2.0, bar.bottom(), 1.0, st.edge);
+    ui.c.text_center(Font::new(8).bold(), bar, if glitch { st.ds } else { st.cut }, if glitch { "GLITCH" } else { "ANALOG" });
+    if glitch {
+        let body = Rect::new(r.x, bar.bottom() + 3.0, r.w, (r.bottom() - bar.bottom() - 3.0).max(40.0));
+        glitch_panel(ui, s, n, m, body);
+        return;
+    }
+    let body = Rect::new(r.x, bar.bottom() + 3.0, r.w, (r.bottom() - bar.bottom() - 3.0).max(40.0));
     // The rows share the panel's height (up to 76 px: the Edition's 57 px row plus room for the readout), so the console
     // reaches as far down the strip as the plugin list beside it.
     let row = (body.h / 4.0).min(76.0);
@@ -1384,6 +1445,15 @@ mod tests {
         assert!(!has(&app, Action::Mix(MHit::StripPower(2))), "hidden on that channel");
         assert!(has(&app, Action::Mix(MHit::StripPower(3))), "the rest follow the layout");
         assert!(has(&app, Action::Fader(2)));
+        // A strip's style bar swaps the analog sections for the glitch grid: sixteen cells and the grid's amount, and
+        // no section knob, since a glitch module is placed in the grid rather than turned up.
+        crate::mixer::hit(&mut app, MHit::GlitchMode(3));
+        paint(&mut app, &mut c);
+        assert!(has(&app, Action::Mix(MHit::GlitchCell(3, 0))), "the grid's first step");
+        assert!(has(&app, Action::Mix(MHit::GlitchCell(3, 15))), "its last");
+        assert!(has(&app, Action::Knob(KnobId::Glitch(3))), "the grid's amount");
+        assert!(!has(&app, Action::Knob(KnobId::Strip(3, 0))), "the analog sections are away");
+        assert!(has(&app, Action::Mix(MHit::GlitchMode(3))), "and the bar stays, to go back");
     }
 
     /// Wide 2, Wide 3 and Wide alt draw the console and the strip's own meter side by side: the console gives up the

@@ -30,6 +30,9 @@ pub(crate) struct MixTrack {
     pub(crate) eq: os_dsp::mixer::TrackEq,
     /// The Analog Channel Strip, before the slots (plan v3 §6.1).
     pub(crate) strip: os_dsp::strip::Strip,
+    /// The Glitch strip, which runs in the Analog strip's place when the track chose it (`glitch_style`).
+    pub(crate) glitch: os_dsp::glitch::Glitch,
+    pub(crate) glitch_style: bool,
     /// Insert effects in slot order (applied before the fader).
     pub(crate) effects: Vec<FxSlot>,
     /// Slot switches and stored mix levels (0..12800) by slot, for hosted effects attached later.
@@ -202,6 +205,8 @@ impl MixTrack {
             threaded: true,
             eq: os_dsp::mixer::TrackEq::default(),
             strip: os_dsp::strip::Strip::new([0; 8], true),
+            glitch: os_dsp::glitch::Glitch::new(os_dsp::glitch::Pattern::OFF),
+            glitch_style: false,
             effects: Vec::new(),
             slot_on: [true; 10],
             slot_mix: [12800; 10],

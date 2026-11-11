@@ -1,5 +1,20 @@
 # Lemon Studio — todo.md (roadmap reference)
 
+## ✅ DONE 2026-11-12 — the glitcher: a second strip style per track
+- [x] **The strip's de-esser is a Filtertable-style table** (`e8eb539b`): sixteen constant-Q band-passes summed over the
+      dry signal, their gains a hand-drawn curve that drifts through the spectrum (12 s a cycle); the knob scales them
+      and is the on/off, so 0 is sample-exact. The de-esser DSP is gone.
+- [x] **The glitch grid** (`8beb7783`): `os-dsp/src/glitch.rs`, sixteen steps on their own clock (125 ms), each firing
+      STUT / CRSH / RVRS / GATE / RING from an 8192-frame ring, with `Pattern { steps: [u8; 16], amount }`.
+- [x] **The glitch mixer itself**: every track chooses Analog or Glitch (`MixerTrack::glitch_style`, `glitch`,
+      `glitch_amount`); the engine builds both and runs the chosen one, and the strip's chunk is version 8 (4 and 7
+      still read, 5 and 6 are the fork's SnapTune ones). The console's style bar swaps the analog sections for the grid:
+      a 4×4 of coloured cells, a click cycling a step's module, and one amount knob — no knob per module. Right-click
+      menu: Strip style, Amount, Clear grid. `KnobId::Glitch` is scriptable as `glitch:<track>`.
+- [ ] **Mixing modules from both strips in one custom strip** (asked for with the glitcher): needs a module list per
+      track rather than a style switch — plan it after the two consoles settle.
+- [ ] **A playhead on the grid**: `Glitch::step(rate)` already gives it; the app has no per-track engine readback yet.
+
 ## ✅ DONE 2026-11-12 — strip channel: gate → OTT; piano roll resizes
 - [x] **The strip's gate is a one-knob OTT** (`962b8418`): three bands at 250 Hz / 2.5 kHz, 8:1 down above -30 dB, 4:1
       up below it (+18 dB at most), the depth on word 3 and doubling as the dry / wet mix; the fork's gate code is gone.

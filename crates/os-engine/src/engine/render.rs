@@ -208,9 +208,14 @@ pub(crate) fn mix_track(lane: Lane, cx: &multicore::MixCx, s: &mut multicore::Mi
     if let Some((r, at, arm)) = tap.filter(|(_, _, a)| matches!(a.point, RecordPoint::External | RecordPoint::WithMixer)) {
         rec_input(r, t, at, arm, track.input, cx.io, buf, &mut s.rec);
     }
-    // The Analog Channel Strip, before the insert slots (plan v3 §6.1). A bypassed strip that has faded out is skipped:
-    // the track then passes through sample for sample (`Strip::idle`).
-    if !track.strip.idle() {
+    // The track's strip, before the insert slots (plan v3 §6.1): the Analog Channel Strip, or the Glitch strip in its
+    // place when the track chose it. A strip that is off and has faded out is skipped: the track then passes through
+    // sample for sample (`Strip::idle`, `Glitch::idle`).
+    if track.glitch_style {
+        if !track.glitch.idle() {
+            track.glitch.process(buf, cx.rate);
+        }
+    } else if !track.strip.idle() {
         track.strip.process(buf, cx.rate);
     }
     // A slot runs when its own switch is on and the track's slots are enabled (spec: audio/mixer.md).

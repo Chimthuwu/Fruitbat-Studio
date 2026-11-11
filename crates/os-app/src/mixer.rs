@@ -39,6 +39,10 @@ pub enum MHit {
     StripPower(u16),
     StripKind(u16),
     StripProfile(u16),
+    /// The glitch console's style bar (`.0`: the track), which swaps the strip between the analog sections and the grid,
+    /// and a grid cell (`.1`: the step, 0..16) — a click cycles the cell to the next module (`MCmd::GlitchStep`).
+    GlitchMode(u16),
+    GlitchCell(u16, u8),
     /// The strip's own panel button: shows or hides the console on that channel alone (`console_shown`), whatever the
     /// layout. Session state, not project data.
     StripPanel(u16),
@@ -110,6 +114,12 @@ pub enum MCmd {
     StripCompProfile(u16, u16),
     /// The table's amount on the track's strip (word 7; 0 = off).
     StripTable(u16, u16),
+    /// The glitch strip: its style switch on track `.0` (`MixerTrack::glitch_style`), a step's module (`.1` the step, `.2`
+    /// the module in `os_dsp::glitch::MODULES` order), the grid's amount word, and Clear grid (every step off).
+    StripStyle(u16, bool),
+    GlitchStep(u16, u8, u8),
+    GlitchAmount(u16, u16),
+    GlitchClear(u16),
     Solo(u16),
     /// Solo with the tracks routed into it too (spec: ui/mixer-track-commands.md §5).
     AltSolo(u16),
@@ -722,6 +732,36 @@ pub fn hit(app: &mut App, h: MHit) -> Option<String> {
                 let m = track_mut(s, n)?;
                 m.strip[5] = next;
                 m.strip_bypassed = false;
+                changed(s);
+                Some(())
+            });
+            None
+        }
+        // The glitch console's style bar and its grid: one step each, as the analog panel's controls are.
+        MHit::GlitchMode(n) => {
+            select(s, n, ctrl);
+            let glitch = track(s, n).is_some_and(|m| m.glitch_style);
+            let _ = edit(s, "Glitch strip", Region::Track(n), |s| {
+                let m = track_mut(s, n)?;
+                m.glitch_style = !glitch;
+                changed(s);
+                Some(())
+            });
+            None
+        }
+        MHit::GlitchCell(n, step) => {
+            select(s, n, ctrl);
+            let at = usize::from(step.min((os_dsp::glitch::STEPS - 1) as u8));
+            let next = track(s, n).map_or(1, |m| (m.glitch[at] + 1) % os_dsp::glitch::MODULES.len() as u8);
+            let _ = edit(s, "Glitch grid", Region::Track(n), |s| {
+                let m = track_mut(s, n)?;
+                m.glitch[at] = next;
+                // A step placed on a track that never chose the glitcher chooses it, and hears the grid at a level
+                // that can be heard: a cell clicked on a silent amount would do nothing at all.
+                m.glitch_style = true;
+                if m.glitch_amount == 0 {
+                    m.glitch_amount = os_dsp::glitch::glitch_word(0.7);
+                }
                 changed(s);
                 Some(())
             });
@@ -1881,6 +1921,26 @@ fn track_items(s: &State, n: u16) -> Vec<PItem> {
                 })
                 .collect(),
         ),
+        PItem::head("Glitch Strip"),
+        PItem::sub(
+            "Strip style",
+            vec![
+                PItem::new("Analog channel strip", mx(MCmd::StripStyle(n, false))).mark(Mark::Radio(t.is_some_and(|m| !m.glitch_style))),
+                PItem::new("Glitch strip", mx(MCmd::StripStyle(n, true))).mark(Mark::Radio(t.is_some_and(|m| m.glitch_style))),
+            ],
+        ),
+        PItem::sub(
+            "Amount",
+            [0u16, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+                .into_iter()
+                .map(|pct| {
+                    let label = if pct == 0 { "Off".to_string() } else { format!("{pct} %") };
+                    let now = t.map_or(0, |m| (os_dsp::glitch::glitch_amount(m.glitch_amount) * 100.0).round() as u16);
+                    PItem::new(label, mx(MCmd::GlitchAmount(n, os_dsp::glitch::glitch_word(f32::from(pct) / 100.0)))).mark(Mark::Radio(now == pct))
+                })
+                .collect(),
+        ),
+        PItem::new("Clear grid", mx(MCmd::GlitchClear(n))),
     ]
 }
 
@@ -2223,7 +2283,7 @@ pub fn run(app: &mut App, c: MCmd) -> Option<String> {
     // A slot's sidechain input is the track's own (its slot's saved state).
     // Quick Sidechain changes the destination's chain and the source's routing in one undo step.
     // The Analog Channel Strip is the track's own state: one undo step on that track (plan v3 Milestone 0).
-    if let MCmd::StripBypass(t) | MCmd::StripLowCut(t, _) | MCmd::StripOtt(t, _) | MCmd::StripDrive(t, _) | MCmd::StripDriveType(t, _) | MCmd::StripTame(t, _) | MCmd::StripComp(t, _) | MCmd::StripCompProfile(t, _) | MCmd::StripTable(t, _) = &c {
+    if let MCmd::StripBypass(t) | MCmd::StripLowCut(t, _) | MCmd::StripOtt(t, _) | MCmd::StripDrive(t, _) | MCmd::StripDriveType(t, _) | MCmd::StripTame(t, _) | MCmd::StripComp(t, _) | MCmd::StripCompProfile(t, _) | MCmd::StripTable(t, _) | MCmd::StripStyle(t, _) | MCmd::GlitchStep(t, _, _) | MCmd::GlitchAmount(t, _) | MCmd::GlitchClear(t) = &c {
         let t = *t;
         return crate::control::edit_app(app, "Analog channel strip", Region::Track(t), |app| run_now(app, c));
     }
@@ -2456,6 +2516,39 @@ fn run_now(app: &mut App, c: MCmd) -> Option<String> {
             if let Some(t) = track_mut(s, n) {
                 t.strip[7] = word;
                 t.strip_bypassed = false;
+                changed(s);
+            }
+            None
+        }
+        MCmd::StripStyle(n, glitch) => {
+            if let Some(t) = track_mut(s, n) {
+                t.glitch_style = glitch;
+                changed(s);
+            }
+            None
+        }
+        MCmd::GlitchStep(n, step, module) => {
+            if let Some(t) = track_mut(s, n) {
+                t.glitch[usize::from(step.min((os_dsp::glitch::STEPS - 1) as u8))] = module.min((os_dsp::glitch::MODULES.len() - 1) as u8);
+                t.glitch_style = true;
+                if t.glitch_amount == 0 {
+                    t.glitch_amount = os_dsp::glitch::glitch_word(0.7);
+                }
+                changed(s);
+            }
+            None
+        }
+        MCmd::GlitchAmount(n, word) => {
+            if let Some(t) = track_mut(s, n) {
+                t.glitch_amount = word;
+                t.glitch_style = true;
+                changed(s);
+            }
+            None
+        }
+        MCmd::GlitchClear(n) => {
+            if let Some(t) = track_mut(s, n) {
+                t.glitch = [0; 16];
                 changed(s);
             }
             None
@@ -4199,6 +4292,45 @@ mod tests {
         crate::history::undo(&mut a.state);
         assert_eq!(os_dsp::strip::comp_profile(word(&a, 5)), 0);
         assert!(!track(&a.state, 2).unwrap().strip_bypassed, "the switch stays on");
+    }
+
+    /// The glitch strip: the style bar and each grid cell write the track, one undo step each, and the track menu offers
+    /// the style, the amount and Clear grid (`MCmd::StripStyle`, `GlitchStep`, `GlitchAmount`, `GlitchClear`).
+    #[test]
+    fn the_glitch_strip_has_a_style_a_grid_and_an_amount() {
+        let mut a = app();
+        for m in &mut a.state.project.mixer {
+            m.id = os_model::Id(u32::from(m.index) + 1);
+        }
+        let g = |a: &App| track(&a.state, 2).unwrap().clone();
+        assert!(!g(&a).glitch_style, "a track starts on the analog strip");
+        let steps = a.state.history.at();
+        run(&mut a, MCmd::StripStyle(2, true));
+        assert!(g(&a).glitch_style);
+        assert_eq!(a.state.history.at(), steps + 1);
+        crate::mixer::hit(&mut a, MHit::GlitchCell(2, 3));
+        assert_eq!(g(&a).glitch[3], 1, "a click places the first module");
+        assert!(g(&a).glitch_amount > 0, "and brings the amount up so it is heard");
+        crate::mixer::hit(&mut a, MHit::GlitchCell(2, 3));
+        assert_eq!(g(&a).glitch[3], 2, "the next click moves it on");
+        assert_eq!(g(&a).glitch[4], 0, "the step beside it is untouched");
+        crate::mixer::hit(&mut a, MHit::GlitchMode(2));
+        assert!(!g(&a).glitch_style, "the bar is the style switch");
+        crate::mixer::hit(&mut a, MHit::GlitchMode(2));
+        assert!(g(&a).glitch_style);
+        run(&mut a, MCmd::GlitchStep(2, 5, 4));
+        assert_eq!(g(&a).glitch[5], 4);
+        run(&mut a, MCmd::GlitchAmount(2, 1234));
+        assert_eq!(g(&a).glitch_amount, 1234);
+        run(&mut a, MCmd::GlitchClear(2));
+        assert_eq!(g(&a).glitch, [0; 16]);
+        crate::history::undo(&mut a.state);
+        assert_eq!(g(&a).glitch[5], 4, "clearing is one undo step");
+        run(&mut a, MCmd::StripStyle(2, false));
+        let items = track_items(&a.state, 2);
+        let style = items.iter().find(|i| i.label == "Strip style").expect("the style menu");
+        assert!(style.children.iter().any(|c| c.label == "Glitch strip"));
+        assert!(items.iter().any(|i| i.label == "Clear grid"));
     }
 
     /// plan v3 Milestone 1: the Analog Channel Strip's switch and low cut are the track's own state, one undo step

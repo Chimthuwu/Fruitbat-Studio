@@ -500,6 +500,8 @@ impl Engine {
                         threaded: m.threaded,
                         eq: os_dsp::mixer::TrackEq::new(m.eq, rate),
                         strip: os_dsp::strip::Strip::new(m.strip, m.strip_bypassed),
+                        glitch: os_dsp::glitch::Glitch::new(os_dsp::glitch::Pattern { steps: m.glitch, amount: m.glitch_amount }),
+                        glitch_style: m.glitch_style,
                         effects,
                         slot_on: m.slot_on,
                         slot_mix: m.slot_mix.map(mix_level),

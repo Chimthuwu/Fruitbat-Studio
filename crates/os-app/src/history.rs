@@ -324,6 +324,7 @@ fn knob_name(id: KnobId) -> &'static str {
         KnobId::Swing => "Main swing",
         KnobId::Eq(..) => "Mixer track equalizer",
         KnobId::Strip(..) => "Analog channel strip",
+        KnobId::Glitch(_) => "Glitch strip",
         KnobId::Strum(_) => "Piano roll strum",
         KnobId::Arp(_) => "Piano roll arpeggiate",
         KnobId::PianoDlg(_) => "Piano roll tool",
