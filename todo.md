@@ -1,4 +1,38 @@
-# Lemon Studio — todo.md
+# Lemon Studio — todo.md (roadmap reference)
+
+This file tracks the open/executed state of the todo items. The canonical priority plan is in `docs/roadmap-2026-11-10.md` — reference that doc for the full rationale, audit findings, and ordering.
+
+## 🎯 NEW — Clip Launcher polish (2026-11-09 23:12, plan only — DO NOT EXECUTE yet)
+Reported after testing the fd73cb54 build. Needs a short audit pass (launcher cell rendering + hit handling,
+views/launcher.rs + launcher.rs) before executing — the F1 drop fix from wave 2 did NOT hold in practice.
+- [ ] **Drag & drop of audio samples into launcher cells still doesn't work** — no clip appears. Wave 2 claimed
+      a fix with a drop_file regression test, but live behaviour is unchanged: re-audit the whole chain (OS drop
+      reaching the launcher window → cell hit-test → drop_file's launcher branch → add_audio) with a runtime
+      trace, not just unit tests. Check whether the drop actually lands in the launcher window at all.
+- [ ] **Clips hard to see / no play-state affordance.** Each occupied clip cell gets a little play/stop button in
+      its top-right corner reflecting that clip's play state (playing / stopped / queued — Bitwig-style).
+- [ ] **Launcher tracks should match playlist tracks:**
+      1. Track headers/lanes fill with the track colour entirely, like the playlist.
+      2. Same header controls as playlist tracks (mute/solo/etc. — audit the playlist header control set).
+      3. A volume fader on each launcher track, like playlist tracks.
+- [ ] **Pan fader on ALL tracks** (playlist and launcher tracks alike) — new control; audit the track model/mixer
+      for where pan lives (os-model Track + mixer path) and both header layouts.
+
+## 🎯 NEW — Dock UI fitting + rename (2026-11-09 22:46, plan only — DO NOT EXECUTE yet)
+All in the docked device-rack tile UI (rack_ui.rs) and the kit editors. Needs a short audit pass first to pin
+exact file:line refs (rack_ui.rs size/fit logic, kit/eq.rs, kit/lemon.rs, kit/inst.rs).
+- [ ] **Device rename missing.** The tile context menu has no Rename — add it (same UX as the arranger's
+      audio-clip rename: inline edit on the device name, written back to the device/plugin state).
+- [ ] **Lemon Delay still shows generic UI in the dock** — likely its editor fails the fit check (too big for the
+      tile) and falls back to the generic panel. Fix the fit logic / provide a compact variant so it renders its
+      real UI docked.
+- [ ] **Parametric EQ dock UI slim-down.** The docked EQ must fit comfortably: remove the right-hand fader bank
+      from the docked view entirely (see screenshot — the 8 vertical dB faders) — those stay available via
+      pop-out only. The FREQ knob row and band handles stay docked.
+- [ ] **Fit Lemon Trio, Lemon Drum Sampler and Lemon Slicer comfortably in the rack tile.** Per-device compact
+      variants: Trio = fit as-is (audit what's overflowing); Drum Sampler = dock shows ONLY the 16 pads; right
+      clicking a pad opens a popout window with that pad's controls (tune/decay/level/etc.); Slicer = compact
+      variant that fits.
 
 ## 🎯 TODO — Rack / launcher / tracks work queue (audited 2026-11-09)
 Full plans with file:line refs in `docs/audit-2026-11-09-device-racks.md`, `-clip-launcher-bugs.md`,

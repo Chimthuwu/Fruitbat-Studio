@@ -20,9 +20,10 @@ use crate::icons::{self, Icon};
 pub const STRIP_W: f32 = 44.0;
 /// The gap a track's Separator puts before its strip (measured: 6 px).
 pub const SEP_W: f32 = 6.0;
-/// From the strips' left edge: the master strip's right edge, and the gap after it (and after the left-docked strips).
-const MASTER_END: f32 = 88.0;
+/// The gap after the master strip (and after the left-docked strips).
 const MASTER_GAP: f32 = 9.0;
+/// From the strips' left edge: the master strip's left edge (the "C" level-scale column comes before it).
+const MASTER_X: f32 = 44.0;
 
 /// Where the inserts' strips are (spec: ui/mixer.md §6.1 "Group, Layout and CPU entries"). Per part (docked left,
 /// middle, right) the tracks in track order, each with its x from the part's start and whether a separator's gap is
@@ -30,6 +31,8 @@ const MASTER_GAP: f32 = 9.0;
 pub struct Docks {
     pub parts: [Vec<(u16, f32, bool)>; 3],
     pub widths: [f32; 3],
+    /// The strips' width, the chosen layout's (`mx::strip_w`; Settings ▸ Mixer ▸ layout, in the mixer's title bar).
+    pub width: f32,
 }
 
 /// The inserts' display order (spec: model/track-model.md §5 "Mixer reorders to track order"): Classic mode in index
@@ -52,7 +55,7 @@ pub fn strip_order(s: &State) -> Vec<u16> {
 }
 
 pub fn docks(s: &State) -> Docks {
-    let mut d = Docks { parts: Default::default(), widths: [0.0; 3] };
+    let mut d = Docks { parts: Default::default(), widths: [0.0; 3], width: mx::strip_w(s) };
     for n in strip_order(s) {
         let (dock, sep) = mx::track(s, n).map_or((os_model::DOCK_MIDDLE, false), |m| (m.dock.min(os_model::DOCK_RIGHT), m.separator));
         let p = usize::from(dock);
@@ -61,7 +64,7 @@ pub fn docks(s: &State) -> Docks {
             d.widths[p] += SEP_W;
         }
         d.parts[p].push((n, d.widths[p], gap));
-        d.widths[p] += STRIP_W;
+        d.widths[p] += d.width;
     }
     d
 }
@@ -69,7 +72,7 @@ pub fn docks(s: &State) -> Docks {
 impl Docks {
     /// The scrolling middle part: after the master, the left-docked strips and the gap, up to the right-docked strips.
     pub fn area(&self, strips: Rect) -> Rect {
-        let x = strips.x + MASTER_END + MASTER_GAP + self.widths[0];
+        let x = strips.x + MASTER_X + self.width + MASTER_GAP + self.widths[0];
         Rect::new(x, strips.y, (strips.right() - self.widths[2] - x).max(0.0), strips.h)
     }
 
@@ -85,7 +88,7 @@ impl Docks {
         }
         let (p, off) = self.place(n)?;
         Some(match p {
-            0 => strips.x + MASTER_END + off,
+            0 => strips.x + MASTER_X + self.width + off,
             1 => self.area(strips).x + off - scroll,
             _ => self.area(strips).right() + off,
         })
@@ -209,6 +212,7 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
         return;
     }
     let ly = Ly::new(r);
+    let w = mx::strip_w(s);
 
     let strips = Rect::new(r.x, client.y, r.w - panel_w - 7.0, client.h);
     ui.c.fill_rect(Rect::new(r.x, client.y, r.w - panel_w, client.h), ui.t.s(0x232527));
@@ -216,9 +220,9 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
     let bottom = r.bottom();
 
     // Header row: "C" (scale) and "M" (master) on a lighter band.
-    ui.c.fill_rect(Rect::new(r.x + 1.0, ly.y(HEAD_Y0), 92.0, HEAD_Y1 - HEAD_Y0 + 1.0), ui.t.s(0x2b2e30));
+    ui.c.fill_rect(Rect::new(r.x + 1.0, ly.y(HEAD_Y0), MASTER_X + w, HEAD_Y1 - HEAD_Y0 + 1.0), ui.t.s(0x2b2e30));
     ui.c.text_center(Font::new(17), Rect::new(r.x + 12.0, ly.y(HEAD_Y0), 20.0, 21.0), ui.t.s(0x6d7275), "C");
-    ui.c.text_center(Font::new(17), Rect::new(r.x + 50.0, ly.y(HEAD_Y0), 22.0, 21.0), ui.t.s(0x6d7275), "M");
+    ui.c.text_center(Font::new(17), Rect::new(r.x + MASTER_X, ly.y(HEAD_Y0), w, 21.0), ui.t.s(0x6d7275), "M");
 
     // "C" column: the level scale with the current track's meter (spec: ui/mixer.md §9).
     let col = Rect::new(r.x + 9.0, ly.y(METER_Y0), 28.0, bottom - 156.0 - ly.y(METER_Y0));
@@ -316,8 +320,8 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
         icons::draw(ui.c, Icon::Plus, pb.inset(3.0), if hov { ui.t.tx(0xffffff) } else { ui.t.tx(0x9aa1a5) });
     }
     ui.c.pop_clip();
-    strip(ui, s, 0, r.x + 44.0, bottom, f, &ly);
-    for (p, x0) in [(0, strips.x + MASTER_END), (2, area.right())] {
+    strip(ui, s, 0, r.x + MASTER_X, bottom, f, &ly);
+    for (p, x0) in [(0, strips.x + MASTER_X + w), (2, area.right())] {
         for &(n, off, gap) in &docks.parts[p] {
             if gap {
                 separator(ui, x0 + off, sep_top, sep_bottom);
@@ -328,7 +332,7 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
 
     // Horizontal scroll bar under the strips.
     let sb = Rect::new(area.x + 13.0, bottom - 14.0, area.w - 20.0, 9.0);
-    super::scrollbar(ui, sb, false, s.mixer_scroll, area.w, docks.widths[1] + STRIP_W, crate::app::Scroll::MixerX);
+    super::scrollbar(ui, sb, false, s.mixer_scroll, area.w, docks.widths[1] + docks.width, crate::app::Scroll::MixerX);
     chevron(ui, area.x + 5.0, bottom - 9.5, false, ui.t.s(0x5d6366));
     cables(ui, s, strips, &docks, bottom);
 
@@ -336,11 +340,19 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
     resize_zones(ui, s, Win::Mixer, outer);
 }
 
+/// A strip's control column (`left` is its left edge): its knobs, its ⬇ and its send knobs are centred there, so the
+/// cables plug in exactly under them. Extra large keeps the column on the strip's left, beside its plugin list, so a
+/// strip's width no longer places it (`left + 22` used to be the centre of every layout: the cables then drew a second
+/// arrow and knob a few px off the real ones).
+fn strip_cx(s: &State, left: f32) -> f32 {
+    if s.mixer.layout >= 7 { left + 28.0 } else { left + crate::mixer::strip_w(s) / 2.0 }
+}
+
 /// The routing cables (spec: ui/mixer.md §5): one from the current track's ⬇ into each of its send knobs, sagging
 /// and swinging (crate::cable). Sockets on strips scrolled out of view still hold their cable's end.
 fn cables(ui: &mut Ui, s: &State, strips: Rect, docks: &Docks, bottom: f32) {
     let area = docks.area(strips);
-    let socket_x = |n: u16| docks.x(n, strips, s.mixer_scroll).unwrap_or(area.x) + 22.0;
+    let socket_x = |n: u16| strip_cx(s, docks.x(n, strips, s.mixer_scroll).unwrap_or(area.x));
     // Only the middle strips scroll: what is on the others is not clipped to the scrolling part.
     let fixed = |n: u16| !docks.scrolls(n);
     // Each cable is plugged in under the middle of its ⬇ and its knob, which are drawn again over the cables' ends.
@@ -413,9 +425,10 @@ fn title_tools(ui: &mut Ui, s: &State, r: Rect) {
     let pb = Rect::new(r.x + 109.0 + px, y - 8.0, 16.0, 16.0);
     let hov = ui.hit(pb, Action::Mix(MHit::AddAfter), "Add a new track after the selected track");
     icons::draw(ui.c, Icon::Plus, Rect::new(r.x + 110.0 + px, y - 7.0, 14.0, 14.0), if hov { ui.t.tx(0xffffff) } else { ui.t.tx(0xc4ccd0) });
-    let lb = Rect::new(r.x + 130.0 + px, r.y + 2.0, 50.0, 20.0);
+    let lb = Rect::new(r.x + 130.0 + px, r.y + 2.0, 70.0, 20.0);
     let hov = ui.hit(lb, Action::Mix(MHit::Layout), "Mixer layout");
-    ui.c.text(Font::new(17), r.x + 134.0 + px, r.y + 2.0, if hov { ui.t.tx(0xffffff) } else { ui.t.tx(0xb8c4cb) }, "Wide");
+    let name = crate::mixer::LAYOUTS[usize::from(s.mixer.layout.min(7))];
+    ui.c.text_clip(Font::new(17), r.x + 134.0 + px, r.y + 2.0, 66.0, if hov { ui.t.tx(0xffffff) } else { ui.t.tx(0xb8c4cb) }, name);
 }
 
 fn mix(a: Color, b: Color, t: f32) -> Color {
@@ -504,6 +517,23 @@ fn meter_bar(ui: &mut Ui, x: f32, w: f32, bottom: f32, db: f32, hold: f32, cfg: 
     }
 }
 
+/// Extra large (layout 7): one strip's plugin list, its ten effect slots as rows. A row opens its slot: the plugin's
+/// own window when it holds one, the palette when it is empty (the Michael Lane Edition's column).
+fn plugin_list(ui: &mut Ui, s: &State, n: u16, r: Rect) {
+    let rows = ((r.h / 19.0).floor() as usize).min(10);
+    for i in 0..rows {
+        let k = i as u8;
+        let b = Rect::new(r.x, r.y + 19.0 * i as f32, r.w, 18.0);
+        let name = mx::slot_name(s, n, k).unwrap_or_else(|| format!("Slot {}", i + 1));
+        ui.c.fill_rrect(b, 2.0, ui.t.s(0x1f2224));
+        if let Some(c) = mx::slot_color(s, n, k) {
+            ui.c.fill_rect(Rect::new(b.x + 2.0, b.y + 3.0, 2.0, b.h - 6.0), super::rgb(c));
+        }
+        ui.c.text_clip(Font::new(10), b.x + 6.0, b.y + 3.0, b.w - 9.0, ui.t.tx(0xc9d0d4), &name);
+        ui.hit(b, Action::Mix(MHit::TrackSlot(n, k)), name);
+    }
+}
+
 /// One strip; `left` is its left edge (44 px pitch). Columns: knobs at +22, meter / fader at +32,
 /// name and small controls at +12 (spec §7).
 fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, ly: &Ly) {
@@ -511,7 +541,13 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
     let track = s.project.mixer.iter().find(|m| m.index == n);
     let selected = s.selected_mixer == n;
     let also = !selected && mx::is_selected(s, n);
-    let (kx, mx, sx) = (left + 22.0, left + 32.0, left + 12.0);
+    // The strip's columns follow its width (the chosen layout's): the knobs and routing sit on its centre line, the
+    // meter 10 px right of it and the name / small controls 10 px left.
+    let w = crate::mixer::strip_w(s);
+    // Extra large (layout 7) keeps the strip's controls on its left and gives the rest to its plugin list column.
+    let extra = s.mixer.layout >= 7;
+    let c = strip_cx(s, left);
+    let (kx, mx, sx) = (c, c + 10.0, c - 10.0);
     let _ = f;
 
     // Body and the strip divider.
@@ -524,24 +560,37 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
         (false, true) => ui.t.s(0x26292b),
         (false, false) => ui.t.s(0x232527),
     };
+    // The track's colour: the strip's body is tinted with it (spec: ui/mixer.md §2, the Michael Lane Edition's
+    // traditional mixer), so a coloured track reads at a glance.
+    let tint = track.and_then(|m| m.color).map(super::rgb);
+    let body = tint.map_or(body, |c| body.mix(c, 0.22));
     let lemon = super::lemon(ui);
-    if lemon {
+    let finish = crate::views::mixer_finish::Finish::current();
+    if finish.on() {
+        // One of the console finishes from the Michael Lane Edition (Settings ▸ General ▸ Mixer style).
+        let card = Rect::new(left, ly.y(HEAD_Y1) + 1.0, w, bottom - ly.y(HEAD_Y1) - 1.0);
+        crate::views::mixer_finish::panel(ui, card, selected);
+        // A finish draws its own face, so its tint is laid over it rather than mixed into the body.
+        if let Some(c) = tint {
+            ui.c.fill_rect(card, c.with_alpha(26));
+        }
+    } else if lemon {
         // Lemon (spec: ui/lemon-design.md §8): each strip is a rounded card on the dark gap colour.
-        let card = Rect::new(left, ly.y(HEAD_Y1) + 1.0, STRIP_W, bottom - ly.y(HEAD_Y1) - 1.0);
+        let card = Rect::new(left, ly.y(HEAD_Y1) + 1.0, w, bottom - ly.y(HEAD_Y1) - 1.0);
         ui.c.fill_rect(card, ui.t.s(0x131517));
         ui.c.fill_rrect(Rect::new(card.x + 1.5, card.y + 1.0, card.w - 3.0, card.h - 4.0), lk::r_panel(t), body);
     } else {
-        ui.c.fill_rect(Rect::new(left, ly.y(HEAD_Y1) + 1.0, STRIP_W, bottom - ly.y(HEAD_Y1) - 1.0), body);
-        ui.c.fill_rect(Rect::new(left + STRIP_W - 1.0, ly.y(HEAD_Y1) + 1.0, 1.0, bottom - ly.y(HEAD_Y1) - 1.0), ui.t.s(0x1c1f21));
+        ui.c.fill_rect(Rect::new(left, ly.y(HEAD_Y1) + 1.0, w, bottom - ly.y(HEAD_Y1) - 1.0), body);
+        ui.c.fill_rect(Rect::new(left + w - 1.0, ly.y(HEAD_Y1) + 1.0, 1.0, bottom - ly.y(HEAD_Y1) - 1.0), ui.t.s(0x1c1f21));
     }
     // The whole strip selects (Ctrl adds, Shift renames); controls register on top of it (spec: ui/mixer.md §2).
-    ui.hit(Rect::new(left, ly.y(HEAD_Y0), STRIP_W, bottom - ly.y(HEAD_Y0)), Action::Mix(MHit::Strip(n)), mx::name(s, n));
-    let hov = ui.hovering(Rect::new(left, ly.y(HEAD_Y0), STRIP_W, ly.y(PANEL_Y1) - ly.y(HEAD_Y0)));
+    ui.hit(Rect::new(left, ly.y(HEAD_Y0), w, bottom - ly.y(HEAD_Y0)), Action::Mix(MHit::Strip(n)), mx::name(s, n));
+    let hov = ui.hovering(Rect::new(left, ly.y(HEAD_Y0), w, ly.y(PANEL_Y1) - ly.y(HEAD_Y0)));
 
     // Header number (insert strips only; the master's "M" sits in the fixed header band).
     if n != 0 {
-        let hr = Rect::new(left, ly.y(HEAD_Y0), STRIP_W, ly.y(HEAD_Y1) - ly.y(HEAD_Y0) + 1.0);
-        ui.c.fill_rect(hr, ui.t.s(0x2b2e30));
+        let hr = Rect::new(left, ly.y(HEAD_Y0), w, ly.y(HEAD_Y1) - ly.y(HEAD_Y0) + 1.0);
+        ui.c.fill_rect(hr, tint.map_or(ui.t.s(0x2b2e30), |c| ui.t.s(0x2b2e30).mix(c, 0.35)));
         if selected && lemon {
             lk::lit_in(ui.c, ui.t, Rect::new(hr.x + 3.0, hr.y + 2.0, hr.w - 6.0, hr.h - 4.0), lk::r_btn(t), false);
         } else if selected {
@@ -554,12 +603,12 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
             ui.c.pop_clip();
         }
         let c = if selected && lemon { lk::ink_on_lit(ui.t) } else if selected || hov { ui.t.tx(0x9aa1a5) } else { ui.t.s(0x6d7275) };
-        ui.c.text_center(Font::new(17), Rect::new(left, ly.y(HEAD_Y0), STRIP_W, 21.0), c, &n.to_string());
+        ui.c.text_center(Font::new(17), Rect::new(left, ly.y(HEAD_Y0), w, 21.0), c, &n.to_string());
     }
 
     // Dark head panel (name, LED, pan) with a rounded bottom.
-    ui.c.fill_rrect(Rect::new(left + 1.0, ly.y(PANEL_Y0), STRIP_W - 2.0, ly.y(PANEL_Y1) - ly.y(PANEL_Y0)), 9.0, ui.t.s(0x1d1f21));
-    ui.c.fill_rect(Rect::new(left + 1.0, ly.y(PANEL_Y0), STRIP_W - 2.0, 12.0), ui.t.s(0x1d1f21));
+    ui.c.fill_rrect(Rect::new(left + 1.0, ly.y(PANEL_Y0), w - 2.0, ly.y(PANEL_Y1) - ly.y(PANEL_Y0)), 9.0, ui.t.s(0x1d1f21));
+    ui.c.fill_rect(Rect::new(left + 1.0, ly.y(PANEL_Y0), w - 2.0, 12.0), ui.t.s(0x1d1f21));
 
     // Meter slot with its tick marks; the selected strip gets a green frame.
     let meter = Rect::new(mx - 7.5, ly.y(METER_Y0), 16.0, ly.y(METER_Y1) - ly.y(METER_Y0));
@@ -605,13 +654,20 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
         icons::draw(ui.c, ic, Rect::new(sx - 9.0, meter.bottom() - 12.0, 12.0, 12.0), name_c);
     }
     let lead = if icon.is_some() { 15.0 } else { 0.0 };
-    ui.c.push_clip(Rect::new(left + 2.0, ly.y(PANEL_Y0), 20.0, ly.y(METER_Y1) - ly.y(PANEL_Y0)));
+    // The clip follows the name's column, not a fixed 22 px from the strip's edge: a wider layout (Wide 2, Wide 3,
+    // Wide alt) pushed the rotated name past the old clip and cut it off.
+    ui.c.push_clip(Rect::new(sx - 7.0, ly.y(PANEL_Y0), 20.0, (ly.y(METER_Y1) - ly.y(PANEL_Y0)).max(0.0)));
     ui.c.text_vertical(Font::new(15), sx - 7.0, meter.bottom() - 1.0 - lead, name_c, &name);
     ui.c.pop_clip();
+    // Extra large (layout 7): the strip's own plugin list, right of its controls (the Michael Lane Edition's column).
+    if extra {
+        let lr = Rect::new(left + 57.0, ly.y(PANEL_Y0) + 4.0, (w - 61.0).max(20.0), (bottom - ly.y(PANEL_Y0) - 175.0).max(19.0));
+        plugin_list(ui, s, n, lr);
+    }
 
     let enabled = track.is_none_or(|m| m.enabled);
     ui.hit(Rect::new(kx - 7.0, ly.y(LED_Y) - 7.0, 14.0, 14.0), Action::Mix(MHit::Led(n)), "Mute / solo");
-    led(ui, kx, ly.y(LED_Y), enabled);
+    crate::views::mixer_finish::lamp(ui, kx, ly.y(LED_Y), enabled);
     let pan = KnobId::MixPan(n);
     ui.hit(Rect::new(kx - 14.0, ly.y(PAN_Y) - 14.0, 28.0, 28.0), Action::Knob(pan), s.knob_text(pan));
     mixer_knob(ui, kx, ly.y(PAN_Y), 10.5, 15.0, s.knob(pan), Some(true));
@@ -740,6 +796,10 @@ fn send_knob(ui: &mut Ui, s: &State, n: u16, kx: f32, ky: f32, level: f64) {
 /// `arc`: Some(true) draws the red value arc from the top (pan style), Some(false) from the start.
 fn mixer_knob(ui: &mut Ui, cx: f32, cy: f32, r: f32, halo: f32, value: f32, arc: Option<bool>) {
     let hov = ui.hovering(Rect::new(cx - halo, cy - halo, 2.0 * halo, 2.0 * halo));
+    let finish = crate::views::mixer_finish::Finish::current();
+    if finish.on() {
+        return crate::views::mixer_finish::knob(ui, cx, cy, r, value, arc.unwrap_or(false), hov);
+    }
     let look = os_ui::kit::KnobLook::Mixer { halo, arc: arc.is_some() };
     os_ui::kit::knob(ui.c, ui.t, cx, cy, r, value, arc.unwrap_or(false), look, os_ui::kit::State::hover(hov));
 }
@@ -774,6 +834,9 @@ fn fader_value(db: f32) -> f32 {
 
 /// Fader handle centred on (cx, cy): 14 × 23.
 fn fader_handle(ui: &mut Ui, cx: f32, cy: f32, selected: bool, hov: bool) {
+    if crate::views::mixer_finish::Finish::current().on() {
+        return crate::views::mixer_finish::fader(ui, cx, cy, selected, hov);
+    }
     os_ui::kit::fader_handle(ui.c, ui.t, cx, cy, selected, os_ui::kit::State::hover(hov));
 }
 

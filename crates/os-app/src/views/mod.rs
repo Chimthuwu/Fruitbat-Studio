@@ -20,6 +20,7 @@ pub mod midi_page;
 pub mod mondebug;
 pub mod settings;
 pub mod mixer;
+pub mod mixer_finish;
 pub mod piano;
 pub mod patterns;
 pub mod perf;
@@ -221,6 +222,10 @@ pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo) -> usize {
         if docked_at.is_some_and(|d| i < d) || s.is_detached(win) {
             continue;
         }
+        // A palette opened from a detached window paints in that window (`paint_detached`), not behind its native one.
+        if win == Win::PluginPalette && s.overlay_on.is_some_and(|w| s.is_detached(w) && s.shown(w)) {
+            continue;
+        }
         ui.win = Some(win);
         let r = s.win_rect(win);
         // A window paints inside its paint area (also what it marks as drawn, e.g. text's generous overhang).
@@ -339,6 +344,18 @@ pub fn paint_detached(ui: &mut Ui, s: &State, f: &FrameInfo, w: Win) -> usize {
         // As in the main window: the popups belong to this surface only while an overlay is open on it.
         if s.playlist.popup.is_some() || s.playlist.edit.is_some() {
             playlist::paint_overlays(ui, s);
+        }
+        // The plugin palette opened from here (an empty effect slot on a detached mixer) paints here: it is a window of
+        // the main window's, whose canvas would be behind this native one.
+        if s.shown(Win::PluginPalette) {
+            // Where the palette paints (its own top-left, `PaletteUi::pos`), not the floating window's stored rect: the
+            // clip has to hold it, or the main window's copy of that rect would cut the whole palette away.
+            let r = paint_area(s, Win::PluginPalette);
+            ui.win = Some(Win::PluginPalette);
+            ui.c.push_clip(r);
+            plugin_palette::paint(ui, s, f);
+            ui.c.pop_clip();
+            ui.win = None;
         }
     }
     if s.drag_on == Some(w) {

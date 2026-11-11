@@ -302,6 +302,9 @@ pub enum Action {
     PianoUndo,
     /// Piano-roll toolbar: make a tool active (spec: ui/piano-roll.md §9).
     PianoTool(Tool),
+    /// Piano roll: the note-colour tab's commands (colour group, apply to the selection, note type, the slide /
+    /// portamento drawing switches).
+    PianoCmd(crate::piano_tools::NCmd),
     /// Piano-roll time ruler: left-drag moves the play-start marker, right-drag selects a time
     /// range (spec: ui/piano-roll.md §10).
     PianoRuler,
@@ -4019,6 +4022,13 @@ impl App {
         if self.state.is_detached(w) {
             return self.mark_detached(Some(w));
         }
+        // The palette opened from a detached window paints in that window (`views::paint_detached`): a change to it
+        // repaints that window, which the main window's canvas no longer draws it in.
+        if w == Win::PluginPalette
+            && let Some(o) = self.state.overlay_on.filter(|&o| self.state.is_detached(o) && self.state.shown(o))
+        {
+            return self.mark_detached(Some(o));
+        }
         match w {
             Win::Playlist | Win::Mixer | Win::PianoRoll => self.damage_rect(self.state.win_area(w)),
             w => match crate::floating::placed(w) {
@@ -5820,6 +5830,13 @@ impl App {
             Some(r) => self.damage_rect(r.outset(8.0)),
             None => self.invalidate(),
         }
+    }
+
+    /// Where surface `w`'s last paint put its overlays: a detached window's popups, boxes and plugin palette (tests read
+    /// it to see which window painted them; the main window's are `overlays`).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn surface_overlays(&self, w: Win) -> &[os_ui::Rect] {
+        self.screens.iter().find(|d| d.0 == w).map_or(&[], |d| d.1.overlays.as_slice())
     }
 
     pub(crate) fn top_hit(&self, x: f32, y: f32) -> Option<&Hit> {
@@ -7710,7 +7727,8 @@ impl App {
             self.state.settings.scroll = (self.state.settings.scroll - (dy + dx) * 63.0).min(max).max(0.0);
             return None;
         }
-        if matches!(area, Some(Action::Palette(crate::plugin_palette::PalAct::List | crate::plugin_palette::PalAct::Row(_)) | Action::Scrollbar(Scroll::Palette))) {
+        // Anywhere in the palette scrolls its list: the rows, the empty well, the headings' margin and the scroll bar.
+        if matches!(area, Some(Action::Palette(_) | Action::Scrollbar(Scroll::Palette))) {
             self.palette_wheel(dy + dx);
             return Some(Win::PluginPalette);
         }
@@ -8619,6 +8637,13 @@ impl App {
             }
             Action::PianoNote(i) => {
                 let Some(&n) = piano::notes(s).get(i) else { return };
+                // A second press on the same note opens Note properties (Michael Lane Edition) instead of a move.
+                if crate::note_properties::double_click(s, i, self.mouse) {
+                    crate::note_properties::open(s, i);
+                    self.drag = None;
+                    self.invalidate();
+                    return;
+                }
                 piano::snapshot(s);
                 let sel = s.piano.selection(s.pattern, Some(ch));
                 let idx = if sel.contains(&i) && tool.moves_groups() {
@@ -8807,9 +8832,18 @@ impl App {
             }
             return;
         }
+        // The note-colour tab's commands run the piano-tools path, which needs the whole app.
+        if let Action::PianoCmd(c) = a {
+            if let Some(m) = crate::piano_tools::run(self, c) {
+                self.state.message = Some(m);
+            }
+            self.invalidate();
+            return;
+        }
         let s = &mut self.state;
         match a {
-            Action::PianoGrid | Action::PianoNote(_) | Action::PianoVelocity | Action::PianoKeys | Action::PianoRuler | Action::PianoSplitter | Action::Scrollbar(_) | Action::ScrollStep(..) => {}
+            // PianoCmd is handled above, before `a`'s match borrows the state.
+            Action::PianoGrid | Action::PianoNote(_) | Action::PianoVelocity | Action::PianoKeys | Action::PianoRuler | Action::PianoSplitter | Action::Scrollbar(_) | Action::ScrollStep(..) | Action::PianoCmd(_) => {}
             Action::PianoTool(t) => {
                 s.piano.tool = t;
                 s.piano.overlay = None;
@@ -9021,7 +9055,14 @@ impl App {
                 crate::patterns::run(s, crate::patterns::Cmd::FindFirst, (at.x, at.y));
             }
             Action::Pat(h) => crate::patterns::hit(s, h),
-            Action::Dlg(h) => self.dialog_click(h),
+            Action::Dlg(h) => {
+                // Note properties is a form of its own, so its parts are commands rather than the file dialog's.
+                if let crate::dialog::DHit::NoteProperties(c) = h {
+                    crate::note_properties::command(self, c)
+                } else {
+                    self.dialog_click(h)
+                }
+            }
             Action::SongInfo => self.close_song_info(),
             Action::Mix(crate::mixer::MHit::EqGraph) => {
                 if let Some(g) = self.top_hit(self.mouse.0, self.mouse.1).map(|h| h.rect) {
@@ -9251,7 +9292,8 @@ impl App {
             | Action::PlPopupSub(_)
             | Action::DeviceRack(_)
             | Action::Launcher(_)
-            | Action::ToggleLauncher => {}
+            | Action::ToggleLauncher
+            | Action::PianoCmd(_) => {}
         }
     }
 
@@ -13442,6 +13484,7 @@ mod tests {
             crate::dialog::Body::Shortcuts(_) => panic!("Manage shortcuts is on top"),
             crate::dialog::Body::TimeSig(_) => panic!("the time signature dialog is on top"),
             crate::dialog::Body::Markers(_) => panic!("Marker settings is on top"),
+            crate::dialog::Body::NoteProperties(_) => panic!("Note properties is on top"),
             crate::dialog::Body::Project(_) => panic!("a project form is on top"),
         }
     }

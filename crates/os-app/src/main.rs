@@ -47,6 +47,7 @@ mod rack_ui;
 mod launcher;
 mod midi_fx;
 mod note_fx;
+mod note_properties;
 mod dialog;
 mod floating;
 mod filedlg;

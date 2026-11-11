@@ -42,6 +42,38 @@ pub enum NCmd {
     StockLength(crate::playlist::Snap),
     /// Make a channel rack row the piano roll's channel (the title's channel menu).
     Target(usize),
+    /// The note-colour tab's dropdown: the colour groups, apply, and the selected notes' type.
+    NoteColorMenu,
+    /// The colour group new notes get (the low nibble of the note's `group` byte).
+    NoteColor(u8),
+    /// Give every target note the current colour group.
+    ApplyNoteColor,
+    /// Make the target notes normal (0), slide / glide (1) or portamento (2) notes.
+    SelectedNoteType(u8),
+    /// Toggle drawing new notes as slide / glide notes.
+    DrawSlide,
+    /// Toggle drawing new notes with their own portamento switch.
+    DrawPorta,
+}
+
+/// The sixteen colour groups' note colours, from the Michael Lane Edition's note-colour tab. Group 0 keeps the theme's
+/// ordinary note colour, as FL's does.
+const COLORS: [u32; 16] = [
+    0x9fcf8d, 0xdca4b6, 0xc5a7dd, 0xaba8df, 0x95b3dd, 0x8bc8d5, 0x8bd1bb, 0xbed08d, 0xd4cb88, 0xd8b080, 0xd99b88,
+    0xd99b9d, 0xc5aaba, 0xb2b5c6, 0x9bbeb7, 0xc8c5a0,
+];
+
+/// A note's fill colour for its colour group: the theme's ordinary colour for group 0, else the group's own colour.
+pub fn note_color(t: &os_theme::Palette, group: u8) -> os_ui::Color {
+    match group & 15 {
+        0 => t.note_top.mix(t.note_bottom, 0.6),
+        g => os_ui::Color::rgb(COLORS[usize::from(g)]),
+    }
+}
+
+/// The colour group new notes get: the last note clicked or edited's, as FL does.
+pub fn current_color(s: &State) -> u8 {
+    s.piano.last_controls.map_or(0, |n| n.group & 15)
 }
 
 fn item(label: &'static str, c: NCmd) -> PItem {
@@ -80,6 +112,29 @@ pub fn tools_menu(s: &State, x: f32, y: f32) -> Popup {
         item("Ghost channels", Ghosts).key("Alt+V").mark(Mark::Check(s.piano.ghosts)),
         item("Add time marker", AddMarker).key("Alt+T"),
     ];
+    Popup { x, y, items, sub: None, scroll: [0; 2] }
+}
+
+/// The note-colour tab's dropdown (ported from the Michael Lane Edition): the sixteen colour groups, then applying the
+/// colour and the note type to the selected notes.
+pub fn note_menu(s: &State, x: f32, y: f32) -> Popup {
+    use NCmd::*;
+    let now = current_color(s);
+    let mut items = vec![PItem::head("Note color group")];
+    for n in 0..16u8 {
+        items.push(PItem::new(format!("●  Color {:02}", n + 1), Cmd::Piano(NoteColor(n))).mark(Mark::Radio(now == n)));
+    }
+    let selected = !s.piano.selection(s.pattern, piano::channel(s)).is_empty();
+    items.push(PItem::head("Selected notes"));
+    for mut it in [
+        PItem::new("Apply current color", Cmd::Piano(ApplyNoteColor)),
+        PItem::new("Normal notes", Cmd::Piano(SelectedNoteType(0))),
+        PItem::new("Slide / glide notes", Cmd::Piano(SelectedNoteType(1))),
+        PItem::new("Portamento notes", Cmd::Piano(SelectedNoteType(2))),
+    ] {
+        it.enabled = selected;
+        items.push(it);
+    }
     Popup { x, y, items, sub: None, scroll: [0; 2] }
 }
 
@@ -296,6 +351,7 @@ pub fn target_menu(s: &State, x: f32, y: f32) -> Popup {
 /// Run a command; returns a status message.
 pub fn run(app: &mut App, cmd: NCmd) -> Option<String> {
     app.state.playlist.popup = None;
+    let mouse = app.mouse;
     let s = &mut app.state;
     // Quick quantize, Discard lengths and Quick chop use the piano roll's snap (spec: ui/piano-snap.md §6,
     // ui/global-snap.md §3).
@@ -342,6 +398,68 @@ pub fn run(app: &mut App, cmd: NCmd) -> Option<String> {
         NCmd::AddMarker => {
             let tick = if app.transport.playing() && !app.transport.song() { app.transport.tick() as u32 } else { app.state.piano.marker };
             return Some(add_marker(&mut app.state, tick));
+        }
+        NCmd::NoteColorMenu => {
+            let (x, y) = mouse;
+            s.playlist.popup = Some(note_menu(s, x, y));
+            return None;
+        }
+        NCmd::NoteColor(g) => {
+            let c = g & 15;
+            let mut t = s.piano.last_controls.unwrap_or_else(|| Note::step(0, 0));
+            t.group = (t.group & 0xf0) | c;
+            s.piano.last_controls = Some(t);
+            format!("Piano roll: note color {}", c + 1)
+        }
+        NCmd::ApplyNoteColor => {
+            let c = current_color(s);
+            let f = |ns: Vec<Note>| {
+                ns.into_iter()
+                    .map(|mut n| {
+                        n.group = (n.group & 0xf0) | c;
+                        n
+                    })
+                    .collect()
+            };
+            done(apply(s, |_, ns| f(ns)), "color applied")
+        }
+        NCmd::SelectedNoteType(kind) => {
+            let f = |ns: Vec<Note>| {
+                ns.into_iter()
+                    .map(|mut n| {
+                        match kind {
+                            1 => {
+                                n.set_slide(true);
+                                n.set_porta(false);
+                            }
+                            2 => {
+                                n.set_porta(true);
+                                n.set_slide(false);
+                            }
+                            _ => {
+                                n.set_slide(false);
+                                n.set_porta(false);
+                            }
+                        }
+                        n
+                    })
+                    .collect()
+            };
+            done(apply(s, |_, ns| f(ns)), "note type")
+        }
+        NCmd::DrawSlide => {
+            s.piano.draw_slide = !s.piano.draw_slide;
+            if s.piano.draw_slide {
+                s.piano.draw_porta = false;
+            }
+            format!("Piano roll: slide notes {}", if s.piano.draw_slide { "on" } else { "off" })
+        }
+        NCmd::DrawPorta => {
+            s.piano.draw_porta = !s.piano.draw_porta;
+            if s.piano.draw_porta {
+                s.piano.draw_slide = false;
+            }
+            format!("Piano roll: portamento notes {}", if s.piano.draw_porta { "on" } else { "off" })
         }
         NCmd::Snap(p) => return Some(crate::piano_snap::set(s, p)),
         NCmd::StockLength(sn) => return Some(crate::piano_snap::set_length(s, sn)),
@@ -524,6 +642,29 @@ mod tests {
 
     fn spans(ns: &[Note]) -> Vec<(u32, u32, u16)> {
         ns.iter().map(|n| (n.position, n.length, n.key)).collect()
+    }
+
+    /// The note-colour tab's colour groups and its slide / portamento switches reach newly drawn notes.
+    #[test]
+    fn note_colour_and_draw_modes_reach_new_notes() {
+        use crate::app::App;
+        let mut a = App::new(None);
+        a.state.project = crate::app::test_project();
+        a.state.selected_channel = 0;
+        run(&mut a, NCmd::NoteColor(5));
+        assert_eq!(current_color(&a.state), 5, "the last colour picked is the one new notes get");
+        run(&mut a, NCmd::DrawSlide);
+        let i = crate::piano::add_note(&mut a.state, 0, 0, 60);
+        let n = crate::piano::notes(&a.state)[i];
+        assert_eq!(n.group & 15, 5);
+        assert!(n.slide(), "a slide note while the switch is on");
+        // The two switches are exclusive, as in the Edition: turning portamento on turns slide off.
+        run(&mut a, NCmd::DrawSlide);
+        run(&mut a, NCmd::DrawPorta);
+        let i = crate::piano::add_note(&mut a.state, 0, 96, 67);
+        let n = crate::piano::notes(&a.state)[i];
+        assert!(n.porta());
+        assert!(!n.slide());
     }
 
     #[test]

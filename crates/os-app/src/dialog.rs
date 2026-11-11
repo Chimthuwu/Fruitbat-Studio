@@ -232,6 +232,8 @@ pub enum Body {
     Project(crate::project_forms::Form),
     /// Prepare for performance mode's Marker settings (`crate::perform`).
     Markers(crate::perform::MarkerForm),
+    /// A note's properties, opened by double-clicking it (`crate::note_properties`).
+    NoteProperties(crate::note_properties::Form),
 }
 
 /// A dialog on the stack (`State::dialogs`, bottom to top; only the top one takes input).
@@ -287,6 +289,8 @@ pub enum DHit {
     MarkerValue(bool),
     /// Rename project, Save as and New project: their parts (`crate::project_forms`).
     Form(crate::project_forms::FHit),
+    /// Note properties: a field (index), the slide / portamento switches, Apply and Cancel.
+    NoteProperties(crate::note_properties::Command),
 }
 
 /// A one-line text field: the text, the caret (in characters) and whether all of it is selected (typing replaces it).
@@ -515,6 +519,8 @@ impl App {
                 self.state.playlist.popup = None;
                 Then::PerfMarkers(f.count, f.spacing)
             }
+            // Note properties applies itself (`crate::note_properties`); a plain close does nothing.
+            Body::NoteProperties(_) => Then::Nothing,
         };
         // The replace question answers the Save dialog under it.
         if let Then::Replace(p) = then {
@@ -534,13 +540,14 @@ impl App {
             Body::Shortcuts(_) => Reply::Button(Answer::Cancel),
             Body::TimeSig(_) | Body::Markers(_) => Reply::Button(Answer::Cancel),
             Body::Project(_) => Reply::Button(Answer::Cancel),
+            Body::NoteProperties(_) => Reply::Button(Answer::Cancel),
         })
     }
 
     fn top_file(&mut self) -> Option<&mut FileDlg> {
         match &mut self.state.dialogs.last_mut()?.body {
             Body::File(f) => Some(f),
-            Body::Msg(_) | Body::Shortcuts(_) | Body::TimeSig(_) | Body::Markers(_) | Body::Project(_) => None,
+            Body::Msg(_) | Body::Shortcuts(_) | Body::TimeSig(_) | Body::Markers(_) | Body::Project(_) | Body::NoteProperties(_) => None,
         }
     }
 
@@ -594,7 +601,7 @@ impl App {
             DHit::Button(i) => {
                 let a = match &m.body {
                     Body::Msg(msg) => msg.buttons.get(i).copied(),
-                    Body::File(_) | Body::Shortcuts(_) | Body::TimeSig(_) | Body::Markers(_) | Body::Project(_) => None,
+                    Body::File(_) | Body::Shortcuts(_) | Body::TimeSig(_) | Body::Markers(_) | Body::Project(_) | Body::NoteProperties(_) => None,
                 };
                 if let Some(a) = a {
                     self.answer(Reply::Button(a));
@@ -701,6 +708,10 @@ impl App {
     pub(crate) fn dialog_key(&mut self, key: &Key, ctrl: bool, alt: bool) {
         self.invalidate();
         let shift = self.shift;
+        // Note properties keeps its own fields' focus and typing (`crate::note_properties`).
+        if matches!(self.state.dialogs.last().map(|d| &d.body), Some(Body::NoteProperties(_))) {
+            return crate::note_properties::key(self, key, ctrl, alt);
+        }
         let Some(m) = self.state.dialogs.last_mut() else { return };
         match &mut m.body {
             Body::Msg(msg) => {
@@ -756,6 +767,8 @@ impl App {
                     self.answer(reply);
                 }
             }
+            // Note properties is handled above, before this match borrows the form (`crate::note_properties::key`).
+            Body::NoteProperties(_) => {}
         }
     }
 
@@ -800,7 +813,7 @@ impl App {
     pub fn top_message(&self) -> Option<(String, String)> {
         match &self.state.dialogs.last()?.body {
             Body::Msg(m) => Some((m.title.clone(), m.plain())),
-            Body::File(_) | Body::Shortcuts(_) | Body::TimeSig(_) | Body::Markers(_) | Body::Project(_) => None,
+            Body::File(_) | Body::Shortcuts(_) |            Body::TimeSig(_) | Body::Markers(_) | Body::Project(_) | Body::NoteProperties(_) => None,
         }
     }
 }

@@ -14,6 +14,7 @@ use super::{resize_zones, window_body, FrameInfo};
 use crate::app::{Action, Live, Scroll, State, Ui, Win};
 use crate::icons::{self, Icon};
 use crate::piano::{self, Geom, Lane, Overlay, Tool};
+use crate::piano_tools::NCmd;
 
 /// Default grid row pitch: 17 px of fill plus a 1 px separator (§3); the vertical zoom changes it (§3a).
 pub const ROW: f32 = 18.0;
@@ -147,9 +148,39 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
     let ink = green.shade(-0.3);
     ui.c.polyline(&[(tab.right() - 15.0, tab.y + 16.0), (tab.right() - 10.0, tab.y + 16.0), (tab.right() - 7.0, tab.y + 7.0), (tab.right() - 3.0, tab.y + 7.0)], 1.6, ink);
     ui.c.fill_polygon(&[(tab.right() - 4.0, tab.bottom() - 18.0), (tab.right() - 4.0, tab.bottom() - 5.0), (tab.right() - 17.0, tab.bottom() - 5.0)], ink);
-    // Note colours: not available yet, greyed out.
-    ui.off(tab, "Note color");
-    ui.veil(tab, t.window_title);
+    // Note-colour tab (ported from the Michael Lane Edition): a colour chip that opens the sixteen colour groups, and
+    // the two switches that make newly drawn notes slide / glide notes or portamento notes. Both default off.
+    let group = crate::piano_tools::current_color(s);
+    let swatch = crate::piano_tools::note_color(t, group);
+    let chip = Rect::new(tab.x + 3.0, tab.y + 3.0, 41.0, 19.0);
+    let hc = ui.hit(
+        chip,
+        Action::PianoCmd(NCmd::NoteColorMenu),
+        "Note color: choose a color group; apply color / type to the selected notes",
+    );
+    ui.c.fill_rrect(chip, 3.0, swatch);
+    ui.c.stroke_rrect(chip, 3.0, 1.0, if hc { t.accent } else { swatch.shade(-0.25) });
+    let swatch_ink = Color::rgb(0x15221a);
+    ui.c.text_center(Font::new(11), Rect::new(chip.x, chip.y, 29.0, chip.h), swatch_ink, &format!("{:02}", group + 1));
+    os_ui::kit::triangle(ui.c, chip.right() - 7.0, chip.cy(), 3.0, os_ui::kit::Dir::Down, swatch_ink);
+    for (slide, on, y, cmd, hint) in [
+        (false, s.piano.draw_porta, tab.y + 3.0, NCmd::DrawPorta, "Portamento notes: toggle glide into newly drawn notes"),
+        (true, s.piano.draw_slide, tab.y + 22.0, NCmd::DrawSlide, "Slide / glide notes: the note length sets the slide duration"),
+    ] {
+        let b = Rect::new(tab.x + 47.0, y, 21.0, 16.0);
+        let hb = ui.hit(b, Action::PianoCmd(cmd), hint);
+        ui.c.fill_rrect(b, 3.0, if on { t.accent } else if hb { t.button_hi } else { ui.t.s(0x1d1f21) });
+        let ink = if on { ui.t.s(0x1d1f21) } else { t.text };
+        if slide {
+            ui.c.fill_polygon(&[(b.x + 5.0, b.bottom() - 4.0), (b.right() - 5.0, b.y + 4.0), (b.right() - 5.0, b.bottom() - 4.0)], ink);
+        } else {
+            ui.c.polyline(
+                &[(b.x + 4.0, b.bottom() - 5.0), (b.x + 8.0, b.bottom() - 5.0), (b.x + 13.0, b.y + 4.0), (b.right() - 3.0, b.y + 4.0)],
+                1.5,
+                ink,
+            );
+        }
+    }
 
     overview(ui, s, &l, &g, notes, ch);
     // A time-signature marker shows its signature (spec: ui/pattern-time-signature.md §2).
@@ -189,7 +220,9 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
             // Muted (§9): grey body, measured from FL.
             (ui.t.s(0x6d7276), ui.t.s(0x63686c), ui.t.s(0x474a4d), ui.t.tx(0xc4c8cc))
         } else {
-            (t.note_top, t.note_bottom, t.note_rim, t.note_text)
+            // The note's colour group tints its body (group 0 keeps the theme's ordinary notes).
+            let base = crate::piano_tools::note_color(t, n.group & 15);
+            (base, base.shade(-0.10), base.shade(-0.35), t.note_text)
         };
         let body = Rect::new(nr.x + 1.0, nr.y + 1.0, (nr.w - 2.0).max(1.0), nr.h - 2.0);
         if lemon {

@@ -241,9 +241,16 @@ pub fn rows(s: &State) -> Vec<Row> {
             continue;
         }
         let row = |at: usize| Row::Plugin { effect, at };
-        let favs: Vec<usize> = (0..list.len()).filter(|&i| list[i].favorite).collect();
-        let rest: Vec<usize> = (0..list.len()).filter(|&i| !list[i].favorite).collect();
         let head = |label: &str| Row::Head { label: label.into(), major: false };
+        // Lemon Studio's own plugins are built in, so they come first, ahead of everything scanned (the device rack's
+        // browser lists them first too, `rack_rows`).
+        let native: Vec<usize> = (0..list.len()).filter(|&i| list[i].builtin).collect();
+        if !native.is_empty() {
+            v.push(head("Lemon Studio"));
+            v.extend(native.into_iter().map(row));
+        }
+        let favs: Vec<usize> = (0..list.len()).filter(|&i| !list[i].builtin && list[i].favorite).collect();
+        let rest: Vec<usize> = (0..list.len()).filter(|&i| !list[i].builtin && !list[i].favorite).collect();
         if !favs.is_empty() {
             v.push(head("Favourites"));
             v.extend(favs.iter().map(|&i| row(i)));
@@ -416,8 +423,19 @@ pub fn count_text(s: &State, rows: &[Row]) -> String {
 
 /// The window's rect: its place, its height at most the workspace's less a margin.
 pub fn rect(s: &State) -> os_ui::Rect {
-    let work = s.work_rect();
+    let work = room(s);
     os_ui::Rect::new(s.palette.pos.0, s.palette.pos.1, W, height(work.h))
+}
+
+/// Where the palette may sit: the window it is open on. A detached window's own canvas has no browser, toolbar band or
+/// device rack beside it, so the workspace's rect (`State::work_rect`) would place the palette outside it, where its own
+/// window cannot show it.
+fn room(s: &State) -> os_ui::Rect {
+    match s.surface.filter(|&w| s.is_detached(w) && s.shown(w)) {
+        // On a detached surface `State::screen` is that window's own canvas (`App::on_surface`).
+        Some(_) => os_ui::Rect::new(0.0, 0.0, s.screen.0, s.screen.1),
+        None => s.work_rect(),
+    }
 }
 
 fn height(work_h: f32) -> f32 {
@@ -563,7 +581,7 @@ impl App {
         let s = &mut self.state;
         s.menu_open = None;
         s.playlist.popup = None;
-        let work = s.work_rect();
+        let work = room(s);
         let h = height(work.h);
         let x = at.0.min(work.right() - W).max(work.x);
         let y = at.1.min(work.bottom() - h).max(work.y);
@@ -582,6 +600,9 @@ impl App {
             p.midi_fx.clear();
         }
         reset(s);
+        // What it opens and changes belongs to the surface it was opened on: a detached mixer's own window paints it
+        // there (`views::paint_detached`), as that window would otherwise cover the main window's.
+        s.overlay_on = s.surface;
         s.raise(Win::PluginPalette);
         self.invalidate();
     }
@@ -813,6 +834,26 @@ mod tests {
             .collect();
         assert_eq!(majors, ["Effects", "Installed effects"], "an audio track's sections\n{majors:?}");
         assert!(!rack.iter().any(|r| matches!(r, Row::Plugin { effect: false, .. })), "no instruments on an audio track");
+    }
+
+    /// The Add effect and Add instrument lists put Lemon Studio's own plugins first, ahead of the scanned ones: they are
+    /// built in, so they are the ones a user is most likely after and the hardest to tell apart from third-party ones.
+    #[test]
+    fn the_lists_put_the_lemon_studio_plugins_first() {
+        let mut app = app();
+        for (target, effect) in [(Target::Fx(None), true), (Target::Gen(None), false)] {
+            app.open_plugin_palette(target, (0.0, 0.0), None);
+            let r = rows(&app.state);
+            assert_eq!(r.first(), Some(&Row::Head { label: "Lemon Studio".into(), major: false }), "a heading first: {r:?}");
+            let list = if effect { &app.state.plugdb.lists.fx } else { &app.state.plugdb.lists.gens };
+            let native: Vec<String> = list.iter().filter(|e| e.builtin).map(|e| e.label.clone()).collect();
+            assert!(!native.is_empty(), "the test app has built-in {} plugs", if effect { "effect" } else { "instrument" });
+            let shown = labels(&app);
+            assert_eq!(&shown[..native.len()], native.as_slice(), "the built-ins come first, in the list's order: {shown:?}");
+            let scanned = if effect { "Space Reverb" } else { "Test Synth" };
+            let at = shown.iter().position(|l| l == scanned).expect("a scanned plugin is listed");
+            assert!(at >= native.len(), "only after every built-in: {scanned} at {at}\n{shown:?}");
+        }
     }
 
     /// F8 opens the palette with the keyboard in its search; typing filters both kinds, ranked by where the text is

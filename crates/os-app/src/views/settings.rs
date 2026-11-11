@@ -717,6 +717,8 @@ pub fn page(tab: usize, s: &State) -> Vec<Group> {
                 Check("Thick lines", false),
                 Check("High visibility", false),
                 combo("Off", 146.0, "Colorful waveforms"),
+                // The console finishes of the Michael Lane Edition (settings ▸ General ▸ Mixer).
+                combo(crate::prefs::choice(&crate::prefs::MIXER_STYLE), 146.0, crate::prefs::MIXER_STYLE.label),
             ]),
             gf("Language", false, vec![
                 combo("English (US) (en)", 176.0, "Language"),

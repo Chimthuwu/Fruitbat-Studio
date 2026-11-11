@@ -16,6 +16,7 @@ use crate::app::{Action, State, Ui};
 use crate::dialog::{Body, DHit, Field, Kind, Modal, Msg};
 use crate::filedlg::{self as fd, FileDlg, Focus, Mode, PlaceKind, SortBy, HEAD_H, ROW_H};
 use crate::icons::{self, Icon};
+use crate::note_properties;
 use crate::timesig::SigForm;
 
 /// The frame's outer border, its colour (caption and button band), the body panel and its edge lines (spec §1a).
@@ -55,6 +56,7 @@ pub fn paint(ui: &mut Ui, s: &State) {
             Body::TimeSig(f) => sig_box(ui, s, m, f),
             Body::Markers(f) => markers_box(ui, s, m, f),
             Body::Project(f) => super::project_forms::paint(ui, s, m, f),
+            Body::NoteProperties(f) => note_props_box(ui, s, m, f),
         }
     }
 }
@@ -314,6 +316,55 @@ fn sig_box(ui: &mut Ui, s: &State, m: &Modal, f: &SigForm) {
     let down = ui.down(b, &act);
     let hov = ui.hit(b, act, "Enter");
     button(ui, b, "Accept", true, hov, down, false);
+}
+
+/// Note properties (the Michael Lane Edition, `crate::note_properties`): eight value fields in two columns, the slide /
+/// portamento switches, a message line and Apply / Cancel.
+fn note_props_box(ui: &mut Ui, s: &State, m: &Modal, f: &crate::note_properties::Form) {
+    use crate::note_properties::{Command, LABELS};
+    let t = ui.t;
+    let font = Font::new(13);
+    let lh = ui.c.line_height(font);
+    let r = place(s, m, 460.0, 384.0);
+    frame(ui, r, "Note properties");
+    panel(ui, Rect::new(r.x + 5.0, r.y + 28.0, r.w - 10.0, r.h - 34.0));
+    let head = format!("Key {} — {} note(s)", f.anchor.key, f.original.len());
+    ui.c.text(font, r.x + 18.0, r.y + 40.0, t.text, &head);
+    ui.c.text(Font::new(11), r.x + 18.0, r.y + 62.0, t.text_dim, "Only changed properties apply to the selected notes.");
+    for (i, label) in LABELS.iter().enumerate() {
+        let x = r.x + 18.0 + (i % 2) as f32 * 216.0;
+        let y = r.y + 84.0 + (i / 2) as f32 * 51.0;
+        ui.c.text(Font::new(11), x, y, t.text_dim, label);
+        let b = Rect::new(x, y + 16.0, 208.0, 26.0);
+        let on = f.focus == i;
+        ui.c.fill_rect(b, t.s(WELL));
+        ui.c.stroke_rrect(b, 3.0, 1.0, if on { t.accent } else { t.s(WELL_LINE) });
+        if on && f.fields[i].all {
+            ui.c.stroke_rrect(b.inset(2.0), 2.0, 1.0, FOCUS_BLUE);
+        }
+        ui.c.text(font, b.x + 7.0, (b.y + (b.h - lh) / 2.0).round(), t.text, &f.fields[i].text);
+        if on {
+            let cx = b.x + 7.0 + ui.c.text_width(font, f.fields[i].before_caret());
+            ui.c.line(cx, b.y + 5.0, cx, b.bottom() - 5.0, 1.0, t.accent);
+        }
+        hit(ui, b, DHit::NoteProperties(Command::Field(i)), label);
+    }
+    for (i, (label, on, c)) in [("Slide / glide", f.slide, Command::Slide), ("Portamento", f.porta, Command::Porta)].into_iter().enumerate() {
+        let b = Rect::new(r.x + 18.0 + i as f32 * 216.0, r.y + 306.0, 208.0, 30.0);
+        let hov = hit(ui, b, DHit::NoteProperties(c), label);
+        ui.c.fill_rrect(b, 3.0, if on { t.accent } else { t.button_hi });
+        let ink = if on { Color::rgb(0x171914) } else if hov { t.tx(0xffffff) } else { t.text };
+        ui.c.text_center(font, b, ink, &format!("{label}: {}", if on { "on" } else { "off" }));
+    }
+    let msg = if f.message.is_empty() { "Slide length sets the glide time. Enter applies; Esc cancels." } else { f.message.as_str() };
+    ui.c.text_clip(Font::new(11), r.x + 18.0, r.y + 346.0, r.w - 36.0, t.text_dim, msg);
+    for (i, (label, c, primary)) in [("Cancel", Command::Cancel, false), ("Apply", Command::Apply, true)].into_iter().enumerate() {
+        let b = Rect::new(r.right() - 222.0 + i as f32 * 106.0, r.bottom() - 46.0, 98.0, 30.0);
+        let hov = hit(ui, b, DHit::NoteProperties(c), if primary { "Enter" } else { "Esc" });
+        ui.c.fill_rrect(b, 3.0, if primary { t.accent } else { t.button_hi });
+        let ink = if primary { Color::rgb(0x171914) } else if hov { t.tx(0xffffff) } else { t.text };
+        ui.c.text_center(font, b, ink, label);
+    }
 }
 
 /// Prepare for performance mode's Marker settings (spec: ui/performance-mode.md §1): Marker count and Spacing (in

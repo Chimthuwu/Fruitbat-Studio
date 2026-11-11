@@ -50,6 +50,8 @@ pub enum MHit {
     SlotName(u8),
     SlotArrow(u8),
     SlotLed(u8),
+    /// Extra large (layout 7): slot `k` of strip `n` in that strip's own plugin list column.
+    TrackSlot(u16, u8),
     /// The level scale column.
     Scale,
     /// The current track's equaliser graph: a press grabs the band nearest the cursor's frequency.
@@ -106,8 +108,10 @@ pub enum MCmd {
     RenderWave(u16),
     /// Route the selected tracks to `dst`: only = drop their other routes, side = sidechain (level 0).
     Route { dst: u16, only: bool, side: bool },
-    /// Layout menu: Wide (the only layout drawn; the others are greyed out).
+    /// Layout menu: the stock layout the strips are drawn in (`LAYOUTS`; Extra large adds the plugin list column).
     Layout(u8),
+    /// The console finish the strips are drawn in, the same setting as Settings ▸ General ▸ Mixer style.
+    Style(usize),
     /// Options ▸ Cable physics: open / close the cables' debug panel (Lemon Studio's own).
     CablePhysics,
     /// General settings ▸ Animations: simulate the cables (true) or hang them still; kept for the next start.
@@ -211,8 +215,17 @@ pub enum FxReq {
 }
 
 pub const LAYOUTS: [&str; 8] = ["Compact", "Compact 2", "Compact alt", "Wide", "Wide 2", "Wide 3", "Wide alt", "Extra large"];
-/// Index of "Wide" (the only layout drawn).
+/// Index of "Wide", the layout the mixer was drawn in before the others were ported.
 pub const WIDE: u8 = 3;
+
+/// Each layout's strip width, in `LAYOUTS` order (the Michael Lane Edition's stock widths): the strip's columns
+/// follow the width, so a narrower layout shows more inserts and a wider one more room per control.
+pub const LAYOUT_W: [f32; 8] = [40.0, 48.0, 40.0, 44.0, 64.0, 80.0, 56.0, 132.0];
+
+/// The width the strips are drawn at: the chosen layout's (`LAYOUTS[s.mixer.layout]`, Wide's 44 px by default).
+pub fn strip_w(s: &State) -> f32 {
+    LAYOUT_W[usize::from(s.mixer.layout.min(7))]
+}
 
 /// Mixer state that is not project data.
 pub struct MixerUi {
@@ -691,6 +704,17 @@ pub fn hit(app: &mut App, h: MHit) -> Option<String> {
         }
         MHit::OutLatency => {
             s.playlist.popup = Some(latency_menu(s, s.selected_mixer, false, at.0, at.1 + 10.0));
+            None
+        }
+        // Extra large's plugin list: a filled slot opens its plugin, an empty one the effect palette for it, as the
+        // slot panel's rows do.
+        MHit::TrackSlot(n, i) => {
+            select(s, n, false);
+            if slot_name(s, n, i).is_some() {
+                s.mixer.pending.push(FxReq::Show { track: n, slot: i });
+            } else {
+                effect_palette(app, i, at);
+            }
             None
         }
         MHit::Scale | MHit::EqGraph => None,
@@ -1710,6 +1734,17 @@ pub fn options_menu(s: &State, x: f32, y: f32) -> Popup {
                 PItem::new("Extra properties", Cmd::Mixer(MCmd::ViewExtra)).mark(Mark::Check(s.mixer.extra)),
             ],
         ),
+        // The console finish, the same setting as Settings ▸ General ▸ Mixer style, here where the mixer is (the
+        // Michael Lane Edition's finishes; Lemon, the first choice, is this program's own look).
+        PItem::sub(
+            "Mixer style",
+            (0..crate::prefs::MIXER_STYLE.choices.len())
+                .map(|i| {
+                    PItem::new(crate::prefs::MIXER_STYLE.choices[i], Cmd::Mixer(MCmd::Style(i)))
+                        .mark(Mark::Radio(crate::prefs::index(&crate::prefs::MIXER_STYLE) == i))
+                })
+                .collect(),
+        ),
         // In a native window of its own (Lemon Studio's design: ui/mixer.md §6.2).
         PItem::new("Detached", Cmd::Detach(crate::app::Win::Mixer, !s.is_detached(crate::app::Win::Mixer))).mark(Mark::Check(s.is_detached(crate::app::Win::Mixer))),
         PItem::sep(),
@@ -1724,7 +1759,8 @@ pub fn options_menu(s: &State, x: f32, y: f32) -> Popup {
     Popup { x, y, items, sub: None, scroll: [0; 2] }
 }
 
-/// Layout combo menu (§6.4): only Wide is drawn, the other layouts are greyed out.
+/// Layout combo menu (§6.4): the stock layouts the strips can be drawn in, Extra large last with its plugin list
+/// column (the Michael Lane Edition's set).
 pub fn layout_menu(s: &State, x: f32, y: f32) -> Popup {
     let mut items = Vec::new();
     for (i, &l) in LAYOUTS.iter().enumerate() {
@@ -1732,7 +1768,7 @@ pub fn layout_menu(s: &State, x: f32, y: f32) -> Popup {
             items.push(PItem::sep());
         }
         let on = Mark::Radio(s.mixer.layout == i as u8);
-        items.push(if i as u8 == WIDE { PItem::new(l, Cmd::Mixer(MCmd::Layout(i as u8))) } else { PItem::not_yet(l) }.mark(on));
+        items.push(PItem::new(l, Cmd::Mixer(MCmd::Layout(i as u8))).mark(on));
     }
     Popup { x, y, items, sub: None, scroll: [0; 2] }
 }
@@ -2158,8 +2194,18 @@ fn run_now(app: &mut App, c: MCmd) -> Option<String> {
             return None;
         }
         MCmd::Route { dst, only, side } => route(s, dst, only, side),
-        // Wide is the layout shown; the others are greyed out in the menu.
-        MCmd::Layout(_) => None,
+        // FL's layouts only change how wide the strips are (Michael Lane Edition); the view keeps its place by starting
+        // from the left edge again, as the strips' widths have all changed.
+        MCmd::Layout(i) => {
+            s.mixer.layout = i.min(7);
+            s.mixer_scroll = 0.0;
+            None
+        }
+        // The console finish the strips are drawn in, from the mixer's own Options menu.
+        MCmd::Style(i) => {
+            crate::prefs::set_choice(&crate::prefs::MIXER_STYLE, i);
+            None
+        }
         MCmd::CablePhysics => {
             let c = s.cables.get_mut();
             c.debug = !c.debug;
@@ -2647,7 +2693,7 @@ impl App {
         // The master and the docked strips are fixed; a middle one scrolls into the mixer's last painted view.
         let place = crate::views::mixer::docks(&self.state).place(t).filter(|&(p, _)| p == 1);
         if let (Some(bar), Some((_, left))) = (self.bar(crate::app::Scroll::MixerX), place) {
-            let w = crate::views::mixer::STRIP_W;
+            let w = crate::mixer::strip_w(&self.state);
             let scroll = self.state.mixer_scroll;
             if left < scroll {
                 self.scroll_set(crate::app::Scroll::MixerX, left);
@@ -2999,6 +3045,180 @@ mod tests {
         crate::prefs::set_check(&crate::prefs::AUTO_SELECT_LINKED, false);
         a.select_window_track(3);
         assert_eq!(a.state.selected_mixer, 0);
+    }
+
+    /// Opened from a detached mixer, the palette paints in that window: the main window's canvas is behind it.
+    #[test]
+    fn the_palette_opened_from_a_detached_mixer_paints_there() {
+        use crate::app::{Action, App, Win};
+        let mut a = app();
+        a.state.mixer.layout = 7;
+        a.state.raise(Win::Mixer);
+        a.set_detached(Win::Mixer, true);
+        // Its own window's canvas, the size the detached mixer paints at.
+        let Ok(mut c) = os_ui::Canvas::new(1400, 800, 1.0) else { return };
+        a.paint_detached(Win::Mixer, &mut c);
+        // An empty effect slot pressed there (as `MHit::TrackSlot` does) opens the palette on that surface.
+        a.on_surface(Win::Mixer, |a: &mut App| {
+            a.open_plugin_palette(crate::plugin_menu::Target::Fx(Some(0)), (200.0, 200.0), None)
+        });
+        let Ok(mut m) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        assert!(crate::plugin_palette::is_open(&a.state), "the palette opens");
+        assert_eq!(a.state.overlay_on, Some(Win::Mixer));
+        // In its own window the palette paints; the main window's canvas no longer draws it (it would be behind).
+        a.paint_detached(Win::Mixer, &mut c);
+        let pal = crate::views::plugin_palette::rect(&a.state);
+        assert!(
+            a.surface_overlays(Win::Mixer).iter().any(|o| o.x < pal.right() && pal.x < o.right() && o.y < pal.bottom() && pal.y < o.bottom()),
+            "the palette paints in the mixer's own window: {:?} vs {pal:?}",
+            a.surface_overlays(Win::Mixer)
+        );
+        a.paint(&mut m, None);
+        assert!(!a.hits.iter().any(|h| matches!(h.action, Action::Palette(_))), "not in the main window");
+    }
+
+    /// An empty effect slot clicked on a detached mixer opens the palette in that window, inside it.
+    #[test]
+    fn an_empty_slot_on_the_detached_mixer_shows_the_palette() {
+        use crate::app::{Action, App, Win};
+        let mut a = app();
+        a.state.raise(Win::Mixer);
+        a.set_detached(Win::Mixer, true);
+        let (w, h) = a.state.detached_size(Win::Mixer).unwrap();
+        let Ok(mut c) = os_ui::Canvas::new(w as u32, h as u32, 1.0) else { return };
+        a.paint_detached(Win::Mixer, &mut c);
+        let r = a
+            .on_surface(Win::Mixer, |a: &mut App| {
+                a.hits.iter().rev().find(|h| matches!(h.action, Action::Mix(MHit::SlotName(0)))).map(|h| h.rect)
+            })
+            .expect("an empty effect slot");
+        a.on_surface(Win::Mixer, |a: &mut App| {
+            a.mouse_move(r.cx(), r.cy());
+            a.mouse_down();
+            a.mouse_up();
+        });
+        // Where it paints in that window: `pal::rect` measures the surface it is open on.
+        let pal = a.on_surface(Win::Mixer, |a: &mut App| crate::views::plugin_palette::rect(&a.state));
+        assert!(crate::plugin_palette::is_open(&a.state), "the palette opens: {pal:?} in {w}x{h}");
+        assert_eq!(a.state.overlay_on, Some(Win::Mixer), "on the mixer's surface");
+        assert!(
+            pal.x >= 0.0 && pal.y >= 0.0 && pal.right() <= w && pal.bottom() <= h,
+            "the palette fits the mixer's window: {pal:?} in {w}x{h}"
+        );
+        a.paint_detached(Win::Mixer, &mut c);
+        assert!(
+            a.surface_overlays(Win::Mixer).iter().any(|o| o.x < pal.right() && pal.x < o.right() && o.y < pal.bottom() && pal.y < o.bottom()),
+            "it paints there: {:?} vs {pal:?}",
+            a.surface_overlays(Win::Mixer)
+        );
+        // Clipped where it paints (not at the floating window's stored rect, which would cut the palette away).
+        let area = a.on_surface(Win::Mixer, |a: &mut App| crate::views::paint_area(&a.state, Win::PluginPalette));
+        assert!(
+            area.x <= pal.x && area.y <= pal.y && area.right() >= pal.right() && area.bottom() >= pal.bottom(),
+            "the palette's clip holds all of it: {pal:?} in {area:?}"
+        );
+        // Changing the palette (the wheel, a click, typing) repaints the window that shows it.
+        a.paint_detached(Win::Mixer, &mut c);
+        assert!(!a.detached_dirty(Win::Mixer));
+        a.damage_win(Win::PluginPalette);
+        assert!(a.detached_dirty(Win::Mixer), "the mixer's window shows the palette's changes");
+    }
+
+    /// The mixer's own Options menu offers the console finishes, the same setting as Settings ▸ General ▸ Mixer style.
+    #[test]
+    fn the_options_menu_picks_the_console_finish() {
+        let mut a = app();
+        crate::prefs::set_choice(&crate::prefs::MIXER_STYLE, 0);
+        let menu = options_menu(&a.state, 0.0, 0.0);
+        let style = menu.items.iter().find(|i| i.label == "Mixer style").expect("the Mixer style submenu");
+        assert_eq!(style.children.len(), crate::prefs::MIXER_STYLE.choices.len(), "every finish is offered");
+        assert!(matches!(style.children[0].cmd, Cmd::Mixer(MCmd::Style(0))));
+        assert!(matches!(style.children[0].mark, Mark::Radio(true)), "the current one is dotted");
+        run(&mut a, MCmd::Style(2));
+        assert_eq!(crate::prefs::choice(&crate::prefs::MIXER_STYLE), "Clean modern");
+        crate::prefs::set_choice(&crate::prefs::MIXER_STYLE, 0);
+    }
+
+    /// Extra large (layout 7): each strip gains its plugin list column, whose rows open that strip's slot; adding an
+    /// effect from there opens the palette in front of the mixer.
+    #[test]
+    fn extra_large_draws_each_strips_plugin_list() {
+        use crate::app::{Action, Win};
+        let mut a = app();
+        a.state.mixer.layout = 7;
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let ws = &mut a.state.wins[Win::Mixer.slot().unwrap()];
+        (ws.maxed, ws.rect) = (false, os_ui::Rect::new(100.0, 100.0, 1200.0, 700.0));
+        a.state.z = vec![Win::Mixer];
+        a.paint(&mut c, None);
+        let slots: Vec<(u16, u8)> = a
+            .hits
+            .iter()
+            .filter_map(|h| match h.action {
+                Action::Mix(MHit::TrackSlot(n, k)) => Some((n, k)),
+                _ => None,
+            })
+            .collect();
+        assert!(slots.contains(&(1, 0)), "the first strip's first slot: {slots:?}");
+        assert!(slots.iter().any(|&(_, k)| k == 9), "ten rows a strip: {slots:?}");
+        // A click on an empty slot of a strip that is not the current one selects it and opens the palette.
+        let r = a.hits.iter().rev().find(|h| h.action == Action::Mix(MHit::TrackSlot(1, 0))).expect("a row").rect;
+        a.mouse_move(r.cx(), r.cy());
+        a.mouse_down();
+        a.mouse_up();
+        assert_eq!(a.state.selected_mixer, 1);
+        assert!(crate::plugin_palette::is_open(&a.state), "the palette opens");
+        assert_eq!(a.state.z.last(), Some(&Win::PluginPalette), "in front of the mixer");
+    }
+
+    /// The cables plug in under the strips' own routing controls. Extra large moves a strip's control column to its
+    /// left (its plugin list takes the rest), so a cable anchored at the old centre drew a second arrow and send knob a
+    /// few px off the real ones.
+    #[test]
+    fn extra_large_plugs_the_cables_under_the_strips_controls() {
+        use crate::app::{Action, Win};
+        let mut a = app();
+        a.state.mixer.layout = 7;
+        a.state.selected_mixer = 1;
+        crate::mixer::track_mut(&mut a.state, 1).expect("track 1").routes.push(0);
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let ws = &mut a.state.wins[Win::Mixer.slot().unwrap()];
+        (ws.maxed, ws.rect) = (false, os_ui::Rect::new(100.0, 100.0, 1200.0, 700.0));
+        a.state.z = vec![Win::Mixer];
+        a.paint(&mut c, None);
+        let strip = |n: u16| a.hits.iter().rev().find(|h| h.action == Action::Mix(MHit::Strip(n))).expect("a strip").rect;
+        let (from, to) = (strip(1), strip(0));
+        // Extra large keeps the controls 28 px into each strip: the ⬇ on the current strip, the send knob on the master.
+        let cables = a.state.cables.borrow();
+        let (_, pts, _) = cables.each().next().expect("the send's cable");
+        assert!((pts[0].0 - (from.x + 28.0)).abs() < 0.5, "the cable leaves the current strip's ⬇: {} vs {}", pts[0].0, from.x + 28.0);
+        assert!((pts[pts.len() - 1].0 - (to.x + 28.0)).abs() < 0.5, "and plugs into the master's send knob: {} vs {}", pts[pts.len() - 1].0, to.x + 28.0);
+    }
+
+    /// The mixer's title-bar layout list (Settings in the Edition): each stock layout sets the strips' width, and
+    /// "Extra large" is left out until its extra column (the plugin list) is ported.
+    #[test]
+    fn layouts_set_the_strips_width() {
+        use crate::app::{Action, Win};
+        let mut a = app();
+        assert_eq!(strip_w(&a.state), 44.0, "Wide is the default");
+        let items = layout_menu(&a.state, 0.0, 0.0).items;
+        assert_eq!(items.len(), LAYOUTS.len() + 1, "a separator before the last one");
+        assert!(items.iter().enumerate().all(|(i, it)| i == 7 || it.enabled), "every layout can be chosen (7 is the separator)");
+        for (i, w) in LAYOUT_W.iter().enumerate() {
+            a.state.mixer.layout = i as u8;
+            assert_eq!(strip_w(&a.state), *w, "layout {} ({})", i, LAYOUTS[i]);
+        }
+        // Drawn at the narrowest layout, every strip's body is that layout's width.
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        a.state.mixer.layout = 0;
+        let ws = &mut a.state.wins[Win::Mixer.slot().unwrap()];
+        (ws.maxed, ws.rect) = (false, os_ui::Rect::new(100.0, 100.0, 700.0, 520.0));
+        a.state.z = vec![Win::Mixer];
+        a.paint(&mut c, None);
+        let widths: Vec<f32> = a.hits.iter().filter_map(|h| matches!(h.action, Action::Mix(MHit::Strip(_))).then_some(h.rect.w)).collect();
+        assert!(!widths.is_empty(), "the strips are drawn");
+        assert!(widths.iter().all(|w| (*w - 40.0).abs() < 0.5), "Compact's 40 px strips: {widths:?}");
     }
 
     #[test]
