@@ -1,5 +1,17 @@
 # Lemon Studio — todo.md (roadmap reference)
 
+## ✅ DONE 2026-11-12 — strip channel: gate → OTT; piano roll resizes
+- [x] **The strip's gate is a one-knob OTT** (`962b8418`): three bands at 250 Hz / 2.5 kHz, 8:1 down above -30 dB, 4:1
+      up below it (+18 dB at most), the depth on word 3 and doubling as the dry / wet mix; the fork's gate code is gone.
+      Console row label, the knob's text ("OTT: 40%"), the right-click submenu and the mixer/knob tests follow.
+- [x] **A maximized window resizes from its edges** (`621a6e9a`): the piano roll opens maximized and so had no resize
+      edges at all; dragging one now puts the window back on its floating rect and resizes from there.
+- [ ] **Soothe-2 style dynamic EQ** — TAME already is a 72-band dynamic notch suppressor; asked for again 2026-11-12
+      ("a SOOTHE 2 style eq (ANINA)"). Decide whether TAME is renamed/retuned to be the Soothe slot or a second,
+      steeper one joins it.
+- [ ] **ANINA.vst3 / EB-FreakyTable** (on the user's Desktop): both are third-party plugins, not code in this repo —
+      load them through the device rack (or confirm what FreakyTable should do).
+
 ## 🔝 TOP OF LIST — Modulation system (PAUSED, resume next)
 - [ ] **M0 persistent parameter identity is DONE & shipped** on `origin/modulation-m0` (milestones 1+2, 16 tests green:
       7 os-model + 9 os-app). Resume at **M1**: the actual modulation graph + the app→engine update path (Section K K.4 /
