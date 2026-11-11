@@ -229,6 +229,8 @@ pub enum MCmd {
     /// A meter setting from the meter menu: an index into `crate::meters::k` and the value it takes (the ballistics and
     /// colours, held in `MixerUi::meter_cfg`).
     MeterSet(usize, f32),
+    /// The meter menu's Reset to defaults: every meter setting back to the table's defaults (`crate::meters::PARAMS`).
+    MeterReset,
     /// File ▸ Save mixer track state, File ▸ Open mixer track state ▸ and Insert from state ▸ (Lemon Studio's design,
     /// `crate::mixer_state`): save track `n`'s state under its name; put a saved one on track `n` (its name and colour
     /// stay); insert a new track in front of `n` from one (with the state's name and colour).
@@ -2044,6 +2046,8 @@ pub fn meter_menu(s: &State, x: f32, y: f32) -> Popup {
         PItem::sub("Red from", [-12.0, -9.0, -6.0, -3.0, 0.0, 3.0, 6.0].iter().map(|&db| radio(k::RED_DB, db, format!("{db:.0} dB"))).collect()),
         PItem::sub("Colour gradient", [(0.0, "Off"), (1.0, "On"), (2.0, "Strong")].iter().map(|&(v, label)| radio(k::GRADIENT, v, label.to_string())).collect()),
         PItem::new("Dark cap", set(k::CAP, if on(k::CAP) { 0.0 } else { 1.0 })).mark(Mark::Check(on(k::CAP))),
+        PItem::sep(),
+        PItem::new("Reset to defaults", Cmd::Mixer(MCmd::MeterReset)),
     ];
     Popup { x, y, items, sub: None, scroll: [0; 2] }
 }
@@ -2500,6 +2504,11 @@ fn run_now(app: &mut App, c: MCmd) -> Option<String> {
         }
         MCmd::MeterSet(k, v) => {
             s.mixer.meter_cfg.set(k, v);
+            s.piano.dirty = true;
+            None
+        }
+        MCmd::MeterReset => {
+            s.mixer.meter_cfg = Default::default();
             s.piano.dirty = true;
             None
         }
@@ -3657,6 +3666,11 @@ mod tests {
         let Cmd::Mixer(grad) = grad else { panic!("a meter setting") };
         run(&mut a, grad);
         assert_eq!(a.state.mixer.meter_cfg.v[crate::meters::k::GRADIENT], 0.0);
+        // Reset to defaults: every setting back to the table's, the ones just changed included.
+        let reset = p.items.iter().find(|i| i.label == "Reset to defaults").expect("the reset").cmd.clone();
+        let Cmd::Mixer(reset) = reset else { panic!("a meter command") };
+        run(&mut a, reset);
+        assert_eq!(a.state.mixer.meter_cfg.v, crate::meters::Settings::default().v, "back to the defaults");
         prefs::set_check(&prefs::ALTERNATE_METER_SCALE, was);
     }
 
