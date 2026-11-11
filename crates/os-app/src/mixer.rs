@@ -90,6 +90,8 @@ pub enum MCmd {
     StripGate(u16, u16),
     StripDrive(u16, u16),
     StripDriveType(u16, u16),
+    /// TAME's amount on the track's strip (word 4; 0 = off).
+    StripTame(u16, u16),
     Solo(u16),
     /// Solo with the tracks routed into it too (spec: ui/mixer-track-commands.md §5).
     AltSolo(u16),
@@ -355,6 +357,9 @@ fn remap_slot_ui(s: &mut State, f: impl Fn(u16, u8) -> Option<(u16, u8)>) {
 /// editor's, and the remote control links (`remote::follow`). A link whose place went goes.
 fn follow_places(s: &mut State, track: &dyn Fn(u16) -> Option<u16>, slot: &dyn Fn(u16, u8) -> Option<(u16, u8)>) {
     s.project.follow_mixer_places(track, slot);
+    // M0 (K.5 §6, K.6): the persistent owner identity follows the same move so device identity survives
+    // reorder/swap/slot-move/delete exactly as the project's Targets do.
+    s.identity.retarget_mixer_places(track, slot);
     if let Some(t) = os_model::target::moved(s.events.target, track, slot) {
         s.events.target = t;
     }
@@ -1731,6 +1736,16 @@ fn track_items(s: &State, n: u16) -> Vec<PItem> {
                 .map(|(i, name)| PItem::new(*name, mx(MCmd::StripDriveType(n, os_dsp::strip::drive_kind_word(i)))).mark(Mark::Radio(strip_drive_type(t) == i)))
                 .collect(),
         ),
+        PItem::sub(
+            "TAME",
+            [0u16, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+                .into_iter()
+                .map(|pct| {
+                    let label = if pct == 0 { "Off".to_string() } else { format!("{pct} %") };
+                    PItem::new(label, mx(MCmd::StripTame(n, os_dsp::strip::tame_word(f32::from(pct) / 100.0)))).mark(Mark::Radio(strip_tame(t) == pct))
+                })
+                .collect(),
+        ),
     ]
 }
 
@@ -1752,6 +1767,11 @@ fn strip_drive(t: Option<&os_model::MixerTrack>) -> u16 {
 /// A strip's drive character from control word 6 (`os_dsp::strip::drive_kind`: 0 Tube to 3 Clip).
 fn strip_drive_type(t: Option<&os_model::MixerTrack>) -> usize {
     t.map_or(0, |m| os_dsp::strip::drive_kind(m.strip[6]))
+}
+
+/// A strip's TAME amount in percent from control word 4 (`os_dsp::strip::tame_amount`), 0 for the section off.
+fn strip_tame(t: Option<&os_model::MixerTrack>) -> u16 {
+    t.map_or(0, |m| (os_dsp::strip::tame_amount(m.strip[4]) * 100.0).round() as u16)
 }
 
 /// The saved mixer track states, one entry each running `cmd` with its file; a greyed "(no saved states)" without any.
@@ -2019,7 +2039,7 @@ pub fn run(app: &mut App, c: MCmd) -> Option<String> {
     // A slot's sidechain input is the track's own (its slot's saved state).
     // Quick Sidechain changes the destination's chain and the source's routing in one undo step.
     // The Analog Channel Strip is the track's own state: one undo step on that track (plan v3 Milestone 0).
-    if let MCmd::StripBypass(t) | MCmd::StripLowCut(t, _) | MCmd::StripGate(t, _) | MCmd::StripDrive(t, _) | MCmd::StripDriveType(t, _) = &c {
+    if let MCmd::StripBypass(t) | MCmd::StripLowCut(t, _) | MCmd::StripGate(t, _) | MCmd::StripDrive(t, _) | MCmd::StripDriveType(t, _) | MCmd::StripTame(t, _) = &c {
         let t = *t;
         return crate::control::edit_app(app, "Analog channel strip", Region::Track(t), |app| run_now(app, c));
     }
@@ -2219,6 +2239,14 @@ fn run_now(app: &mut App, c: MCmd) -> Option<String> {
         MCmd::StripDriveType(n, kind) => {
             if let Some(t) = track_mut(s, n) {
                 t.strip[6] = kind;
+                t.strip_bypassed = false;
+                changed(s);
+            }
+            None
+        }
+        MCmd::StripTame(n, word) => {
+            if let Some(t) = track_mut(s, n) {
+                t.strip[4] = word;
                 t.strip_bypassed = false;
                 changed(s);
             }
@@ -3897,7 +3925,12 @@ mod tests {
         assert_eq!(a.state.history.at(), steps + 2);
         crate::history::undo(&mut a.state);
         assert_eq!(t(&a).strip[6], 0, "the character is back to Tube");
-        // The track menu offers all five, ticked from the track's state.
+        run(&mut a, MCmd::StripTame(2, os_dsp::strip::tame_word(0.6)));
+        assert!((os_dsp::strip::tame_amount(t(&a).strip[4]) - 0.6).abs() < 0.001);
+        assert_eq!(a.state.history.at(), steps + 2);
+        crate::history::undo(&mut a.state);
+        assert_eq!(t(&a).strip[4], 0, "TAME is back off");
+        // The track menu offers all of it, ticked from the track's state.
         let items = track_items(&a.state, 2);
         let on = items.iter().find(|i| i.label == "Analog strip").unwrap();
         assert!(matches!(on.mark, Mark::Check(true)));

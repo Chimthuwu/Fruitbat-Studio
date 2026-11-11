@@ -3,7 +3,7 @@
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! The Analog Channel Strip: Lemon Studio's port of the Michael Lane Edition fork's console strip (plan v3 Appendix C).
-//! The low cut, the gate and the drive are here; TAME, the compressor and the de-esser follow one at a time.
+//! The low cut, the gate, the drive and TAME are here; the compressor and the de-esser follow one at a time.
 //!
 //! A strip is bypassed, faded out, and only then does the engine stop calling it: a bypassed strip passes the track
 //! through sample for sample (plan v3 §6.3). The sections are stereo-linked in their settings with one filter state per
@@ -376,7 +376,230 @@ impl Drive {
     }
 }
 
-/// A track's Analog Channel Strip: the low cut, the gate and the drive today, the rest as it is ported. Bypassed, it fades the processed
+/// TAME's bands: the fork's 72, spread logarithmically from 100 Hz to 18 kHz (or 40 % of the rate, below 45 kHz).
+const BANDS: usize = 72;
+
+/// How often TAME compares its bands: every 32 frames.
+const HOP: u32 = 32;
+
+/// TAME's control word as an amount: word 0 is the section off, 65535 is all the way in.
+pub fn tame_amount(word: u16) -> f32 {
+    f32::from(word) / 65535.0
+}
+
+/// The word for an amount 0..=1.
+pub fn tame_word(amount: f32) -> u16 {
+    (amount.clamp(0.0, 1.0) * 65535.0).round() as u16
+}
+
+/// One of TAME's bands: a constant-Q band-pass (Q = 10) over the signal and over its own detector, with a bounded
+/// notch that follows how far the band stands above its neighbours.
+#[derive(Clone, Copy)]
+struct Band {
+    b0: f32,
+    a1: f32,
+    a2: f32,
+    /// How much the band-pass lifts the band: the detector is normalised by it, so a broad slope is not a resonance.
+    normalization: f32,
+    /// The detector's filter state, per channel `[z0, z1]`.
+    detector: [[f32; 2]; 2],
+    /// The audio filter's state, kept apart so the detector keeps hearing the unprocessed signal.
+    audio: [[f32; 2]; 2],
+    /// The band's energy as the detector smooths it, and the notch's depth as it glides to its goal (0..1).
+    power: f32,
+    depth: f32,
+    goal: f32,
+}
+
+impl Band {
+    fn silent() -> Band {
+        Band { b0: 0.0, a1: 0.0, a2: 0.0, normalization: 1.0, detector: [[0.0; 2]; 2], audio: [[0.0; 2]; 2], power: 0.0, depth: 0.0, goal: 0.0 }
+    }
+
+    /// Places band `i` of `BANDS` between 100 Hz and 18 kHz for this rate.
+    fn tune(&mut self, i: usize, rate: f32) {
+        let high = 18_000.0f32.min(rate * 0.40);
+        let low = 100.0f32.min(high / 10.0);
+        let hz = low * (high / low).powf(i as f32 / (BANDS - 1) as f32);
+        let w = std::f32::consts::TAU * hz / rate;
+        let (sin, cos) = w.sin_cos();
+        let alpha = sin / 20.0;
+        self.b0 = alpha / (1.0 + alpha);
+        self.a1 = -2.0 * cos / (1.0 + alpha);
+        self.a2 = (1.0 - alpha) / (1.0 + alpha);
+        self.normalization = (1.0 + alpha) / alpha.max(1e-10);
+    }
+
+    fn reset(&mut self) {
+        self.detector = [[0.0; 2]; 2];
+        self.audio = [[0.0; 2]; 2];
+        self.power = 0.0;
+        self.depth = 0.0;
+        self.goal = 0.0;
+    }
+
+    /// The band-pass at this band's frequency: the detector's state, or the audio's.
+    fn filter(&mut self, input: [f32; 2], audio: bool) -> [f32; 2] {
+        let states = if audio { &mut self.audio } else { &mut self.detector };
+        std::array::from_fn(|c| {
+            let z = &mut states[c];
+            let y = self.b0 * input[c] + z[0];
+            z[0] = -self.a1 * y + z[1];
+            z[1] = -self.b0 * input[c] - self.a2 * y;
+            // A silent tail must not leave denormals running through 72 bands.
+            for v in z.iter_mut() {
+                if v.abs() < 1e-20 {
+                    *v = 0.0;
+                }
+            }
+            y
+        })
+    }
+}
+
+/// TAME: the fork's resonance suppressor, a bank of 72 dynamic notches in series. No FFT, no look-ahead, and nothing on
+/// the audio thread allocates. The detectors hear the unprocessed stereo signal, both sides are linked, and every notch is
+/// bounded, so a cluster of harmonics cannot be hollowed out. It looks at its bands every 32 frames and glides the notches
+/// over 8 ms in and 120 ms out. Word 4 is the amount (0 = off).
+pub struct Tame {
+    bands: [Band; BANDS],
+    /// The rate the bands are tuned for; the first block, or a change of rate, tunes them again.
+    rate: u32,
+    /// The amount as it glides (0..1), 20 ms either way.
+    amount: Glide,
+    /// The broadband energy, fast and slow: their ratio is how much the signal is a transient rather than a tone.
+    fast: f32,
+    slow: f32,
+    /// Frames since the bands were last compared.
+    tick: u32,
+    /// The amount's control word (0 = off).
+    word: u16,
+}
+
+/// One block's TAME settings: the amount glides through it, and the smoothing is fixed at this rate.
+struct TameBlock {
+    amount: Ramp,
+    /// 12 ms of energy smoothing per band, and the 8 ms / 120 ms the notches move in and out by.
+    detector: f32,
+    attack: f32,
+    release: f32,
+    /// 1 ms and 30 ms of broadband energy: how much of a peak is a hit rather than a tone.
+    fast: f32,
+    slow: f32,
+    /// This frame's amount, moved once and used for both channels.
+    a: f32,
+}
+
+impl Tame {
+    pub fn new(word: u16) -> Tame {
+        Tame { bands: std::array::from_fn(|_| Band::silent()), rate: 0, amount: Glide::new(tame_amount(word)), fast: 0.0, slow: 0.0, tick: 0, word }
+    }
+
+    /// The section's control word (0 = off).
+    pub fn set(&mut self, word: u16) {
+        self.word = word;
+    }
+
+    /// True when the section is off and faded out: it has no state worth keeping.
+    pub fn idle(&self) -> bool {
+        self.word == 0 && self.amount.current == 0.0
+    }
+
+    /// Empties the bands and the detectors: a section switched in again starts from silence, not from where it was.
+    pub fn reset(&mut self) {
+        for b in &mut self.bands {
+            b.reset();
+        }
+        self.fast = 0.0;
+        self.slow = 0.0;
+        self.tick = 0;
+    }
+
+    /// Plans a block; `None` when the section is off and faded out (its state is cleared).
+    fn block(&mut self, frames: usize, rate: u32) -> Option<TameBlock> {
+        let rate = rate.max(1);
+        if self.rate != rate {
+            self.rate = rate;
+            let ratef = rate as f32;
+            for (i, b) in self.bands.iter_mut().enumerate() {
+                b.tune(i, ratef);
+                b.reset();
+            }
+        }
+        let target = tame_amount(self.word);
+        if target == 0.0 && self.amount.current == 0.0 {
+            self.reset();
+            return None;
+        }
+        let ratef = rate as f32;
+        let coefficient = |seconds: f32| 1.0 - (-1.0 / (ratef * seconds)).exp();
+        let amount = self.amount.block(target, frames, 1.0 / (0.020 * ratef));
+        Some(TameBlock {
+            amount,
+            detector: coefficient(0.012),
+            attack: coefficient(0.008),
+            release: coefficient(0.120),
+            fast: coefficient(0.001),
+            slow: coefficient(0.030),
+            a: 0.0,
+        })
+    }
+
+    /// One stereo frame: both sides through the linked bank, so the image holds.
+    fn frame(&mut self, b: &mut TameBlock, input: [f32; 2]) -> [f32; 2] {
+        b.a = b.amount.next();
+        let amount = b.a;
+        let power = (input[0] * input[0] + input[1] * input[1]) * 0.5;
+        self.fast += (power - self.fast) * b.fast;
+        self.slow += (power - self.slow) * b.slow;
+        for band in &mut self.bands {
+            let y = band.filter(input, false);
+            let energy = (y[0] * y[0] + y[1] * y[1]) * 0.5;
+            band.power += (energy - band.power) * b.detector;
+        }
+        // Every 32 frames the bands are compared: a band that stands above its neighbours is a resonance.
+        if self.tick == 0 {
+            self.detect(amount);
+        }
+        self.tick = (self.tick + 1) % HOP;
+        let mut out = input;
+        for band in &mut self.bands {
+            band.depth += (band.goal - band.depth) * if band.goal > band.depth { b.attack } else { b.release };
+            // The notch is subtracted from what the bands before it left, so the sum of them stays bounded.
+            let n = band.filter(out, true);
+            for c in 0..2 {
+                out[c] -= n[c] * band.depth * amount;
+            }
+        }
+        out
+    }
+
+    /// Gives each band its notch depth from how far it stands above its neighbours, in dB.
+    fn detect(&mut self, amount: f32) {
+        // Each detector is normalised by its band-pass's noise gain, so a broad spectral slope does not read as a peak.
+        let levels = self.bands.map(|b| 10.0 * (b.power * b.normalization + 1e-20).log10());
+        let mut cuts = [0.0f32; BANDS];
+        // A hit is sharper than the broadband rise behind it: hold back while the signal is a transient.
+        let protection = (4.0 * self.slow / (self.fast + 1e-20)).min(1.0);
+        for i in 4..BANDS - 4 {
+            let left = (levels[i - 4] + levels[i - 3]) * 0.5;
+            let right = (levels[i + 3] + levels[i + 4]) * 0.5;
+            let contrast = levels[i] - (left + right) * 0.5;
+            // A stronger amount detects subtler peaks: the threshold falls from 5 dB to 2 dB.
+            let over = (contrast - (5.0 - 3.0 * amount)).max(0.0);
+            cuts[i] = (over * over / (over + 2.0) * 1.8).min(18.0) * protection;
+        }
+        for i in 0..BANDS {
+            // Neighbouring notches share a budget, so a cluster of harmonics is not cut away.
+            let total: f32 = cuts[i.saturating_sub(2)..(i + 3).min(BANDS)].iter().sum();
+            let budget = 12.0 + 12.0 * amount;
+            let db = cuts[i] * (budget / total.max(budget));
+            self.bands[i].goal = 1.0 - 10f32.powf(-db / 20.0);
+        }
+    }
+}
+
+/// A track's Analog Channel Strip: the low cut, the gate, the drive and TAME today, the rest as it is ported. Bypassed, it fades the processed
 /// signal out to the dry one and then stops touching the buffer (`idle`), so a bypassed strip passes a track through
 /// sample for sample (plan v3 §6.3).
 pub struct Strip {
@@ -389,11 +612,12 @@ pub struct Strip {
     low: LowCut,
     gate: Gate,
     drive: Drive,
+    tame: Tame,
 }
 
 impl Strip {
     pub fn new(words: [u16; 7], bypassed: bool) -> Strip {
-        Strip { words, bypassed, wet: Glide::new(if bypassed { 0.0 } else { 1.0 }), low: LowCut::new(words[0]), gate: Gate::new(words[3]), drive: Drive::new(words[2], words[6]) }
+        Strip { words, bypassed, wet: Glide::new(if bypassed { 0.0 } else { 1.0 }), low: LowCut::new(words[0]), gate: Gate::new(words[3]), drive: Drive::new(words[2], words[6]), tame: Tame::new(words[4]) }
     }
 
     /// The project's settings for the strip (a track rebuilt from a changed project).
@@ -403,6 +627,7 @@ impl Strip {
         self.low.set(words[0]);
         self.gate.set(words[3]);
         self.drive.set(words[2], words[6]);
+        self.tame.set(words[4]);
     }
 
     /// True when bypassed and faded out: the engine skips the strip and passes the track through.
@@ -421,11 +646,13 @@ impl Strip {
             self.low.reset();
             self.gate.reset();
             self.drive.reset();
+            self.tame.reset();
             return;
         }
         let mut low = self.low.block(frames, rate);
         let mut gate = self.gate.block(frames, rate);
         let mut drive = self.drive.block(frames, rate);
+        let mut tame = self.tame.block(frames, rate);
         for f in buf.chunks_exact_mut(2) {
             let w = wet.next();
             // Fully dry: nothing is written, so the samples stay as they arrived.
@@ -454,6 +681,10 @@ impl Strip {
                 Drive::frame(b);
                 y[0] = self.drive.step(b, 0, y[0]);
                 y[1] = self.drive.step(b, 1, y[1]);
+            }
+            // Then TAME, on the tone the drive left.
+            if let Some(b) = &mut tame {
+                y = self.tame.frame(b, y);
             }
             for (ch, s) in f.iter_mut().enumerate() {
                 let a = y[ch];
@@ -744,6 +975,75 @@ mod tests {
         let max = buf.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
         // Both characters are held well inside the shaper's bounds, so a step would stand out.
         assert!(max < 0.1, "no click: {max}");
+    }
+
+    /// Noise, and a tone standing on it: a resonance to find.
+    fn resonance_signal(hz: f32, frames: usize) -> Vec<f32> {
+        let mut seed = 1_234_567u32;
+        (0..frames).flat_map(|n| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            let noise = (seed as f64 / f64::from(u32::MAX) * 2.0 - 1.0) as f32 * 0.08;
+            let x = noise + 0.22 * (std::f32::consts::TAU * hz * n as f32 / RATE as f32).sin();
+            [x, x]
+        }).collect()
+    }
+
+    fn amplitude(x: &[f32], hz: f32, rate: u32) -> f32 {
+        let (mut re, mut im) = (0.0f64, 0.0f64);
+        for (i, f) in x.chunks_exact(2).enumerate() {
+            let phase = std::f64::consts::TAU * f64::from(hz) * i as f64 / f64::from(rate);
+            re += f64::from(f[0]) * phase.cos();
+            im += f64::from(f[0]) * phase.sin();
+        }
+        ((re * re + im * im).sqrt() / (x.len() / 2) as f64 * 2.0) as f32
+    }
+
+    /// TAME takes a resonance down, and not all the way out: the notch is bounded.
+    #[test]
+    fn the_tame_takes_a_resonance_down() {
+        let dry = resonance_signal(2_300.0, RATE as usize / 3);
+        let mut s = Strip::new([0, 0, 0, 0, u16::MAX, 0, 0], false);
+        let mut buf = dry.clone();
+        run(&mut s, &mut buf);
+        let start = buf.len() / 3;
+        let ratio = amplitude(&buf[start..], 2_300.0, RATE) / amplitude(&dry[start..], 2_300.0, RATE);
+        assert!(ratio < 0.55, "the resonance is taken down: {ratio}");
+        assert!(ratio > 0.1, "but not torn out: {ratio}");
+        assert!(buf.iter().all(|x| x.is_finite()));
+    }
+
+    /// Broad noise is not a resonance: TAME leaves most of it, and a rush of it (a hit) is left alone alike.
+    #[test]
+    fn the_tame_leaves_broad_noise_alone() {
+        let dry = resonance_signal(0.0, RATE as usize / 3);
+        let mut s = Strip::new([0, 0, 0, 0, u16::MAX, 0, 0], false);
+        let mut buf = dry.clone();
+        run(&mut s, &mut buf);
+        let (a, b) = (rms(&dry[dry.len() / 2..]), rms(&buf[buf.len() / 2..]));
+        let db = 20.0 * (b / a).log10();
+        assert!(db > -0.7, "broadband signal dulled: {db} dB");
+    }
+
+    /// Word 4 is the section off: nothing at all, sample for sample.
+    #[test]
+    fn the_tame_off_passes_the_signal_through() {
+        let dry = resonance_signal(2_300.0, 480);
+        let mut s = Strip::new([0; 7], false);
+        let mut buf = dry.clone();
+        s.process(&mut buf, RATE);
+        assert_eq!(buf, dry);
+    }
+
+    /// Both sides are linked through one bank of notches, so the image they came in with is the one they leave with.
+    #[test]
+    fn the_tame_holds_the_stereo_image() {
+        let dry = resonance_signal(3_000.0, RATE as usize / 6);
+        let mut buf: Vec<f32> = dry.chunks_exact(2).flat_map(|f| [f[0], -f[0] * 0.3]).collect();
+        let mut s = Strip::new([0, 0, 0, 0, u16::MAX, 0, 0], false);
+        run(&mut s, &mut buf);
+        assert!(buf.chunks_exact(2).all(|f| (f[1] + f[0] * 0.3).abs() < 2e-5), "the image holds");
     }
 
     /// The word and the cutoff are each other's inverse across the range.
