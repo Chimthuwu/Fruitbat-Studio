@@ -3,7 +3,7 @@
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! The Analog Channel Strip: Lemon Studio's port of the Michael Lane Edition fork's console strip (plan v3 Appendix C).
-//! The low cut and the gate are here; drive, TAME, the compressor and the de-esser follow one at a time.
+//! The low cut, the gate and the drive are here; TAME, the compressor and the de-esser follow one at a time.
 //!
 //! A strip is bypassed, faded out, and only then does the engine stop calling it: a bypassed strip passes the track
 //! through sample for sample (plan v3 §6.3). The sections are stereo-linked in their settings with one filter state per
@@ -209,7 +209,174 @@ impl Gate {
     }
 }
 
-/// A track's Analog Channel Strip: the low cut and the gate today, the rest as it is ported. Bypassed, it fades the processed
+/// The drive's four characters, as the fork names them.
+pub const DRIVE_TYPES: [&str; 4] = ["Tube", "Tape", "Soft", "Clip"];
+
+/// The character control word 6 stands for: 0 Tube, 1 Tape, 2 Soft, 3 Clip.
+pub fn drive_kind(word: u16) -> usize {
+    ((f32::from(word) / 65535.0) * 3.0).round().clamp(0.0, 3.0) as usize
+}
+
+/// The word for a character index (`DRIVE_TYPES` order).
+pub fn drive_kind_word(kind: usize) -> u16 {
+    ((kind.min(3) as f32 / 3.0) * 65535.0).round() as u16
+}
+
+/// The drive's control word as an amount: word 0 is the section off, 65535 is all the way in.
+pub fn drive_amount(word: u16) -> f32 {
+    f32::from(word) / 65535.0
+}
+
+/// The word for an amount 0..=1.
+pub fn drive_word(amount: f32) -> u16 {
+    (amount.clamp(0.0, 1.0) * 65535.0).round() as u16
+}
+
+/// The shaped value for one sample of one character.
+fn curve(kind: usize, x: f32) -> f32 {
+    match kind {
+        1 => x / (1.0 + x.abs()),
+        3 => x.clamp(-1.0, 1.0),
+        _ => x.tanh(),
+    }
+}
+
+/// The integral of `curve` from 0 to `x`: the shape is the curve's mean over each sample's step, which keeps what a
+/// plain waveshaper folds back down without oversampling.
+fn integral(kind: usize, x: f32) -> f64 {
+    let a = f64::from(x).abs();
+    match kind {
+        1 => a - a.ln_1p(),
+        3 => {
+            if a <= 1.0 {
+                0.5 * a * a
+            } else {
+                a - 0.5
+            }
+        }
+        _ => a + (-2.0 * a).exp().ln_1p() - std::f64::consts::LN_2,
+    }
+}
+
+/// The drive: a waveshaping character in front of the rest of the strip, then an 8 Hz DC blocker (the tube character is
+/// asymmetric, so without it a track would pick up a floor), all faded in by the amount. The amount glides over 20 ms and
+/// doubles as the drive, and the four characters crossfade over 20 ms when the character changes. Word 2 is the amount
+/// (0 = off), word 6 the character.
+pub struct Drive {
+    /// The amount as it glides (0..1), 20 ms either way.
+    amount: Glide,
+    /// How much of each character is heard: they crossfade, and their weights always add up to one.
+    mix: [Glide; 4],
+    /// Per channel, the driven sample of the last frame: the shape is averaged from it to the current one.
+    last: [f32; 2],
+    /// Per channel `[x1, y1]` of the DC blocker.
+    dc: [[f32; 2]; 2],
+    /// The amount's control word (0 = off) and the character's.
+    word: u16,
+    kind: u16,
+}
+
+/// One block's drive settings: the character is fixed within it, and the amount glides through it.
+struct DriveBlock {
+    amount: Ramp,
+    mix: [Ramp; 4],
+    /// The DC blocker's pole for 8 Hz at this rate.
+    pole: f32,
+    /// This frame's amount and weights, moved once and used for both channels.
+    a: f32,
+    w: [f32; 4],
+}
+
+impl Drive {
+    pub fn new(word: u16, kind: u16) -> Drive {
+        let k = drive_kind(kind);
+        Drive {
+            amount: Glide::new(drive_amount(word)),
+            mix: std::array::from_fn(|i| Glide::new(if i == k { 1.0 } else { 0.0 })),
+            last: [0.0; 2],
+            dc: [[0.0; 2]; 2],
+            word,
+            kind,
+        }
+    }
+
+    /// The section's control words: the amount (0 = off) and the character.
+    pub fn set(&mut self, word: u16, kind: u16) {
+        self.word = word;
+        self.kind = kind;
+    }
+
+    /// True when the amount is at zero: nothing is left to shape.
+    pub fn idle(&self) -> bool {
+        self.word == 0 && self.amount.current == 0.0
+    }
+
+    /// Empties the shaper's memory: a section switched in again starts from silence, not from where it was.
+    pub fn reset(&mut self) {
+        self.last = [0.0; 2];
+        self.dc = [[0.0; 2]; 2];
+    }
+
+    /// Plans a block; `None` when the section is off and faded out (its state is cleared).
+    fn block(&mut self, frames: usize, rate: u32) -> Option<DriveBlock> {
+        let rate = rate.max(1);
+        let glide = 1.0 / (0.020 * f64::from(rate)) as f32;
+        let target = drive_amount(self.word);
+        let k = drive_kind(self.kind);
+        if target == 0.0 && self.amount.current == 0.0 {
+            // Off: the character jumps to where it is set, and nothing is held.
+            self.reset();
+            for (i, m) in self.mix.iter_mut().enumerate() {
+                m.current = if i == k { 1.0 } else { 0.0 };
+            }
+            return None;
+        }
+        let amount = self.amount.block(target, frames, glide);
+        let mix = std::array::from_fn(|i| self.mix[i].block(if i == k { 1.0 } else { 0.0 }, frames, glide));
+        Some(DriveBlock { amount, mix, pole: (-std::f32::consts::TAU * 8.0 / rate as f32).exp(), a: 0.0, w: [0.0; 4] })
+    }
+
+    /// One frame's settings: the amount and the character weights move once, and both channels use them.
+    fn frame(b: &mut DriveBlock) {
+        b.a = b.amount.next();
+        for (w, m) in b.w.iter_mut().zip(b.mix.iter_mut()) {
+            *w = m.next();
+        }
+    }
+
+    /// One channel through the shaper and the DC blocker, crossfaded with the dry sample by the amount.
+    fn step(&mut self, b: &DriveBlock, ch: usize, x: f32) -> f32 {
+        let ch = ch.min(1);
+        let amount = b.a;
+        let drive = 1.0 + 7.0 * amount;
+        let v = (x * drive).clamp(-40.0, 40.0);
+        let last = std::mem::replace(&mut self.last[ch], v);
+        let mut shaped = 0.0;
+        for kind in 0..4 {
+            let w = b.w[kind];
+            if w <= 0.0 {
+                continue;
+            }
+            let bias = if kind == 0 { 0.12 * amount } else { 0.0 };
+            let (a, z) = (v + bias, last + bias);
+            let sat = if (a - z).abs() > 1e-4 {
+                ((integral(kind, a) - integral(kind, z)) / f64::from(a - z)) as f32
+            } else {
+                curve(kind, (a + z) * 0.5)
+            };
+            // The small-signal slope is compensated, as the fork's PRE did: a quiet track keeps its level and a loud one
+            // rounds off. This is a fixed compensation, not a loudness-following gain rider.
+            let slope = if kind == 0 { 1.0 - bias.tanh().powi(2) } else { 1.0 };
+            shaped += w * (sat - curve(kind, bias)) / (drive * slope);
+        }
+        let [x1, y1] = self.dc[ch];
+        let y = shaped - x1 + b.pole * y1;
+        self.dc[ch] = [shaped, y];
+        x + (y - x) * amount
+    }
+}
+
+/// A track's Analog Channel Strip: the low cut, the gate and the drive today, the rest as it is ported. Bypassed, it fades the processed
 /// signal out to the dry one and then stops touching the buffer (`idle`), so a bypassed strip passes a track through
 /// sample for sample (plan v3 §6.3).
 pub struct Strip {
@@ -221,11 +388,12 @@ pub struct Strip {
     wet: Glide,
     low: LowCut,
     gate: Gate,
+    drive: Drive,
 }
 
 impl Strip {
     pub fn new(words: [u16; 7], bypassed: bool) -> Strip {
-        Strip { words, bypassed, wet: Glide::new(if bypassed { 0.0 } else { 1.0 }), low: LowCut::new(words[0]), gate: Gate::new(words[3]) }
+        Strip { words, bypassed, wet: Glide::new(if bypassed { 0.0 } else { 1.0 }), low: LowCut::new(words[0]), gate: Gate::new(words[3]), drive: Drive::new(words[2], words[6]) }
     }
 
     /// The project's settings for the strip (a track rebuilt from a changed project).
@@ -234,6 +402,7 @@ impl Strip {
         self.bypassed = bypassed;
         self.low.set(words[0]);
         self.gate.set(words[3]);
+        self.drive.set(words[2], words[6]);
     }
 
     /// True when bypassed and faded out: the engine skips the strip and passes the track through.
@@ -251,10 +420,12 @@ impl Strip {
         if wet.is_flat() && wet.first() == 0.0 {
             self.low.reset();
             self.gate.reset();
+            self.drive.reset();
             return;
         }
         let mut low = self.low.block(frames, rate);
         let mut gate = self.gate.block(frames, rate);
+        let mut drive = self.drive.block(frames, rate);
         for f in buf.chunks_exact_mut(2) {
             let w = wet.next();
             // Fully dry: nothing is written, so the samples stay as they arrived.
@@ -277,6 +448,12 @@ impl Strip {
                 let g = self.gate.gain(b, y[0], y[1]);
                 y[0] *= g;
                 y[1] *= g;
+            }
+            // Then the drive, on what the gate let through.
+            if let Some(b) = &mut drive {
+                Drive::frame(b);
+                y[0] = self.drive.step(b, 0, y[0]);
+                y[1] = self.drive.step(b, 1, y[1]);
             }
             for (ch, s) in f.iter_mut().enumerate() {
                 let a = y[ch];
@@ -486,6 +663,87 @@ mod tests {
         }
         run(&mut s, &mut buf);
         assert!(buf.chunks_exact(2).all(|f| (f[1] - f[0] * 0.2).abs() < 1e-6));
+    }
+
+    /// The drive's words and their values round trip.
+    #[test]
+    fn the_drive_words_round_trip() {
+        assert_eq!(drive_amount(0), 0.0);
+        assert!((drive_amount(drive_word(0.5)) - 0.5).abs() < 1e-4);
+        for kind in 0..4 {
+            assert_eq!(drive_kind(drive_kind_word(kind)), kind);
+        }
+    }
+
+    /// Word 2 is the section off, whatever character it is set to: sample for sample.
+    #[test]
+    fn the_drive_off_passes_the_signal_through() {
+        let dry = sine(1_000.0, BLOCK * 2 * 4);
+        let mut s = Strip::new([0, 0, 0, 0, 0, drive_kind_word(3), 0], false);
+        let mut buf = dry.clone();
+        run(&mut s, &mut buf);
+        assert_eq!(buf, dry);
+    }
+
+    /// Driven all the way in, the tube shape rounds a loud tone down instead of letting it through.
+    #[test]
+    fn the_drive_rounds_a_loud_signal_down() {
+        let dry = sine(1_000.0, BLOCK * 2 * 40);
+        let mut s = Strip::new([0, 0, u16::MAX, 0, 0, drive_kind_word(0), 0], false);
+        let mut buf = dry.clone();
+        run(&mut s, &mut buf);
+        let peak = |b: &[f32]| b.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        let (a, b) = (peak(&dry), peak(&buf));
+        assert!(b < a * 0.4, "rounded off: {b} of {a}");
+        assert!(buf.iter().all(|x| x.is_finite()));
+    }
+
+    /// A quiet tone keeps its level: the drive's compensation is fixed, not a loudness follower.
+    #[test]
+    fn the_drive_keeps_a_quiet_signal_at_its_level() {
+        let dry: Vec<f32> = sine(1_000.0, BLOCK * 2 * 40).iter().map(|x| x * 0.01).collect();
+        let mut s = Strip::new([0, 0, u16::MAX, 0, 0, drive_kind_word(0), 0], false);
+        let mut buf = dry.clone();
+        run(&mut s, &mut buf);
+        let (a, b) = (rms(&dry[dry.len() - BLOCK * 2..]), rms(&buf[buf.len() - BLOCK * 2..]));
+        assert!((b / a - 1.0).abs() < 0.05, "level kept: {b} of {a}");
+    }
+
+    /// The tube character's asymmetry does not leave a floor under the track: the DC blocker takes it out.
+    #[test]
+    fn the_drive_blocks_the_offset_the_tube_character_makes() {
+        let mut s = Strip::new([0, 0, u16::MAX, 0, 0, drive_kind_word(0), 0], false);
+        let mut buf = vec![0.3f32; BLOCK * 2 * 40];
+        run(&mut s, &mut buf);
+        let tail = &buf[buf.len() - BLOCK * 2..];
+        assert!(tail.iter().all(|x| x.abs() < 1e-3), "no floor: {:?}", tail[0]);
+    }
+
+    /// Every character stays inside its bounds and finite, at any amount.
+    #[test]
+    fn every_drive_character_is_bounded() {
+        for kind in 0..4 {
+            let mut s = Strip::new([0, 0, u16::MAX, 0, 0, drive_kind_word(kind), 0], false);
+            let mut buf = sine(1_000.0, BLOCK * 2 * 20);
+            run(&mut s, &mut buf);
+            assert!(buf.iter().all(|x| x.is_finite() && x.abs() < 1.0), "{}", DRIVE_TYPES[kind]);
+        }
+    }
+
+    /// A character change crossfades: switching from tube to clip mid-tone leaves no click.
+    #[test]
+    fn a_character_change_does_not_click() {
+        let mut s = Strip::new([0, 0, u16::MAX, 0, 0, drive_kind_word(0), 0], false);
+        let mut buf = sine(1_000.0, BLOCK * 2 * 40);
+        for (i, c) in buf.chunks_mut(BLOCK * 2).enumerate() {
+            if i == 20 {
+                s.set([0, 0, u16::MAX, 0, 0, drive_kind_word(3), 0], false);
+            }
+            s.process(c, RATE);
+        }
+        let max = buf.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        // Both characters are held well inside the shaper's bounds, so a step would stand out.
+        assert!(max < 0.1, "no click: {max}");
     }
 
     /// The word and the cutoff are each other's inverse across the range.
