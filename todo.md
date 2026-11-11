@@ -7,6 +7,10 @@
 
 This file tracks the open/executed state of the todo items. The canonical priority plan is in `docs/roadmap-2026-11-10.md` — reference that doc for the full rationale, audit findings, and ordering.
 
+- [ ] **Docked knobs: user-set labels and colours** (2026-11-12): a tile header's channel knobs wear fixed words and
+      colours (VOL green, PAN blue, PITCH orange with its semitones on the face). Let the user rename a knob and pick
+      its colour — saved with the project, or as a view setting.
+
 ## 🎯 PLANNED — "Range" removed from every device (plan only, NOT started)
 Requested 2026-11-12, right after the docked-strip work: the RANGE box goes away everywhere (the plugin windows' strip
 and anything mirroring it). The pitch knob's range becomes fixed at 48 semitones: centre = 0, hard left = -48 st, hard

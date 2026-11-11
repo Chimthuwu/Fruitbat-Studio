@@ -934,10 +934,8 @@ pub enum Drag {
     DeviceRackTile { kind: crate::device_rack::DeviceKind, _x0: f32 },
     /// A device tile's parameter row dragged: the value follows the pointer along its bar.
     DeviceRackParam { key: usize, id: u32, y0: f32, v0: f64 },
-    /// A tile's device strip knob (the channel's PAN / VOL / PITCH) dragged: `v0` at `y0`.
+    /// A tile header's channel knob (PAN / VOL / PITCH) dragged: `v0` at `y0`.
     RackStrip { row: usize, which: ChannelControl, y0: f32, v0: f64 },
-    /// A tile's device strip TRACK box dragged: the track it started on, at `y0`.
-    RackTrack { row: usize, y0: f32, t0: u16 },
     /// Monitor debug panel slider.
     MonParam(usize),
     /// Cable physics debug panel slider.
@@ -6261,14 +6259,6 @@ impl App {
                     let v = (v0 - (y - y0) as f64 * 0.005).clamp(0.0, 1.0);
                     crate::device_rack::set_channel_knob(self, row, which, v);
                 }
-                Drag::RackTrack { row, y0, t0 } => {
-                    // The TRACK box: one insert per 10 px (the channel rack's mixer box).
-                    let steps = ((y0 - y) / 10.0) as i32;
-                    let max = i32::from(crate::mixer::max_insert(&self.state.project));
-                    let t = (i32::from(t0) + steps).clamp(0, max) as u16;
-                    self.channel_control(row, ChannelControl::Track, |c| c.mixer_track = t);
-                    self.invalidate();
-                }
                 Drag::DeviceRackTile { .. } => {
                     // While the tile drags, the gap it would drop at follows the pointer (the highlight).
                     self.state.device_rack_drop = Some(crate::views::device_rack::drop_index(&self.state, x));
@@ -7221,7 +7211,7 @@ impl App {
             Some(Drag::BrowserSplit { .. }) => crate::browser::save_width(self.state.browser_w),
             // The rack's height is session state so far (the project state lands with M8); nothing to save.
             Some(Drag::DeviceRackSplit { .. }) => {}
-            Some(Drag::DeviceRackParam { .. }) | Some(Drag::RackStrip { .. }) | Some(Drag::RackTrack { .. }) => {}
+            Some(Drag::DeviceRackParam { .. }) | Some(Drag::RackStrip { .. }) => {}
             Some(Drag::DeviceRackTile { kind, .. }) => {
                 let x = self.mouse.0;
                 crate::device_rack::tile_drop(self, kind, x);

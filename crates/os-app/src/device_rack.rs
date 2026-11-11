@@ -38,7 +38,7 @@ pub const MAX_H: f32 = 360.0;
 /// editor (the tallest is 380 px, the commonest 302) to be drawn at nearly its own size.
 pub const DEFAULT_H: f32 = 336.0;
 /// Header row (title, pin, collapse), and the collapsed rack's whole height.
-pub const HEADER_H: f32 = 23.0;
+pub const HEADER_H: f32 = 36.0;
 /// Width of a device tile (rows stack name above bar, so it stays narrow): 4 tiles fit a 1229 px window.
 pub const TILE_W: f32 = 280.0;
 /// Padding between a tile's edge and the device controls drawn in it.
@@ -467,10 +467,8 @@ pub enum RackAct {
     EditorFlip { key: usize },
     /// The flipped cards' Load: the picker lives in the full editor, so pop its window out.
     EditorOpen { key: usize },
-    /// A tile's device strip: a channel knob pressed at normalized `v` — it drags from there.
+    /// A header knob of the tile's channel pressed at normalized `v` — it drags from there.
     ChannelKnob { row: usize, which: ChannelControl, v: f64 },
-    /// A tile's device strip: its mixer TRACK box pressed — a drag steps it.
-    ChannelTrack { row: usize },
     /// The device menu's Remove: delete the device from its chain.
     Remove(DeviceKind),
     /// The device menu's Replace (the instrument): the device browser, whose instrument pick replaces it.
@@ -695,10 +693,6 @@ pub fn run(app: &mut App, act: RackAct) {    match act {
             set_channel_knob(app, row, which, v);
             app.drag = Some(Drag::RackStrip { row, which, y0: app.mouse.1, v0: v });
         }
-        RackAct::ChannelTrack { row } => {
-            let t0 = app.state.project.channels.get(row).map_or(0, |c| c.mixer_track);
-            app.drag = Some(Drag::RackTrack { row, y0: app.mouse.1, t0 });
-        }
     }
 }
 
@@ -760,7 +754,7 @@ pub fn set_channel_knob(app: &mut App, row: usize, which: ChannelControl, v: f64
             let cents = (((v * 2.0 - 1.0) * f64::from(100 * range)).round() as i32).clamp(-100 * range, 100 * range);
             app.channel_control(row, which, |c| c.pitch_cents = cents);
         }
-        // The mixer track is stepped, not set: the strip's TRACK box (`RackAct::ChannelTrack`).
+        // The mixer track is not a knob: it has no place in a device's header.
         ChannelControl::Track => {}
     }
 }

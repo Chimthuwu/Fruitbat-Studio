@@ -12,7 +12,7 @@ use os_ui::{Color, Rect, kit};
 use crate::app::{Action, State};
 use crate::plugins::Plugins;
 use crate::rack_ui::{EDITOR_TAB, EDITOR_SUBTAB, EDITOR_BANK, EDITOR_PAD, EDITOR_OPEN};
-use crate::device_rack::{self, Device, DeviceKind, RackParam, HEADER_H, RackAct, TILE_W};
+use crate::device_rack::{self, Device, DeviceKind, RackParam, HEADER_H, RackAct};
 use crate::history::ChannelControl;
 use crate::icons::{self, Icon};
 use crate::views::{Ui, fnt};
@@ -42,7 +42,7 @@ pub(crate) fn layout(s: &State, r: Rect) -> Vec<(Device, Rect)> {
     device_rack::rack_chain(s)
         .into_iter()
         .scan(body.x - scroll, |x, d| {
-            let w = tile_width(s, &d, editor_h(body.h, &d));
+            let w = tile_width(s, &d, editor_h(body.h));
             let tile = Rect::new(*x, body.y, w, body.h);
             *x += w + GAP;
             Some((d, tile))
@@ -68,7 +68,7 @@ fn plugin_name<'a>(s: &'a State, d: &'a Device) -> &'a str {
 pub(crate) fn content_w(s: &State) -> f32 {
     let r = panel_rect(s, s.screen.0, s.screen.1);
     let body_h = (r.h - HEADER_H).max(0.0);
-    device_rack::rack_chain(s).iter().map(|d| tile_width(s, d, editor_h(body_h, d)) + GAP).sum()
+    device_rack::rack_chain(s).iter().map(|d| tile_width(s, d, editor_h(body_h)) + GAP).sum()
 }
 
 /// The rack's horizontal scroll clamped to what the panel's width `w` can show.
@@ -86,7 +86,7 @@ pub(crate) fn wheel(s: &mut State, r: Rect, x: f32, y: f32, d: f32) -> bool {
     }
     if let Some((dev, tile)) = layout(s, r).into_iter().find(|(_, t)| t.contains(x, y)) {
         if let Some(key) = dev.key {
-            let b = body(&dev, tile);
+            let b = body(tile);
             let max = s.device_rack_params.get(&key).map_or(0.0, |ps| scroll_max(b, ps));
             if max > 0.0 {
                 let at = s.device_rack_tile_scroll.entry(key).or_insert(0.0);
@@ -134,27 +134,16 @@ pub fn device_keys(s: &State) -> Vec<usize> {
     layout(s, r).into_iter().filter_map(|(d, _)| d.key).collect()
 }
 
-/// Height of the strip row a tile's device shows under its header: the track's channel PAN / VOL / PITCH and the
-/// mixer TRACK box, where the plugin window's strip has them.
-pub(crate) const STRIP_H: f32 = 30.0;
-
-/// Whether a tile gets the strip row: only the track's instrument has a channel behind it (an effect's tile, a
-/// container's and the empty slot's have none, and the plugin window greys the strip out for those).
-fn has_strip(d: &Device) -> bool {
-    matches!(d.kind, DeviceKind::Instrument(_))
-}
-
 /// The height a tile's editor is given in a panel body `body_h` tall. The tile's width is measured against this — not
-/// the whole tile — or the header (and the strip) would make the editor taller than it really is, and the editor would
-/// be drawn height-limited inside a body-sized image: a column of its background down the tile's right edge.
-fn editor_h(body_h: f32, d: &Device) -> f32 {
-    (body_h - HEADER_H - if has_strip(d) { STRIP_H } else { 0.0 }).max(1.0)
+/// the whole tile — or the header would make the editor taller than it really is, and the editor would be drawn
+/// height-limited inside a body-sized image: a column of its background down the tile's right edge.
+fn editor_h(body_h: f32) -> f32 {
+    (body_h - HEADER_H).max(1.0)
 }
 
-/// A tile's editor body: below its header, and its strip row when it has one.
-fn body(d: &Device, tile: Rect) -> Rect {
-    let top = HEADER_H + if has_strip(d) { STRIP_H } else { 0.0 };
-    Rect::new(tile.x, tile.y + top, tile.w, (tile.h - top).max(0.0))
+/// A tile's editor body: what is under its header.
+fn body(tile: Rect) -> Rect {
+    Rect::new(tile.x, tile.y + HEADER_H, tile.w, (tile.h - HEADER_H).max(0.0))
 }
 
 /// Paints the rack panel over `r` (its splitter, header and device tiles).
@@ -180,7 +169,7 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, r: Rect) {
     ui.c.text(
         fnt(15.0),
         r.x + 8.0,
-        head.y + 2.0,
+        head.y + 6.5,
         t.text,
         &format!("Device rack - {name}"),
     );
@@ -193,8 +182,8 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, r: Rect) {
     if overflow {
         let (at_start,) = (s.device_rack_scroll_x <= 0.5,);
         let steppers = [
-            ("‹", -1.0, Rect::new(bx, head.y + 2.0, 24.0, 17.0)),
-            ("›", 1.0, Rect::new(bx + 28.0, head.y + 2.0, 24.0, 17.0)),
+            ("‹", -1.0, Rect::new(bx, head.y + 6.5, 24.0, 17.0)),
+            ("›", 1.0, Rect::new(bx + 28.0, head.y + 6.5, 24.0, 17.0)),
         ];
         for (label, d, b) in steppers {
             let dim = d < 0.0 && at_start;
@@ -213,7 +202,7 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, r: Rect) {
     }
     header_button(
         ui,
-        Rect::new(bx, head.y + 2.0, 60.0, 17.0),
+        Rect::new(bx, head.y + 6.5, 60.0, 17.0),
         "＋ Add",
         false,
         Action::DeviceRack(RackAct::AddDevice),
@@ -224,7 +213,7 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, r: Rect) {
     let pinned = s.device_rack_pin.is_some();
     header_button(
         ui,
-        Rect::new(bx, head.y + 2.0, 60.0, 17.0),
+        Rect::new(bx, head.y + 6.5, 60.0, 17.0),
         if pinned { "Pinned" } else { "Pin" },
         pinned,
         Action::DeviceRack(RackAct::TogglePin),
@@ -235,7 +224,7 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, r: Rect) {
     bx += 66.0;
     header_button(
         ui,
-        Rect::new(bx, head.y + 2.0, 60.0, 17.0),
+        Rect::new(bx, head.y + 6.5, 60.0, 17.0),
         if s.device_rack_collapsed {
             "Show"
         } else {
@@ -256,7 +245,7 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, r: Rect) {
     let windows = !s.device_rack_float.is_empty();
     header_icon_button(
         ui,
-        Rect::new(bx, head.y + 2.0, 24.0, 17.0),
+        Rect::new(bx, head.y + 6.5, 24.0, 17.0),
         Icon::PopOut,
         windows,
         Action::DeviceRack(RackAct::ToggleEditors),
@@ -338,25 +327,29 @@ fn tile_paint(ui: &mut Ui, s: &State, plugins: &Plugins, i: usize, d: Device, ti
             },
         );
     }
-    // The name, then the header's pop-out and menu.
-    let menu = Rect::new(tile.right() - 22.0, head.y + 4.0, 17.0, 15.0);
-    let popout = Rect::new(menu.x - 22.0, head.y + 2.0, 19.0, 19.0);
+    // The name, then the header's pop-out and menu, the channel's knobs standing in front of them.
+    let menu = Rect::new(tile.right() - 22.0, cy - 7.5, 17.0, 15.0);
+    let popout = Rect::new(menu.x - 22.0, cy - 9.5, 19.0, 19.0);
     // The drum machine's tile flips between its pads and its cards: one more button, and the name
     // gives up the room it takes.
-    let flip = Rect::new(popout.x - 22.0, head.y + 2.0, 19.0, 19.0);
+    let flip = Rect::new(popout.x - 22.0, cy - 9.5, 19.0, 19.0);
     let drum = d.key.is_some_and(|_| matches!(crate::rack_ui::ui(plugin_name(s, &d)), Some(crate::rack_ui::Ui::Drum)));
     // The Trio's pages are the tile's to show, its editor being hosted here: three buttons beside the pop-out, where
     // the editor's own strip row keeps them in its window.
     let trio = d.key.is_some_and(|_| matches!(crate::rack_ui::ui(plugin_name(s, &d)), Some(crate::rack_ui::Ui::Trio)));
-    let room = tile.w - 24.0
+    // The button cluster's left edge — the trio's pages, the drum's flip, or the pop-out alone — and the channel's
+    // knobs in front of it, which the name gives room to (only an instrument has a channel behind its tile).
+    let cluster = tile.right()
         - if drum {
-            86.0
+            66.0
         } else if trio {
-            130.0
+            110.0
         } else {
-            64.0
+            44.0
         };
-    ui.c.text_clip(fnt(14.0), tile.x + 24.0, head.y + 3.0, room, t.text, &d.name);
+    let knobs = matches!(d.kind, DeviceKind::Instrument(_)).then(|| cluster - 8.0 - KNOB_STEP * 3.0);
+    let room = knobs.unwrap_or(cluster) - 6.0 - (tile.x + 24.0);
+    ui.c.text_clip(fnt(14.0), tile.x + 24.0, cy - 8.0, room.max(12.0), t.text, &d.name);
     // The pop-out arrow: pop the device's editor out to its own floating window (or dock it back, lit
     // while it is out). An out-arrow, not a wrench — the wrench is the device wrapper's own symbol
     // (the plugin window's Misc tab), so the tile's button says what it does instead.
@@ -398,7 +391,7 @@ fn tile_paint(ui: &mut Ui, s: &State, plugins: &Plugins, i: usize, d: Device, ti
             (1, Icon::Timeline, "Envelopes, LFOs and filter"),
             (2, Icon::Wave, "Custom shape sample"),
         ] {
-            let r = Rect::new(popout.x - 22.0 * f32::from(3 - n), head.y + 2.0, 19.0, 19.0);
+            let r = Rect::new(popout.x - 22.0 * f32::from(3 - n), cy - 9.5, 19.0, 19.0);
             header_icon_button(
                 ui,
                 r,
@@ -433,11 +426,11 @@ fn tile_paint(ui: &mut Ui, s: &State, plugins: &Plugins, i: usize, d: Device, ti
     {
         ui.c.text(fnt(13.0), menu.x, menu.y, t.text, "v");
     }
-    // The device strip (the track's channel), between the header and the editor body.
-    if let DeviceKind::Instrument(row) = d.kind {
-        strip_paint(ui, s, tile, row);
+    // The channel's PAN / VOL / PITCH, in the header beside the name.
+    if let (DeviceKind::Instrument(row), Some(left)) = (d.kind, knobs) {
+        channel_knobs(ui, s, row, left, cy);
     }
-    let body = body(&d, tile);
+    let body = body(tile);
     // The empty instrument slot: the whole tile opens the device browser (the instrument section of it).
     if d.kind == DeviceKind::NoInstrument {
         ui.c.fill_rect(body, t.s(0x131718));
@@ -484,54 +477,60 @@ fn container_body(ui: &mut Ui, s: &State, body: Rect, t: u16, k: u8) {
     ui.c.pop_clip();
 }
 
-/// A tile's device strip: the track's channel, as the plugin window's strip shows it — PAN, VOL and PITCH knobs and
-/// the mixer TRACK box under the header. A knob drags vertically; the TRACK box steps on a drag (one step per 10 px),
-/// both through the channel's undo-aware `channel_control`.
-fn strip_paint(ui: &mut Ui, s: &State, tile: Rect, row: usize) {
-    let t = ui.t;
-    let strip = Rect::new(tile.x, tile.y + HEADER_H, tile.w, STRIP_H);
-    ui.c.fill_rect(strip, t.s(0x1e2224));
-    ui.c.fill_rect(Rect::new(strip.x, strip.bottom() - 1.0, strip.w, 1.0), t.splitter_dark);
+/// The channel's PAN / VOL / PITCH, in a tile's header where the plugin window's strip has them: dragging one up /
+/// down sets it through the channel's undo-aware path. Each knob carries its own word (VOL, PAN) or its value (the
+/// pitch's semitones) in its own colour, so the row needs no caption. Those words and colours are a stopgap — user-set
+/// labels and colours are on `todo.md`.
+pub(crate) const KNOB_STEP: f32 = 24.0;
+
+fn channel_knobs(ui: &mut Ui, s: &State, row: usize, left: f32, cy: f32) {
     let Some(ch) = s.project.channels.get(row) else { return };
     let range = i32::from(ch.misc.pitch_range.clamp(1, 48));
+    let pitch = 0.5 + f64::from(ch.pitch_cents) / (200.0 * f64::from(range));
+    let semi = (ch.pitch_cents as f32 / 100.0).round() as i32;
+    let pitch_text = if semi > 0 { format!("+{semi}") } else { semi.to_string() };
     let knobs = [
-        ("PAN", ChannelControl::Pan, (ch.pan + 1.0) * 0.5, true),
-        ("VOL", ChannelControl::Volume, ch.volume, false),
-        ("PITCH", ChannelControl::Pitch, 0.5 + f64::from(ch.pitch_cents) / (200.0 * f64::from(range)), true),
+        ("VOL", ChannelControl::Volume, ch.volume, false, 0x9ed44a, 7.0),
+        ("PAN", ChannelControl::Pan, (ch.pan + 1.0) * 0.5, true, 0x54a6e8, 7.0),
+        ("PITCH", ChannelControl::Pitch, pitch, true, 0xe0a040, 8.0),
     ];
-    for (i, (label, which, v, bipolar)) in knobs.into_iter().enumerate() {
-        let cell = Rect::new(strip.x + 4.0 + i as f32 * 44.0, strip.y + 1.0, 40.0, STRIP_H - 2.0);
-        let v = v.clamp(0.0, 1.0);
+    for (i, (label, which, v, bipolar, accent, font)) in knobs.into_iter().enumerate() {
+        // The pitch knob is a numbered dial: its face shows the semitones rather than a word that would not fit.
+        let text = if which == ChannelControl::Pitch { pitch_text.clone() } else { label.to_string() };
+        let cell = Rect::new(left + i as f32 * KNOB_STEP, cy - KNOB_STEP * 0.5, KNOB_STEP, KNOB_STEP);
         let hov = ui.hit(
             cell,
             Action::DeviceRack(RackAct::ChannelKnob { row, which, v }),
             format!("{label}: drag up / down to set it"),
         );
-        kit::knob(
-            ui.c,
-            t,
-            cell.cx(),
-            strip.y + 11.0,
-            8.0,
-            v as f32,
-            bipolar,
-            kit::KnobLook::Ring,
-            kit::State::hover(hov),
-        );
-        ui.c.text_center(fnt(9.0), Rect::new(cell.x, strip.y + 19.0, cell.w, 10.0), t.text_dim, label);
+        header_knob(ui, cell.cx(), cy, 9.5, v.clamp(0.0, 1.0) as f32, bipolar, Color::rgb(accent), &text, font, hov);
     }
-    // The mixer TRACK box: the insert the channel plays through ("---" is the master), dragged to step it.
-    let box_rect = Rect::new(strip.right() - 40.0, strip.y + 3.0, 34.0, 15.0);
-    let label = if ch.mixer_track == 0 { "---".to_string() } else { ch.mixer_track.to_string() };
-    let hov = ui.hit(
-        box_rect,
-        Action::DeviceRack(RackAct::ChannelTrack { row }),
-        "Mixer track: drag up / down to step it (0 is the master)",
-    );
-    ui.c.fill_rrect(box_rect, 2.0, if hov { t.s(0x333a3e) } else { t.s(0x24282b) });
-    ui.c.stroke_rrect(box_rect, 2.0, 1.0, t.splitter_dark);
-    ui.c.text_center(fnt(11.0), box_rect, t.text, &label);
-    ui.c.text_center(fnt(9.0), Rect::new(box_rect.x, strip.y + 19.0, box_rect.w, 10.0), t.text_dim, "TRACK");
+}
+
+/// A knob in a tile's header: a 270° ring in its own colour round a dark disc that carries its word or value. Too
+/// small for a caption or a pointer line — the arc is the reading, the face is the label.
+fn header_knob(
+    ui: &mut Ui,
+    cx: f32,
+    cy: f32,
+    r: f32,
+    v: f32,
+    bipolar: bool,
+    accent: Color,
+    text: &str,
+    font: f32,
+    hov: bool,
+) {
+    let t = ui.t;
+    let (start, sweep) = (0.75 * std::f32::consts::PI, 1.5 * std::f32::consts::PI);
+    ui.c.arc(cx, cy, r, start, sweep, 1.8, t.s(0x2a2f31));
+    let a = start + sweep * v.clamp(0.0, 1.0);
+    let a0 = if bipolar { start + sweep / 2.0 } else { start };
+    if (a - a0).abs() > 0.01 {
+        ui.c.arc(cx, cy, r, a0.min(a), (a - a0).abs(), 1.8, accent);
+    }
+    ui.c.fill_circle(cx, cy, r - 2.6, if hov { t.s(0x2b3134) } else { t.s(0x1b1f21) });
+    ui.c.text_center(fnt(font), Rect::new(cx - r, cy - 5.0, 2.0 * r, 10.0), accent, text);
 }
 
 /// One control cell: the name above, the dial (or the switch), the value below.
@@ -598,10 +597,10 @@ fn scroll_max(body: Rect, params: &[RackParam]) -> f32 {
 #[cfg(test)]
 pub(crate) fn param_dial(s: &State, key: usize, id: u32) -> Option<Rect> {
     let (_, w, h) = ((), s.screen.0, s.screen.1);
-    let (d, tile) = layout(s, panel_rect(s, w, h)).into_iter().find(|(d, _)| d.key == Some(key))?;
+    let (_, tile) = layout(s, panel_rect(s, w, h)).into_iter().find(|(d, _)| d.key == Some(key))?;
     let params = s.device_rack_params.get(&key)?;
     let i = params.iter().position(|p| p.id == id)?;
-    let body = body(&d, tile);
+    let body = body(tile);
     let scroll = s.device_rack_tile_scroll.get(&key).copied().unwrap_or(0.0);
     let (_, cell) = *grid(body, params, scroll).cells.iter().find(|(j, _)| *j == i)?;
     Some(Rect::new(cell.x + 4.0, cell.y + 18.0, CELL_W - 8.0, CELL_H - 20.0))

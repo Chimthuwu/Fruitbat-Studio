@@ -446,20 +446,9 @@ pub fn image(
     let (px, w, h, hits) = if drum {
         drum_half(&e.buf, dw, scale, flip, hits)
     } else if band > 0 {
-        strip_off(&e.buf, dw, chb, band, hits)
+        strip_off(&e.buf, dw, chb, band, scaled_hits(hits, scale))
     } else {
-        // The hits, in the canvas's device px: the editor drew in logical px.
-        let hits = hits
-            .into_iter()
-            .map(|(mut r, id, v)| {
-                r.x *= scale;
-                r.y *= scale;
-                r.w = (r.w * scale).max(1.0);
-                r.h = (r.h * scale).max(1.0);
-                (r, id, v)
-            })
-            .collect();
-        (e.buf.clone(), dw, dh, hits)
+        (e.buf.clone(), dw, dh, scaled_hits(hits, scale))
     };
     e.image = Rc::new(Image { w: w as usize, h: h as usize, px, hits });
     e.name = name.to_string();
@@ -657,6 +646,21 @@ fn drum_half(
         })
         .collect();
     (half, cw, dh as u32, hits)
+}
+
+/// The editor's hit regions in the canvas's device px: the editors draw in logical px, and the canvas rasterises at
+/// `scale` device px per logical px, so a hit rect must be stretched the same way as the picture. Left in logical px,
+/// a hit lands up and left of the control it belongs to — a knob you have to click well right of to move.
+fn scaled_hits(hits: Vec<(Rect, u32, Option<f64>)>, scale: f32) -> Vec<(Rect, u32, Option<f64>)> {
+    hits.into_iter()
+        .map(|(mut r, id, v)| {
+            r.x *= scale;
+            r.y *= scale;
+            r.w = (r.w * scale).max(1.0);
+            r.h = (r.h * scale).max(1.0);
+            (r, id, v)
+        })
+        .collect()
 }
 
 /// The Trio's tile image: the frame it painted minus its strip row, which the tile's own header draws now. `px` is
