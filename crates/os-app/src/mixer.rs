@@ -2038,7 +2038,10 @@ pub fn meter_menu(s: &State, x: f32, y: f32) -> Popup {
         PItem::new("Peak hold", set(k::HOLD_ON, if on(k::HOLD_ON) { 0.0 } else { 1.0 })).mark(Mark::Check(on(k::HOLD_ON))),
         PItem::sub("Peak hold time", [500.0, 1000.0, 1500.0, 3000.0, 5000.0].iter().map(|&ms| radio(k::HOLD_MS, ms, format!("{:.1} s", ms / 1000.0))).collect()),
         PItem::sep(),
-        // Colours: the gradient down the bars and the darkened cap over the peak.
+        // Colours: where the bars turn yellow and red (the values the scale's marks cross), the gradient down the bars
+        // and the darkened cap over the peak.
+        PItem::sub("Yellow from", [-24.0, -18.0, -12.0, -9.0, -6.0, -3.0, 0.0].iter().map(|&db| radio(k::YELLOW_DB, db, format!("{db:.0} dB"))).collect()),
+        PItem::sub("Red from", [-12.0, -9.0, -6.0, -3.0, 0.0, 3.0, 6.0].iter().map(|&db| radio(k::RED_DB, db, format!("{db:.0} dB"))).collect()),
         PItem::sub("Colour gradient", [(0.0, "Off"), (1.0, "On"), (2.0, "Strong")].iter().map(|&(v, label)| radio(k::GRADIENT, v, label.to_string())).collect()),
         PItem::new("Dark cap", set(k::CAP, if on(k::CAP) { 0.0 } else { 1.0 })).mark(Mark::Check(on(k::CAP))),
     ];
@@ -3642,6 +3645,14 @@ mod tests {
         let Cmd::Mixer(floor) = floor else { panic!("a meter setting") };
         run(&mut a, floor);
         assert_eq!(a.state.mixer.meter_cfg.v[crate::meters::k::FLOOR_DB], -51.0);
+        let yellow = sub("Yellow from").into_iter().find(|i| i.label == "-12 dB").expect("the yellow zones").cmd.clone();
+        let Cmd::Mixer(yellow) = yellow else { panic!("a meter setting") };
+        run(&mut a, yellow);
+        assert_eq!(a.state.mixer.meter_cfg.v[crate::meters::k::YELLOW_DB], -12.0);
+        let red = sub("Red from").into_iter().find(|i| i.label == "3 dB").expect("the red zones").cmd.clone();
+        let Cmd::Mixer(red) = red else { panic!("a meter setting") };
+        run(&mut a, red);
+        assert_eq!(a.state.mixer.meter_cfg.v[crate::meters::k::RED_DB], 3.0);
         let grad = sub("Colour gradient").into_iter().find(|i| i.label == "Off").expect("the gradients").cmd.clone();
         let Cmd::Mixer(grad) = grad else { panic!("a meter setting") };
         run(&mut a, grad);
