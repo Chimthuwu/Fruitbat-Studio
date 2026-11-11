@@ -707,7 +707,7 @@ fn console_switch(ui: &mut Ui, r: Rect, on: bool, st: &ConsoleStyle) {
 
 /// The Analog Channel Strip's console: the STRIP switch, then the Edition's four rows of section controls — low cut
 /// and OTT, drive with its character's button, compressor (its profile cycles from the label, as the Edition's little
-/// triangle says) and TAME, and the de-esser. Every control writes a word of the track's strip, so the panel and the
+/// triangle says) and TAME, and the table. Every control writes a word of the track's strip, so the panel and the
 /// right-click menu change the same state (`crate::mixer::MCmd`).
 fn console_panel(ui: &mut Ui, s: &State, n: u16, r: Rect) {
     let st = console_style(ui);
@@ -767,10 +767,10 @@ fn console_panel(ui: &mut Ui, s: &State, n: u16, r: Rect) {
     console_knob(ui, s, b, 0.27, KnobId::Strip(n, 1), st.comp, values);
     console_knob(ui, s, b, 0.73, KnobId::Strip(n, 4), st.comp, values);
 
-    // The de-esser on its own, centred as the Edition's DS row.
+    // The table on its own, centred as the Edition's DS row was.
     let b = at(3);
     console_plate(ui, b, &st);
-    ui.c.text_center(Font::new(9), Rect::new(b.x, b.y + 2.0, b.w, 11.0), st.ds, if wide { "DE-ESS" } else { "DS" });
+    ui.c.text_center(Font::new(9), Rect::new(b.x, b.y + 2.0, b.w, 11.0), st.ds, if wide { "TABLE" } else { "TBL" });
     console_knob(ui, s, b, 0.5, KnobId::Strip(n, 7), st.ds, values);
 }
 
@@ -1365,7 +1365,7 @@ mod tests {
         app.state.mixer.layout = 4; // Wide 2, 64 px
         paint(&mut app, &mut c);
         assert!(has(&app, Action::Mix(MHit::StripPower(2))), "the strip's switch");
-        assert!(has(&app, Action::Knob(KnobId::Strip(2, 7))), "the de-esser's knob");
+        assert!(has(&app, Action::Knob(KnobId::Strip(2, 7))), "the table's knob");
         assert!(has(&app, Action::Knob(KnobId::Strip(2, 1))), "the compressor's, too");
         app.state.mixer.layout = 3; // Wide, 44 px
         paint(&mut app, &mut c);

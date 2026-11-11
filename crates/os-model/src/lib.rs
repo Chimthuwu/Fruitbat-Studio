@@ -1595,7 +1595,8 @@ pub struct MixerTrack {
     /// Edition strip (plan v3 Appendix C). All zero on a track that never used it. Word 0 is the low cut
     /// (`os_dsp::strip::cut_hz`: 20 Hz at word 0, the section's off position, to 350 Hz) and word 3 the OTT
     /// (`os_dsp::strip::ott_amount`: 0 is the section off, 65535 all the way in); word 2 is the drive with its
-    /// character in word 6, word 1 the compressor with its profile in word 5, word 4 TAME and word 7 the de-esser.
+    /// character in word 6, word 1 the compressor with its profile in word 5, word 4 TAME and word 7 the table
+    /// (`os_dsp::strip::table_amount`: a drifting sixteen-band curve over the spectrum, word 0 is the section off).
     pub strip: [u16; 8],
     /// The strip's bypass switch: `true` (the default) passes the track through untouched, and a track that never
     /// turned the strip on stores nothing (`LSCS`, plan v3 §6.4).

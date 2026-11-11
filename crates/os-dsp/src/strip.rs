@@ -3,7 +3,7 @@
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! The Analog Channel Strip: Lemon Studio's port of the Michael Lane Edition fork's console strip (plan v3 Appendix C).
-//! The low cut, the OTT, the drive, TAME, the compressor and the de-esser are here, in the fork's order. The gate the fork
+//! The low cut, the OTT, the drive, TAME, the compressor and the table are here, in the fork's order. The gate the fork
 //! has in the OTT's place is gone: the user wanted a one-knob upward compressor there instead.
 //!
 //! A strip is bypassed, faded out, and only then does the engine stop calling it: a bypassed strip passes the track
@@ -781,65 +781,114 @@ impl Compressor {
     }
 }
 
-/// How many frames of edges the de-esser's detector compares.
-const DEESS_HISTORY: usize = 21;
+/// The table's bands: sixteen, spread logarithmically from 120 Hz to 14 kHz (or 40 % of the rate).
+pub const TABLE_BANDS: usize = 16;
 
-/// The furthest the de-esser takes a band down: the fork's Depth, `1 / 0.5001`.
-const DEESS_DEPTH: f32 = 1.0 / 0.5001;
+/// The table itself, in dB per band: a hand-drawn Filtertable-style curve, some bands lifted and some hollowed out,
+/// which drifts through the spectrum as the section runs.
+pub const TABLE: [f32; TABLE_BANDS] = [6.0, -9.0, 3.0, -6.0, 9.0, -4.0, 2.0, -10.0, 7.0, -6.0, 9.0, -3.0, 1.0, -8.0, 5.0, -5.0];
 
-/// The de-esser's control word as an amount: word 0 is the section off, 65535 is all the way in.
-pub fn deess_amount(word: u16) -> f32 {
+/// How long the table takes to drift one whole cycle through the spectrum, in seconds.
+const TABLE_DRIFT: f32 = 12.0;
+
+/// The table's control word as an amount: word 0 is the section off, 65535 all the way in.
+pub fn table_amount(word: u16) -> f32 {
     f32::from(word) / 65535.0
 }
 
 /// The word for an amount 0..=1.
-pub fn deess_word(amount: f32) -> u16 {
+pub fn table_word(amount: f32) -> u16 {
     (amount.clamp(0.0, 1.0) * 65535.0).round() as u16
 }
 
-/// The de-esser: the fork's port of Airwindows DeBess, a detector that watches how sharp the signal's edges are and pulls
-/// the sharpest ones down toward a two-sample average of the signal. It looks at the edges of both channels over the last
-/// twenty frames, alternates two banks of state frame by frame so a reduction does not read as one frame of dip, and takes
-/// a band no more than about 6 dB down. There is no look-ahead and no delay line in the audio path. Word 7 is the amount
-/// (0 = off); the amount and the fade glide over 20 ms and 10 ms, so switching it in or out does not click.
-pub struct Deess {
-    /// Per channel, the last twenty frames' samples the detector measures its slopes from.
-    samples: [[f32; DEESS_HISTORY]; 2],
-    /// Per channel, the slopes between them.
-    slopes: [[f32; DEESS_HISTORY]; 2],
-    /// Per channel and per alternating bank: the two-sample average, and the gain the sharp edges are pulled down by.
-    low: [[f32; 2]; 2],
-    ratio: [[f32; 2]; 2],
-    /// Which of the two banks this frame uses; the fork alternates them every frame.
-    flip: usize,
+/// One of the table's bands: a constant-Q band-pass (Q = 5) with a state per channel. The bands are summed back over
+/// the dry signal, so a band the curve lifts is lifted in the sound and a band it hollows is taken out of it.
+struct TableBand {
+    b0: f32,
+    a1: f32,
+    a2: f32,
+    state: [[f32; 2]; 2],
+}
+
+impl TableBand {
+    fn silent() -> TableBand {
+        TableBand { b0: 0.0, a1: 0.0, a2: 0.0, state: [[0.0; 2]; 2] }
+    }
+
+    /// Places band `i` of `TABLE_BANDS` between 120 Hz and 14 kHz for this rate.
+    fn tune(&mut self, i: usize, rate: f32) {
+        let high = 14_000.0f32.min(rate * 0.40);
+        let low = 120.0f32.min(high / 10.0);
+        let hz = low * (high / low).powf(i as f32 / (TABLE_BANDS - 1) as f32);
+        let w = std::f32::consts::TAU * hz / rate;
+        let (sin, cos) = w.sin_cos();
+        let alpha = sin / 10.0;
+        self.b0 = alpha / (1.0 + alpha);
+        self.a1 = -2.0 * cos / (1.0 + alpha);
+        self.a2 = (1.0 - alpha) / (1.0 + alpha);
+    }
+
+    fn reset(&mut self) {
+        self.state = [[0.0; 2]; 2];
+    }
+
+    /// The band-passed frame.
+    fn run(&mut self, input: [f32; 2]) -> [f32; 2] {
+        std::array::from_fn(|c| {
+            let z = &mut self.state[c];
+            let y = self.b0 * input[c] + z[0];
+            z[0] = -self.a1 * y + z[1];
+            z[1] = -self.b0 * input[c] - self.a2 * y;
+            // A silent tail must not leave denormals running through sixteen bands.
+            for v in z.iter_mut() {
+                if v.abs() < 1e-20 {
+                    *v = 0.0;
+                }
+            }
+            y
+        })
+    }
+}
+
+/// The table's gain for band `i` with the curve drifted to `phase` bands: the curve read between its neighbouring bands
+/// and turned into a linear factor (so +9 dB is ×2.82 and -9 dB is ×0.35), offset so that a flat curve adds nothing.
+fn table_gain(i: usize, phase: f32) -> f32 {
+    let at = (i as f32 + phase).rem_euclid(TABLE_BANDS as f32);
+    let a = at.floor() as usize % TABLE_BANDS;
+    let b = (a + 1) % TABLE_BANDS;
+    let db = TABLE[a] + (TABLE[b] - TABLE[a]) * (at - at.floor());
+    10f32.powf(db / 20.0) - 1.0
+}
+
+/// The table: sixteen band-passes summed back over the dry signal, each with the gain the drawn curve gives it, and the
+/// curve drifting through the spectrum so the shape moves while the knob rides it. One knob (word 7) is all of it: the
+/// amount scales every gain, so at zero the section adds nothing and the signal is the one that came in, and it glides
+/// over 20 ms so switching it in or out does not click. Both sides share the gains and the drift; only the filters'
+/// state is per channel.
+pub struct Table {
+    bands: [TableBand; TABLE_BANDS],
+    /// The rate the bands are tuned for; the first block, or a change of rate, tunes them again.
+    rate: u32,
     /// The amount as it glides (0..1), 20 ms either way.
     amount: Glide,
-    /// How much of the reduced signal is heard: 0 dry, 1 reduced (the section fades in and out with it).
-    wet: Glide,
+    /// The curve's position in bands, drifting one whole cycle round every `TABLE_DRIFT` seconds.
+    phase: f32,
     /// The amount's control word (0 = off).
     word: u16,
 }
 
-/// One block's de-esser settings: the amount and the fade glide through it, and the rate's intensity scale is fixed.
-struct DeessBlock {
+/// One block's table settings: the amount glides through it and the curve drifts through it.
+struct TableBlock {
     amount: Ramp,
-    wet: Ramp,
-    /// How much a sharp edge counts at this rate: the fork's `8192 / (rate / 44100)`.
-    scale: f32,
+    /// How far the curve moves each frame, in bands.
+    step: f32,
+    /// This frame's amount, moved once and used for both channels.
+    a: f32,
 }
 
-impl Deess {
-    pub fn new(word: u16) -> Deess {
-        Deess {
-            samples: [[0.0; DEESS_HISTORY]; 2],
-            slopes: [[0.0; DEESS_HISTORY]; 2],
-            low: [[0.0; 2]; 2],
-            ratio: [[1.0; 2]; 2],
-            flip: 0,
-            amount: Glide::new(deess_amount(word)),
-            wet: Glide::new(if word == 0 { 0.0 } else { 1.0 }),
-            word,
-        }
+impl Table {
+    pub fn new(word: u16) -> Table {
+        Table { bands: std::array::from_fn(|_| TableBand::silent()), rate: 0, amount: Glide::new(table_amount(word)), phase: 0.0, word }
     }
 
     /// The section's control word (0 = off).
@@ -847,85 +896,68 @@ impl Deess {
         self.word = word;
     }
 
-    /// True when the section is off and faded out: it has no state worth keeping and writes nothing.
+    /// True when the section is off and has glided out: it adds nothing and holds nothing.
     pub fn idle(&self) -> bool {
-        self.word == 0 && self.wet.current == 0.0
+        self.word == 0 && self.amount.current == 0.0
     }
 
-    /// Empties the detector and the banks: a section switched in again starts from silence, not from where it was.
+    /// Empties the bands: a section switched in again starts from silence, not from what it held when it went out.
     pub fn reset(&mut self) {
-        self.samples = [[0.0; DEESS_HISTORY]; 2];
-        self.slopes = [[0.0; DEESS_HISTORY]; 2];
-        self.low = [[0.0; 2]; 2];
-        self.ratio = [[1.0; 2]; 2];
-        self.flip = 0;
+        for b in &mut self.bands {
+            b.reset();
+        }
+        self.phase = 0.0;
     }
 
     /// Plans a block; `None` when the section is off and has glided out (its state is cleared).
-    fn block(&mut self, frames: usize, rate: u32) -> Option<DeessBlock> {
+    fn block(&mut self, frames: usize, rate: u32) -> Option<TableBlock> {
         let rate = rate.max(1);
-        let ratef = rate as f32;
-        let target = deess_amount(self.word);
+        if self.rate != rate {
+            self.rate = rate;
+            let ratef = rate as f32;
+            for (i, b) in self.bands.iter_mut().enumerate() {
+                b.tune(i, ratef);
+                b.reset();
+            }
+        }
+        let target = table_amount(self.word);
         if target == 0.0 && self.amount.current == 0.0 {
             self.reset();
             return None;
         }
-        Some(DeessBlock {
-            amount: self.amount.block(target, frames, 1.0 / (0.020 * ratef)),
-            wet: self.wet.block(if self.word == 0 { 0.0 } else { 1.0 }, frames, 1.0 / (0.010 * ratef)),
-            scale: 8192.0 / (ratef / 44_100.0),
-        })
+        let ratef = rate as f32;
+        let amount = self.amount.block(target, frames, 1.0 / (0.020 * ratef));
+        Some(TableBlock { amount, step: TABLE_BANDS as f32 / (TABLE_DRIFT * ratef), a: 0.0 })
     }
 
-    /// One stereo frame: both channels through the same detector, the amount and the fade moving together.
-    fn frame(&mut self, b: &mut DeessBlock, input: [f32; 2]) -> [f32; 2] {
-        let amount = b.amount.next();
-        let wet = b.wet.next();
-        let intensity = amount.powi(5) * b.scale;
-        let bank = self.flip;
+    /// One stereo frame: the curve read at its drifting position, both channels through the same gains.
+    fn frame(&mut self, b: &mut TableBlock, input: [f32; 2]) -> [f32; 2] {
+        b.a = b.amount.next();
+        let amount = b.a;
         let mut out = input;
-        for ch in 0..2 {
-            let x = input[ch];
-            let s = &mut self.samples[ch];
-            s[0] = x;
-            for i in (1..=20).rev() {
-                s[i] = s[i - 1];
+        for (i, band) in self.bands.iter_mut().enumerate() {
+            let g = table_gain(i, self.phase) * amount;
+            if g == 0.0 {
+                continue;
             }
-            let m = &mut self.slopes[ch];
-            m[1] = (s[1] - s[2]) * ((s[1] - s[2]) / 1.3);
-            for i in (2..20).rev() {
-                m[i] = (s[i] - s[i + 1]) * ((s[i - 1] - s[i]) / 1.3);
-            }
-            // A sharp edge is a big second difference: the sharper it is, the more the de-esser takes down.
-            let mut sense = (m[1] - m[2]).abs() * 400.0;
-            for i in (1..20).rev() {
-                let mult = (m[i] - m[i + 1]).abs() * 400.0;
-                if mult < 1.0 {
-                    sense *= mult;
-                }
-            }
-            sense = (1.0 + intensity * intensity * sense).min(intensity);
-            self.low[ch][bank] = self.low[ch][bank] * 0.5 + x * 0.5;
-            self.ratio[ch][bank] = (self.ratio[ch][bank] * 0.995 + sense * 0.005).min(DEESS_DEPTH);
-            // The upstream gate watches bank 1 while the filter alternates: kept as it is, so the two sides agree.
-            let output = if self.ratio[ch][1] > 1.0 {
-                self.low[ch][bank] + (x - self.low[ch][bank]) / self.ratio[ch][bank]
-            } else {
-                x
-            };
-            out[ch] = x + (output - x) * wet;
+            let y = band.run(input);
+            out[0] += y[0] * g;
+            out[1] += y[1] * g;
         }
-        self.flip ^= 1;
+        self.phase += b.step;
+        if self.phase >= TABLE_BANDS as f32 {
+            self.phase -= TABLE_BANDS as f32;
+        }
         out
     }
 }
 
-/// A track's Analog Channel Strip: the low cut, the OTT, the drive, TAME, the compressor and the de-esser. Bypassed, it
+/// A track's Analog Channel Strip: the low cut, the OTT, the drive, TAME, the compressor and the table. Bypassed, it
 /// fades the processed signal out to the dry one and then stops touching the buffer (`idle`), so a bypassed strip passes
 /// a track through sample for sample (plan v3 §6.3).
 pub struct Strip {
     /// The eight stored control words, as the project keeps them: 0 low cut, 1 compressor, 2 drive, 3 OTT, 4 TAME,
-    /// 5 compressor profile, 6 drive character, 7 de-esser.
+    /// 5 compressor profile, 6 drive character, 7 the table.
     pub words: [u16; 8],
     /// The bypass switch as the project stores it.
     pub bypassed: bool,
@@ -936,12 +968,12 @@ pub struct Strip {
     drive: Drive,
     tame: Tame,
     comp: Compressor,
-    deess: Deess,
+    table: Table,
 }
 
 impl Strip {
     pub fn new(words: [u16; 8], bypassed: bool) -> Strip {
-        Strip { words, bypassed, wet: Glide::new(if bypassed { 0.0 } else { 1.0 }), low: LowCut::new(words[0]), ott: Ott::new(words[3]), drive: Drive::new(words[2], words[6]), tame: Tame::new(words[4]), comp: Compressor::new(words[1], words[5]), deess: Deess::new(words[7]) }
+        Strip { words, bypassed, wet: Glide::new(if bypassed { 0.0 } else { 1.0 }), low: LowCut::new(words[0]), ott: Ott::new(words[3]), drive: Drive::new(words[2], words[6]), tame: Tame::new(words[4]), comp: Compressor::new(words[1], words[5]), table: Table::new(words[7]) }
     }
 
     /// The project's settings for the strip (a track rebuilt from a changed project).
@@ -953,7 +985,7 @@ impl Strip {
         self.drive.set(words[2], words[6]);
         self.tame.set(words[4]);
         self.comp.set(words[1], words[5]);
-        self.deess.set(words[7]);
+        self.table.set(words[7]);
     }
 
     /// True when bypassed and faded out: the engine skips the strip and passes the track through.
@@ -974,7 +1006,7 @@ impl Strip {
             self.drive.reset();
             self.tame.reset();
             self.comp.reset();
-            self.deess.reset();
+            self.table.reset();
             return;
         }
         let mut low = self.low.block(frames, rate);
@@ -982,7 +1014,7 @@ impl Strip {
         let mut drive = self.drive.block(frames, rate);
         let mut tame = self.tame.block(frames, rate);
         let mut comp = self.comp.block(frames, rate);
-        let mut deess = self.deess.block(frames, rate);
+        let mut table = self.table.block(frames, rate);
         for f in buf.chunks_exact_mut(2) {
             let w = wet.next();
             // Fully dry: nothing is written, so the samples stay as they arrived.
@@ -1015,14 +1047,14 @@ impl Strip {
             if let Some(b) = &mut tame {
                 y = self.tame.frame(b, y);
             }
-            // Then the compressor, and the de-esser last (the fork's order).
+            // Then the compressor, and the table last.
             if let Some(b) = &mut comp {
                 let g = self.comp.gain(b, y[0], y[1]);
                 y[0] *= g;
                 y[1] *= g;
             }
-            if let Some(b) = &mut deess {
-                y = self.deess.frame(b, y);
+            if let Some(b) = &mut table {
+                y = self.table.frame(b, y);
             }
             for (ch, s) in f.iter_mut().enumerate() {
                 let a = y[ch];
@@ -1454,36 +1486,75 @@ mod tests {
         assert!(buf.chunks_exact(2).all(|f| (f[1] + f[0] * 0.3).abs() < 2e-5), "the image holds");
     }
 
-    /// A strip with only the de-esser set.
-    fn deess_strip(pct: u16) -> Strip {
-        Strip::new([0, 0, 0, 0, 0, 0, 0, deess_word(f32::from(pct) / 100.0)], false)
+    /// A strip with only the table set.
+    fn table_strip(amount: f32) -> Strip {
+        Strip::new([0, 0, 0, 0, 0, 0, 0, table_word(amount)], false)
     }
 
-    /// A 220 Hz tone: well below what the de-esser listens for.
+    /// Word 7 at zero is the section off: the bands add nothing, so the buffer is the one that arrived.
     #[test]
-    fn the_de_esser_leaves_a_tone_alone() {
-        let dry = sine(220.0, BLOCK * 2 * 40);
-        let mut s = deess_strip(100);
+    fn the_table_off_passes_the_signal_through() {
+        let dry = sine(1_000.0, BLOCK * 2 * 4);
+        let mut s = table_strip(0.0);
         let mut buf = dry.clone();
         run(&mut s, &mut buf);
-        let (a, b) = (rms(&dry[dry.len() - BLOCK * 2..]), rms(&buf[buf.len() - BLOCK * 2..]));
-        assert!((b / a - 1.0).abs() < 0.02, "the tone passes: {b} of {a}");
+        assert_eq!(buf, dry);
     }
 
-    /// Full on, the de-esser takes the edge off broadband material: the signal loses energy, and not all of it.
+    /// Full on, the curve is heard on broadband material, and what comes out is finite and bounded.
     #[test]
-    fn the_de_esser_takes_the_edge_off_sibilance() {
-        let dry = resonance_signal(0.0, RATE as usize / 3);
-        let mut s = deess_strip(100);
+    fn the_table_shapes_the_sound() {
+        let dry = resonance_signal(0.0, RATE as usize / 2);
+        let mut s = table_strip(1.0);
         let mut buf = dry.clone();
         run(&mut s, &mut buf);
-        let (a, b) = (rms(&dry[dry.len() / 2..]), rms(&buf[buf.len() / 2..]));
-        assert!(b < a * 0.95, "the edge is taken off: {b} of {a}");
-        assert!(b > a * 0.5, "but the signal is not gone: {b} of {a}");
-        assert!(buf.iter().all(|x| x.is_finite() && x.abs() < 1.0));
+        let change = dry.iter().zip(&buf).map(|(a, b)| (a - b).abs()).sum::<f32>() / dry.len() as f32;
+        assert!(change > 1e-3, "the curve is heard: {change}");
+        assert!(buf.iter().all(|x| x.is_finite() && x.abs() < 2.0));
     }
 
-    /// Every section at once, de-esser last: the chain stays linked, finite and bounded.
+    /// The gains and the drift are shared, so the two sides come out scaled alike.
+    #[test]
+    fn the_table_is_linked_across_the_sides() {
+        let mut buf = sine(1_000.0, BLOCK * 2 * 40);
+        for f in buf.chunks_exact_mut(2) {
+            f[1] = f[0] * 0.5;
+        }
+        let mut s = table_strip(1.0);
+        run(&mut s, &mut buf);
+        assert!(buf.chunks_exact(2).all(|f| (f[1] - f[0] * 0.5).abs() < 1e-5), "the image holds");
+    }
+
+    /// The curve drifts: a tone held at one frequency is shaped differently as the section runs.
+    #[test]
+    fn the_table_drifts_through_the_spectrum() {
+        let dry = resonance_signal(1_800.0, RATE as usize * 4);
+        let mut s = table_strip(1.0);
+        let mut buf = dry.clone();
+        run(&mut s, &mut buf);
+        let half = buf.len() / 2;
+        let level = |b: &[f32]| (b.iter().map(|x| x * x).sum::<f32>() / b.len() as f32).sqrt();
+        let (a, b) = (level(&buf[..half]), level(&buf[half..]));
+        assert!((a - b).abs() > 1e-4, "the shape moves: {a} of {b}");
+    }
+
+    /// The words round trip, and a small amount shapes the signal less than a large one.
+    #[test]
+    fn the_table_words_round_trip_and_the_amount_scales_it() {
+        assert_eq!(table_amount(0), 0.0);
+        assert!((table_amount(table_word(0.5)) - 0.5).abs() < 1e-4);
+        let dry = resonance_signal(1_800.0, RATE as usize / 3);
+        let change = |v: f32| {
+            let mut s = table_strip(v);
+            let mut buf = dry.clone();
+            run(&mut s, &mut buf);
+            dry.iter().zip(&buf).map(|(a, b)| (a - b).abs()).sum::<f32>() / dry.len() as f32
+        };
+        let (a, b) = (change(0.3), change(1.0));
+        assert!(b > a * 1.5, "more amount shapes more: {b} of {a}");
+    }
+
+    /// Every section at once, the table last: the chain stays linked, finite and bounded.
     #[test]
     fn the_whole_chain_stays_linked_and_bounded() {
         let dry = resonance_signal(2_300.0, RATE as usize / 3);

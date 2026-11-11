@@ -35,8 +35,8 @@ pub enum KnobId {
     /// Mixer track `.0`'s equaliser: band `.1` (0 low shelf, 1 peaking, 2 high shelf), setting `.2` (0 gain, the
     /// band's fader; 1 frequency; 2 width) (model `MixerTrack::eq`; spec: ui/mixer.md §8, audio/mixer.md "Equaliser").
     Eq(u16, u8, u8),
-    /// Mixer track `.0`'s Analog Channel Strip: control word `.1` (0 low cut, 1 comp, 2 drive, 3 gate, 4 TAME,
-    /// 7 de-esser) as a 0..1 knob, its own word over 65535 (the only word a section turns up in a menu; the strip's
+    /// Mixer track `.0`'s Analog Channel Strip: control word `.1` (0 low cut, 1 comp, 2 drive, 3 OTT, 4 TAME,
+    /// 7 the table) as a 0..1 knob, its own word over 65535 (the only word a section turns up in a menu; the strip's
     /// console panel, `views::mixer::console_panel`).
     Strip(u16, u8),
     /// A knob of the piano roll's Strum dialog (dialog state, not project data; spec: ui/piano-strum.md §1).
@@ -488,7 +488,7 @@ impl State {
                     _ => format!("{band} width: {n:.2}"),
                 }
             }
-            // "Low cut: 120Hz", "OTT: 40%", "Drive: 40%", "TAME: 60%", "Compressor: 40%", "De-esser: 30%".
+            // "Low cut: 120Hz", "OTT: 40%", "Drive: 40%", "TAME: 60%", "Compressor: 40%", "Table: 30%".
             KnobId::Strip(_, w) => {
                 let word = (n * 65535.0).round() as u16;
                 match w {
@@ -498,7 +498,7 @@ impl State {
                     3 if word == 0 => "OTT: off".into(),
                     3 => format!("OTT: {:.0}%", os_dsp::strip::ott_amount(word) * 100.0),
                     4 => format!("TAME: {:.0}%", os_dsp::strip::tame_amount(word) * 100.0),
-                    _ => format!("De-esser: {:.0}%", os_dsp::strip::deess_amount(word) * 100.0),
+                    _ => format!("Table: {:.0}%", os_dsp::strip::table_amount(word) * 100.0),
                 }
             }
             KnobId::Strum(_) | KnobId::Arp(_) | KnobId::PianoDlg(_) | KnobId::AutoLfo(..) | KnobId::MidiOut(..) => return None,
@@ -624,8 +624,8 @@ mod tests {
         assert_eq!(crate::prefs::slider(s), s.default);
     }
 
-    /// The console panel's knobs are the strip's words: word 0 is the low cut in Hz, the rest amounts, word 3 the gate's
-    /// threshold (`views::mixer::console_panel`).
+    /// The console panel's knobs are the strip's words: word 0 is the low cut in Hz, the rest amounts, word 3 the OTT's
+    /// depth (`views::mixer::console_panel`).
     #[test]
     fn strip_knobs_read_the_sections() {
         let mut app = crate::app::App::new(None);
@@ -636,7 +636,7 @@ mod tests {
         s.set_knob(KnobId::Strip(t, 3), 0.75);
         assert!(s.knob_text(KnobId::Strip(t, 3)).starts_with("OTT: 7"), "{}", s.knob_text(KnobId::Strip(t, 3)));
         s.set_knob(KnobId::Strip(t, 7), 0.3);
-        assert_eq!(s.knob_text(KnobId::Strip(t, 7)), "De-esser: 30%");
+        assert_eq!(s.knob_text(KnobId::Strip(t, 7)), "Table: 30%");
         s.set_knob(KnobId::Strip(t, 2), 0.5);
         assert_eq!(s.knob_text(KnobId::Strip(t, 2)), "Drive: 50%");
         assert!(s.knob(KnobId::Strip(t, 3)) > 0.7);

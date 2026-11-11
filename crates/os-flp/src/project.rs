@@ -4322,7 +4322,8 @@ pub fn default_arrangement() -> Arrangement {
 /// has none). Empty when nothing would be lost.
 /// The Analog Channel Strip's chunk: the eight control words of every track whose strip is not at its default, and
 /// the bypass switch (Lemon Studio's port of the Michael Lane Edition strip; plan v3 §6.4). Version 7 is the first one
-/// with the de-esser's word; version 4, with seven, is still read. The fork's versions 5 and 6 add SnapTune's four
+/// with all eight words (the eighth was the de-esser's then and is the table's now); version 4, with seven, is still
+/// read. The fork's versions 5 and 6 add SnapTune's four
 /// words, which this port does not have, so those chunks are left alone and 5 and 6 are skipped.
 const STRIP_TAG: [u8; 4] = *b"LSCS";
 const STRIP_VERSION: u8 = 7;
@@ -4348,7 +4349,7 @@ fn strip_payload(project: &Project) -> Option<Vec<u8>> {
 
 /// Writes the project's strip state into `file`, or removes the chunk when no track has any. A chunk written by
 /// another build (a fork's version 5 or 6, with SnapTune's words) is left as it is: its state is not this build's.
-/// A version 4 chunk, from a build before the de-esser, is this build's and is written again at the current version.
+/// A version 4 chunk, from a build before the eighth word, is this build's and is written again at the current version.
 fn store_strip(project: &Project, file: &mut FlpFile) {
     use crate::container::{Chunk, ChunkBody, Tag};
     let at = file.chunks.iter().position(|c| c.tag.0 == STRIP_TAG);
@@ -4378,7 +4379,8 @@ fn read_strip(file: &FlpFile, mixer: &mut [MixerTrack]) {
     }) else {
         return;
     };
-    // Version 4 wrote seven words; the de-esser added the eighth. Anything else is another build's and is left alone.
+    // Version 4 wrote seven words; the eighth arrived later (the de-esser's, now the table's). Anything else is another
+    // build's and is left alone.
     let words = match data.first() {
         Some(4) => 7,
         Some(&STRIP_VERSION) => 8,
