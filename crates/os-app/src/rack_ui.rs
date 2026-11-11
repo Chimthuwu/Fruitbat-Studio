@@ -301,6 +301,8 @@ pub struct Entry {
     name: String,
     /// The parameters' values when it was drawn (a change redraws it).
     sig: u64,
+    /// The tile's own editor state when it was drawn (the Trio's page, the drum's pad): a page switch redraws it.
+    vsig: u64,
     factor: f32,
     /// The offscreen editor canvas, kept between redraws: a knob drag redraws every frame and building the canvas
     /// (its font engine) each time would cost more than the painting.
@@ -315,7 +317,7 @@ pub struct Entry {
 impl Entry {
     fn new(name: &str) -> Self {
         let image = Rc::new(Image { w: 1, h: 1, px: vec![0], hits: Vec::new() });
-        Entry { name: name.to_string(), sig: 0, factor: 0.0, canvas: None, buf: Vec::new(), image, view: TileView::Plain }
+        Entry { name: name.to_string(), sig: 0, vsig: 0, factor: 0.0, canvas: None, buf: Vec::new(), image, view: TileView::Plain }
     }
 
     /// Make sure `view` matches the UI about to be painted: if the UI changed (or was never set), reset it to that
@@ -397,7 +399,8 @@ pub fn image(
         e.ensure_view(ui);
         e.view.clone()
     };
-    if e.name == name && e.sig == sig && (e.factor - factor).abs() < 0.005 && !matches!(ui, Ui::Drum) {
+    let vsig = view_sig(&view);
+    if e.name == name && e.sig == sig && e.vsig == vsig && (e.factor - factor).abs() < 0.005 && !matches!(ui, Ui::Drum) {
         return Some(e.image.clone());
     }
     // The drum machine's editor is painted whole (its cards sit right of its pad grid) and the tile
@@ -461,11 +464,25 @@ pub fn image(
     e.image = Rc::new(Image { w: w as usize, h: h as usize, px, hits });
     e.name = name.to_string();
     e.sig = sig;
+    e.vsig = vsig;
     e.factor = factor;
     if matches!(ui, Ui::Drum) {
         e.view = view;
     }
     Some(e.image.clone())
+}
+
+/// A fingerprint of the tile's own editor state that the editor draws with: its page and sub-page, the drum's pad and
+/// flipped half. A change redraws the tile (the header's page buttons change nothing else, so without this the cached
+/// image would come back and the buttons would look dead).
+fn view_sig(v: &TileView) -> u64 {
+    match v {
+        TileView::Trio(v) => 1 + u64::from(v.tab) * 0x10 + u64::from(v.sub) * 0x100,
+        TileView::Drum { view, flip, .. } => {
+            2 + u64::from(*flip) * 0x10 + view.bank as u64 * 0x100 + view.pad as u64 * 0x1000
+        }
+        TileView::Plain => 0,
+    }
 }
 
 /// A fingerprint of the values an editor draws (they are all it shows besides its name).

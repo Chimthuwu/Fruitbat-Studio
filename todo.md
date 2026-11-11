@@ -7,6 +7,19 @@
 
 This file tracks the open/executed state of the todo items. The canonical priority plan is in `docs/roadmap-2026-11-10.md` — reference that doc for the full rationale, audit findings, and ordering.
 
+## 🎯 PLANNED — "Range" removed from every device (plan only, NOT started)
+Requested 2026-11-12, right after the docked-strip work: the RANGE box goes away everywhere (the plugin windows' strip
+and anything mirroring it). The pitch knob's range becomes fixed at 48 semitones: centre = 0, hard left = -48 st, hard
+right = +48 st. This is broad (plugin strip, channel model, FLP save/load, docked tile strip, specs) — plan it before
+writing code.
+- [ ] Audit and plan: `plugin_window/mod.rs` (`Knob::Range`, `RANGE_MAX`, `range_box`/`range_rect`, `Part::Range`,
+      `FrameEvent::PitchRange`, `ChannelInfo::range`), `app.rs` (`Request::PitchRange`, the pitch clamp),
+      `os_model::Channel::misc.pitch_range` + its FLP read/write, the channel rack's pitch-range docs, and the new
+      docked tile strip (`views/device_rack.rs::strip_paint`, which maps PITCH through `ch.misc.pitch_range`).
+- [ ] Then make pitch a plain -4800..+4800 cent knob (0 = centre) and stop storing a range in new projects; old files
+      still load, the stored range simply stops being read.
+- [ ] Update the specs/docs and tests that mention the range.
+
 ## 🎯 NEW — Clip Launcher polish (2026-11-09 23:12, plan only — DO NOT EXECUTE yet)
 Reported after testing the fd73cb54 build. Needs a short audit pass (launcher cell rendering + hit handling,
 views/launcher.rs + launcher.rs) before executing — the F1 drop fix from wave 2 did NOT hold in practice.
@@ -22,6 +35,10 @@ views/launcher.rs + launcher.rs) before executing — the F1 drop fix from wave 
       3. A volume fader on each launcher track, like playlist tracks.
 - [ ] **Pan fader on ALL tracks** (playlist and launcher tracks alike) — new control; audit the track model/mixer
       for where pan lives (os-model Track + mixer path) and both header layouts.
+- [ ] **Launcher track Mute / Solo buttons do nothing** (reported 2026-11-12): audit the launcher's track-header
+      hits and actions against the playlist's headers, then wire them.
+- [ ] **Launcher tracks must look identical to playlist tracks** — same colour fill, same header control set, same
+      text: share the playlist's track-header drawing instead of keeping a parallel one in views/launcher.rs.
 
 ## 🎯 ACTIVE — Dock UI fitting + rename (Trio + Lemon Drum Sampler ported; Slicer deferred)
 All in the docked device-rack tile UI (rack_ui.rs) and the kit editors. Needs a short audit pass first to pin

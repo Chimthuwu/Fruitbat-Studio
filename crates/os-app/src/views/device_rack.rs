@@ -13,6 +13,7 @@ use crate::app::{Action, State};
 use crate::plugins::Plugins;
 use crate::rack_ui::{EDITOR_TAB, EDITOR_SUBTAB, EDITOR_BANK, EDITOR_PAD, EDITOR_OPEN};
 use crate::device_rack::{self, Device, DeviceKind, RackParam, HEADER_H, RackAct, TILE_W};
+use crate::history::ChannelControl;
 use crate::icons::{self, Icon};
 use crate::views::{Ui, fnt};
 
@@ -41,7 +42,7 @@ pub(crate) fn layout(s: &State, r: Rect) -> Vec<(Device, Rect)> {
     device_rack::rack_chain(s)
         .into_iter()
         .scan(body.x - scroll, |x, d| {
-            let w = tile_width(s, &d, body.h);
+            let w = tile_width(s, &d, editor_h(body.h, &d));
             let tile = Rect::new(*x, body.y, w, body.h);
             *x += w + GAP;
             Some((d, tile))
@@ -67,7 +68,7 @@ fn plugin_name<'a>(s: &'a State, d: &'a Device) -> &'a str {
 pub(crate) fn content_w(s: &State) -> f32 {
     let r = panel_rect(s, s.screen.0, s.screen.1);
     let body_h = (r.h - HEADER_H).max(0.0);
-    device_rack::rack_chain(s).iter().map(|d| tile_width(s, d, body_h) + GAP).sum()
+    device_rack::rack_chain(s).iter().map(|d| tile_width(s, d, editor_h(body_h, d)) + GAP).sum()
 }
 
 /// The rack's horizontal scroll clamped to what the panel's width `w` can show.
@@ -85,7 +86,7 @@ pub(crate) fn wheel(s: &mut State, r: Rect, x: f32, y: f32, d: f32) -> bool {
     }
     if let Some((dev, tile)) = layout(s, r).into_iter().find(|(_, t)| t.contains(x, y)) {
         if let Some(key) = dev.key {
-            let b = body(tile);
+            let b = body(&dev, tile);
             let max = s.device_rack_params.get(&key).map_or(0.0, |ps| scroll_max(b, ps));
             if max > 0.0 {
                 let at = s.device_rack_tile_scroll.entry(key).or_insert(0.0);
@@ -133,9 +134,27 @@ pub fn device_keys(s: &State) -> Vec<usize> {
     layout(s, r).into_iter().filter_map(|(d, _)| d.key).collect()
 }
 
-/// A tile's editor body: below its header.
-fn body(tile: Rect) -> Rect {
-    Rect::new(tile.x, tile.y + HEADER_H, tile.w, tile.h - HEADER_H)
+/// Height of the strip row a tile's device shows under its header: the track's channel PAN / VOL / PITCH and the
+/// mixer TRACK box, where the plugin window's strip has them.
+pub(crate) const STRIP_H: f32 = 30.0;
+
+/// Whether a tile gets the strip row: only the track's instrument has a channel behind it (an effect's tile, a
+/// container's and the empty slot's have none, and the plugin window greys the strip out for those).
+fn has_strip(d: &Device) -> bool {
+    matches!(d.kind, DeviceKind::Instrument(_))
+}
+
+/// The height a tile's editor is given in a panel body `body_h` tall. The tile's width is measured against this — not
+/// the whole tile — or the header (and the strip) would make the editor taller than it really is, and the editor would
+/// be drawn height-limited inside a body-sized image: a column of its background down the tile's right edge.
+fn editor_h(body_h: f32, d: &Device) -> f32 {
+    (body_h - HEADER_H - if has_strip(d) { STRIP_H } else { 0.0 }).max(1.0)
+}
+
+/// A tile's editor body: below its header, and its strip row when it has one.
+fn body(d: &Device, tile: Rect) -> Rect {
+    let top = HEADER_H + if has_strip(d) { STRIP_H } else { 0.0 };
+    Rect::new(tile.x, tile.y + top, tile.w, (tile.h - top).max(0.0))
 }
 
 /// Paints the rack panel over `r` (its splitter, header and device tiles).
@@ -414,7 +433,11 @@ fn tile_paint(ui: &mut Ui, s: &State, plugins: &Plugins, i: usize, d: Device, ti
     {
         ui.c.text(fnt(13.0), menu.x, menu.y, t.text, "v");
     }
-    let body = body(tile);
+    // The device strip (the track's channel), between the header and the editor body.
+    if let DeviceKind::Instrument(row) = d.kind {
+        strip_paint(ui, s, tile, row);
+    }
+    let body = body(&d, tile);
     // The empty instrument slot: the whole tile opens the device browser (the instrument section of it).
     if d.kind == DeviceKind::NoInstrument {
         ui.c.fill_rect(body, t.s(0x131718));
@@ -459,6 +482,56 @@ fn container_body(ui: &mut Ui, s: &State, body: Rect, t: u16, k: u8) {
         ui.c.text_clip(fnt(12.0), body.x + 10.0, body.bottom() - 20.0, body.w - 20.0, th.text_dim, &format!("+{} more", members.len() - 8));
     }
     ui.c.pop_clip();
+}
+
+/// A tile's device strip: the track's channel, as the plugin window's strip shows it — PAN, VOL and PITCH knobs and
+/// the mixer TRACK box under the header. A knob drags vertically; the TRACK box steps on a drag (one step per 10 px),
+/// both through the channel's undo-aware `channel_control`.
+fn strip_paint(ui: &mut Ui, s: &State, tile: Rect, row: usize) {
+    let t = ui.t;
+    let strip = Rect::new(tile.x, tile.y + HEADER_H, tile.w, STRIP_H);
+    ui.c.fill_rect(strip, t.s(0x1e2224));
+    ui.c.fill_rect(Rect::new(strip.x, strip.bottom() - 1.0, strip.w, 1.0), t.splitter_dark);
+    let Some(ch) = s.project.channels.get(row) else { return };
+    let range = i32::from(ch.misc.pitch_range.clamp(1, 48));
+    let knobs = [
+        ("PAN", ChannelControl::Pan, (ch.pan + 1.0) * 0.5, true),
+        ("VOL", ChannelControl::Volume, ch.volume, false),
+        ("PITCH", ChannelControl::Pitch, 0.5 + f64::from(ch.pitch_cents) / (200.0 * f64::from(range)), true),
+    ];
+    for (i, (label, which, v, bipolar)) in knobs.into_iter().enumerate() {
+        let cell = Rect::new(strip.x + 4.0 + i as f32 * 44.0, strip.y + 1.0, 40.0, STRIP_H - 2.0);
+        let v = v.clamp(0.0, 1.0);
+        let hov = ui.hit(
+            cell,
+            Action::DeviceRack(RackAct::ChannelKnob { row, which, v }),
+            format!("{label}: drag up / down to set it"),
+        );
+        kit::knob(
+            ui.c,
+            t,
+            cell.cx(),
+            strip.y + 11.0,
+            8.0,
+            v as f32,
+            bipolar,
+            kit::KnobLook::Ring,
+            kit::State::hover(hov),
+        );
+        ui.c.text_center(fnt(9.0), Rect::new(cell.x, strip.y + 19.0, cell.w, 10.0), t.text_dim, label);
+    }
+    // The mixer TRACK box: the insert the channel plays through ("---" is the master), dragged to step it.
+    let box_rect = Rect::new(strip.right() - 40.0, strip.y + 3.0, 34.0, 15.0);
+    let label = if ch.mixer_track == 0 { "---".to_string() } else { ch.mixer_track.to_string() };
+    let hov = ui.hit(
+        box_rect,
+        Action::DeviceRack(RackAct::ChannelTrack { row }),
+        "Mixer track: drag up / down to step it (0 is the master)",
+    );
+    ui.c.fill_rrect(box_rect, 2.0, if hov { t.s(0x333a3e) } else { t.s(0x24282b) });
+    ui.c.stroke_rrect(box_rect, 2.0, 1.0, t.splitter_dark);
+    ui.c.text_center(fnt(11.0), box_rect, t.text, &label);
+    ui.c.text_center(fnt(9.0), Rect::new(box_rect.x, strip.y + 19.0, box_rect.w, 10.0), t.text_dim, "TRACK");
 }
 
 /// One control cell: the name above, the dial (or the switch), the value below.
@@ -525,10 +598,10 @@ fn scroll_max(body: Rect, params: &[RackParam]) -> f32 {
 #[cfg(test)]
 pub(crate) fn param_dial(s: &State, key: usize, id: u32) -> Option<Rect> {
     let (_, w, h) = ((), s.screen.0, s.screen.1);
-    let (_, tile) = layout(s, panel_rect(s, w, h)).into_iter().find(|(d, _)| d.key == Some(key))?;
+    let (d, tile) = layout(s, panel_rect(s, w, h)).into_iter().find(|(d, _)| d.key == Some(key))?;
     let params = s.device_rack_params.get(&key)?;
     let i = params.iter().position(|p| p.id == id)?;
-    let body = body(tile);
+    let body = body(&d, tile);
     let scroll = s.device_rack_tile_scroll.get(&key).copied().unwrap_or(0.0);
     let (_, cell) = *grid(body, params, scroll).cells.iter().find(|(j, _)| *j == i)?;
     Some(Rect::new(cell.x + 4.0, cell.y + 18.0, CELL_W - 8.0, CELL_H - 20.0))

@@ -26,6 +26,7 @@ use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 use crate::app::{App, Drag, State};
+use crate::history::ChannelControl;
 
 /// The shortest the rack may be, in logical px: below this its tiles are too short to read their editor in, and a
 /// splitter drag down to the workspace edge (which used to be allowed) left a sliver of a panel.
@@ -466,6 +467,10 @@ pub enum RackAct {
     EditorFlip { key: usize },
     /// The flipped cards' Load: the picker lives in the full editor, so pop its window out.
     EditorOpen { key: usize },
+    /// A tile's device strip: a channel knob pressed at normalized `v` — it drags from there.
+    ChannelKnob { row: usize, which: ChannelControl, v: f64 },
+    /// A tile's device strip: its mixer TRACK box pressed — a drag steps it.
+    ChannelTrack { row: usize },
     /// The device menu's Remove: delete the device from its chain.
     Remove(DeviceKind),
     /// The device menu's Replace (the instrument): the device browser, whose instrument pick replaces it.
@@ -686,6 +691,14 @@ pub fn run(app: &mut App, act: RackAct) {    match act {
             app.invalidate();
         }
         RackAct::EditorOpen { key } => pop_out(app, key),
+        RackAct::ChannelKnob { row, which, v } => {
+            set_channel_knob(app, row, which, v);
+            app.drag = Some(Drag::RackStrip { row, which, y0: app.mouse.1, v0: v });
+        }
+        RackAct::ChannelTrack { row } => {
+            let t0 = app.state.project.channels.get(row).map_or(0, |c| c.mixer_track);
+            app.drag = Some(Drag::RackTrack { row, y0: app.mouse.1, t0 });
+        }
     }
 }
 
@@ -731,6 +744,27 @@ fn toggle_on(app: &mut App, kind: DeviceKind) {
 
 /// Sets the parameter `id` of the hosted instance under `key` to normalized `v`. The ONE set path for the
 /// rack's parameter rows: an edit in the plugin's window, the value box and (later) automation all land here.
+/// Sets one of a channel's strip values from a knob's normalized position `v` (0..1): volume spans 0..1, pan and
+/// pitch -1..1 — the pitch in cents across the channel's own pitch range (`ChannelInfo::range`'s semitones).
+pub fn set_channel_knob(app: &mut App, row: usize, which: ChannelControl, v: f64) {
+    let range = app
+        .state
+        .project
+        .channels
+        .get(row)
+        .map_or(12, |c| i32::from(c.misc.pitch_range.clamp(1, 48)));
+    match which {
+        ChannelControl::Volume => app.channel_control(row, which, |c| c.volume = v.clamp(0.0, 1.0)),
+        ChannelControl::Pan => app.channel_control(row, which, |c| c.pan = v * 2.0 - 1.0),
+        ChannelControl::Pitch => {
+            let cents = (((v * 2.0 - 1.0) * f64::from(100 * range)).round() as i32).clamp(-100 * range, 100 * range);
+            app.channel_control(row, which, |c| c.pitch_cents = cents);
+        }
+        // The mixer track is stepped, not set: the strip's TRACK box (`RackAct::ChannelTrack`).
+        ChannelControl::Track => {}
+    }
+}
+
 pub fn set_param_value(app: &mut App, key: usize, id: u32, v: f64) {
     let v = v.clamp(0.0, 1.0);
     if app.plugins.set_param(key, id, v) {
