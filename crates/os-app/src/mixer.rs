@@ -60,6 +60,8 @@ pub enum MHit {
     SlotLed(u8),
     /// Extra large (layout 7): slot `k` of strip `n` in that strip's own plugin list column.
     TrackSlot(u16, u8),
+    /// A strip's level meter (`views::mixer::meter_body`): clicking it selects the strip, right click opens its menu.
+    Meter(u16),
     /// The level scale column.
     Scale,
     /// The current track's equaliser graph: a press grabs the band nearest the cursor's frequency.
@@ -221,6 +223,9 @@ pub enum MCmd {
     /// Options ▸ View ▸ Waveforms and Extra properties (`MixerUi::waveforms`, `MixerUi::extra`).
     ViewWaveforms,
     ViewExtra,
+    /// The strip meter's right-click menu: the meter's scale law (Settings ▸ General ▸ Miscellaneous' "Alternate meter
+    /// scale", the same setting).
+    MeterAltScale,
     /// File ▸ Save mixer track state, File ▸ Open mixer track state ▸ and Insert from state ▸ (Lemon Studio's design,
     /// `crate::mixer_state`): save track `n`'s state under its name; put a saved one on track `n` (its name and colour
     /// stay); insert a new track in front of `n` from one (with the state's name and colour).
@@ -249,6 +254,9 @@ pub const EXTRA_LARGE: u8 = 7;
 pub const EXTRA_LARGE_V2: u8 = 8;
 /// Index of "Wide", the layout the mixer was drawn in before the others were ported.
 pub const WIDE: u8 = 3;
+/// Indexes of "Wide 2" and "Wide 3": wide enough to draw the console and the strip's own meter side by side.
+pub const WIDE_2: u8 = 4;
+pub const WIDE_3: u8 = 5;
 
 /// Each layout's strip width, in `LAYOUTS` order (the Michael Lane Edition's stock widths): the strip's columns
 /// follow the width, so a narrower layout shows more inserts and a wider one more room per control.
@@ -631,7 +639,8 @@ pub fn hit(app: &mut App, h: MHit) -> Option<String> {
     let at = app.mouse;
     let s = &mut app.state;
     match h {
-        MHit::Strip(n) => {
+        // The meter is part of the strip's body: a click selects, a Shift+click renames, as the body's own hit does.
+        MHit::Meter(n) | MHit::Strip(n) => {
             select(s, n, ctrl);
             if shift {
                 start_rename(s, n, at);
@@ -1074,6 +1083,8 @@ pub fn right(app: &mut App, h: MHit) -> bool {
     let at = app.mouse;
     let s = &mut app.state;
     match h {
+        // The strip meter's own menu: its scale and the waveforms (spec: ui/mixer.md §9).
+        MHit::Meter(_) => s.playlist.popup = Some(meter_menu(s, at.0, at.1)),
         MHit::Strip(n) => {
             if !is_selected(s, n) {
                 select(s, n, false);
@@ -2000,6 +2011,19 @@ pub fn options_menu(s: &State, x: f32, y: f32) -> Popup {
     Popup { x, y, items, sub: None, scroll: [0; 2] }
 }
 
+/// The right-click menu on a strip's level meter (§9): its scale and the waveform view, next to the meter they change.
+/// The meter's marks and colours follow the meter settings themselves (Settings ▸ Audio ▸ meters).
+pub fn meter_menu(s: &State, x: f32, y: f32) -> Popup {
+    let items = vec![
+        PItem::head("Level meter"),
+        PItem::new("Alternate meter scale", Cmd::Mixer(MCmd::MeterAltScale))
+            .mark(Mark::Check(crate::prefs::check(&crate::prefs::ALTERNATE_METER_SCALE))),
+        PItem::sep(),
+        PItem::new("Waveforms", Cmd::Mixer(MCmd::ViewWaveforms)).key("Alt+W").mark(Mark::Check(s.mixer.waveforms)),
+    ];
+    Popup { x, y, items, sub: None, scroll: [0; 2] }
+}
+
 /// Layout combo menu (§6.4): the stock layouts the strips can be drawn in, the two Extra large ones last with their
 /// plugin list column (the Michael Lane Edition's set, plus Lemon Studio's V2).
 pub fn layout_menu(s: &State, x: f32, y: f32) -> Popup {
@@ -2443,6 +2467,11 @@ fn run_now(app: &mut App, c: MCmd) -> Option<String> {
         }
         MCmd::ViewWaveforms => {
             view_waveforms(s);
+            None
+        }
+        MCmd::MeterAltScale => {
+            crate::prefs::toggle(&crate::prefs::ALTERNATE_METER_SCALE);
+            s.piano.dirty = true;
             None
         }
         MCmd::ViewExtra => {
@@ -3546,6 +3575,29 @@ mod tests {
         let widths: Vec<f32> = a.hits.iter().filter_map(|h| matches!(h.action, Action::Mix(MHit::Strip(_))).then_some(h.rect.w)).collect();
         assert!(!widths.is_empty(), "the strips are drawn");
         assert!(widths.iter().all(|w| (*w - 40.0).abs() < 0.5), "Compact's 40 px strips: {widths:?}");
+    }
+
+    /// The strip meter's right-click menu (§9): the Alternate meter scale setting and the waveform view, each taking at
+    /// a click, right where the meter they change is.
+    #[test]
+    fn the_meter_menu_sets_its_scale_and_waveforms() {
+        use crate::prefs;
+        let mut a = app();
+        let was = prefs::check(&prefs::ALTERNATE_METER_SCALE);
+        a.state.mixer.waveforms = false;
+        assert!(right(&mut a, MHit::Meter(1)), "the meter's right click is handled");
+        let p = a.state.playlist.popup.take().expect("the meter's menu");
+        let labels: Vec<String> = p.items.iter().map(|i| i.label.to_string()).collect();
+        assert!(labels.iter().any(|l| l == "Level meter"), "a head: {labels:?}");
+        let cmd = |label: &str| match p.items.iter().find(|i| i.label == label).unwrap_or_else(|| panic!("{label} in {labels:?}")).cmd.clone() {
+            Cmd::Mixer(c) => c,
+            other => panic!("{label} is {other:?}"),
+        };
+        run(&mut a, cmd("Alternate meter scale"));
+        assert_eq!(prefs::check(&prefs::ALTERNATE_METER_SCALE), !was, "the scale law follows the menu");
+        run(&mut a, cmd("Waveforms"));
+        assert!(a.state.mixer.waveforms, "and so does the waveform view");
+        prefs::set_check(&prefs::ALTERNATE_METER_SCALE, was);
     }
 
     #[test]

@@ -453,6 +453,8 @@ fn shade(c: Color, k: f32) -> Color {
 /// own absolute positions), and the two 6 px peak bars on the "C" column's scale (the waveform view when View ▸
 /// Waveforms is on).
 fn meter_body(ui: &mut Ui, s: &State, n: u16, meter: Rect, lemon: bool, ly: Option<&Ly>) {
+    // Clicking the meter is clicking the strip; its right-click menu holds the scale and waveform options (§9).
+    ui.hit(meter, Action::Mix(crate::mixer::MHit::Meter(n)), "Level meter (right click for its scale and waveforms)");
     if lemon {
         ui.c.fill_rrect(meter, lk::r_small(ui.t), ui.t.s(0x191d1e));
         ui.c.fill_rrect(Rect::new(meter.x + 2.0, meter.y + 2.0, 12.0, meter.h - 4.0), 2.5, ui.t.s(0x232729));
@@ -873,8 +875,16 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
     let meter = Rect::new(mx - 7.5, ly.y(METER_Y0), 16.0, ly.y(METER_Y1) - ly.y(METER_Y0));
     if console {
         // Extra large keeps its plugin list column on the right, so the console takes the strip's 44 px control column.
-        let sw = if extra { 55.0 } else { w - 2.0 };
+        // Wide 2 and Wide 3 are wide enough to keep the meter beside the console, as their narrow relatives do, so the
+        // level stays visible there too; a strip whose panel button shows the console at a narrower layout gives it the
+        // whole strip.
+        let beside = !extra && matches!(s.mixer.layout, crate::mixer::WIDE_2 | crate::mixer::WIDE_3);
+        let sw = if extra { 55.0 } else { w - 2.0 - if beside { 18.0 } else { 0.0 } };
         console_panel(ui, s, n, Rect::new(left + 1.0, ly.y(PANEL_Y0) + 2.0, sw, (ly.y(METER_Y1) - ly.y(PANEL_Y0) - 4.0).max(24.0)));
+        if beside {
+            let m = Rect::new(left + w - 17.0, ly.y(PANEL_Y0) + 2.0, 16.0, (ly.y(METER_Y1) - ly.y(PANEL_Y0) - 4.0).max(24.0));
+            meter_body(ui, s, n, m, lemon, Some(ly));
+        }
         // The console takes the meter's column, but a wide strip has room for the level elsewhere: Extra large puts it
         // beside the fader (the tall room the plugin list leaves free), V2 beside the console's section knobs, where
         // the list used to be.
@@ -1369,6 +1379,28 @@ mod tests {
         assert!(!has(&app, Action::Mix(MHit::StripPower(2))), "hidden on that channel");
         assert!(has(&app, Action::Mix(MHit::StripPower(3))), "the rest follow the layout");
         assert!(has(&app, Action::Fader(2)));
+    }
+
+    /// Wide 2 and Wide 3 draw the console and the strip's own meter side by side: the console gives up the meter's
+    /// column at the strip's right edge, so the level stays visible behind the console's sections.
+    #[test]
+    fn wide_layouts_keep_the_meter_beside_the_console() {
+        let mut app = app();
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let ws = &mut app.state.wins[crate::app::Win::Mixer.slot().unwrap()];
+        (ws.maxed, ws.rect) = (false, os_ui::Rect::new(100.0, 83.0, 1400.0, 900.0));
+        app.state.z = vec![crate::app::Win::Mixer];
+        let rect = |app: &App, a: Action| app.hits.iter().find(|h| h.action == a).map(|h| h.rect);
+        for layout in [crate::mixer::WIDE_2, crate::mixer::WIDE_3] {
+            app.state.mixer.layout = layout;
+            app.paint(&mut c, None);
+            let m = rect(&app, Action::Mix(MHit::Meter(2))).expect("the strip's meter");
+            let strip = rect(&app, Action::Mix(MHit::Strip(2))).expect("the strip");
+            let console = rect(&app, Action::Mix(MHit::StripPower(2))).expect("the console");
+            assert_eq!(m.w, 16.0);
+            assert!((m.right() - (strip.right() - 1.0)).abs() < 2.0, "at the strip's right edge: {m:?} in {strip:?}");
+            assert!(console.right() < m.x, "the console leaves it room: {console:?} {m:?}");
+        }
     }
 
     /// The two Extra large layouts share their columns, but V2 drops the plugin list down beside the fader, which frees
