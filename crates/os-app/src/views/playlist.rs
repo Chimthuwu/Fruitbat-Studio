@@ -1238,8 +1238,6 @@ fn linear_mix(ui: &mut Ui, s: &State, mix: Rect, tr: &os_model::Track) {
             ui.c.stroke_circle(cx, cy, 3.0, 1.3, ui.t.tx(0xd8e0e6).with_alpha(160));
         }
     }
-    // The strip's enable light (the mixer's mute/solo LED), read-only, under the arm's.
-    super::led(ui, mix.x - 9.0, mix.y + 19.0, strip.is_none_or(|m| m.enabled));
     // The meter, two bars on the same law and floor the mixer's strips use (spec: ui/mixer.md §9).
     let meter = Rect::new(mix.x, mix.y + 8.0, 8.0, mix.h - 8.0);
     ui.c.fill_rrect(meter, 2.0, ui.t.s(0x141618).with_alpha(160));
