@@ -49,6 +49,10 @@ pub const LINEAR_MODE: u8 = 204;
 /// clips), so the original has no such event and an `.flp` round trip loses them, like the rest of the Lemon-only
 /// state.
 pub const LANE_BINDINGS: u8 = 205;
+/// `LMex` event: the modulation system's persistent device/owner identity registry (M0, audit K.2/K.3).
+/// A `BTreeMap<PersistentObjectId, OwnerLocator>` plus the id counter and any explicit native bindings.
+/// Event IDs 192–205 are taken by other Lemon Studio state; 206 is the first free id (K.3).
+pub const OWNER_IDS: u8 = 206;
 
 /// Whether `file` is a `.lemon` file (its first chunk is `LMhd`).
 pub fn is_lemon(file: &FlpFile) -> bool {

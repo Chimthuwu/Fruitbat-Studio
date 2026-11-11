@@ -2514,6 +2514,7 @@ impl AutoMode {
 }
 
 /// Automation targets (spec: flp/events/automation.md "Targets").
+pub mod modulation;
 pub mod target {
     pub const CHANNEL_VOLUME: u16 = 0;
     pub const CHANNEL_PAN: u16 = 1;

@@ -997,6 +997,9 @@ pub enum Drag {
 
 pub struct State {
     pub project: Project,
+    /// Persistent device/parameter identity for the modulation system (M0). Lives here (app state),
+    /// persisted in the `.lemon` extension — never inside FLP target bytes (audit K.1/K.3).
+    pub identity: os_model::modulation::IdentityRegistry,
     /// The toolbar's scope / analyzer and peak bars (fed from the audio tap in `App::tick`).
     pub monitor: crate::monitor::Monitor,
     /// The plugin database: choices, last scan, the plugin menus' lists, the plugin manager's table (spec:
@@ -1661,6 +1664,7 @@ impl App {
                 control: Default::default(),
                 global_snap: Default::default(),
                 pat_ui: Default::default(),
+                identity: Default::default(),
                 wins: crate::arrange::default_wins(),
                 screen: (1920.0, 1080.0),
                 display_scale: 1.0,
@@ -1870,6 +1874,7 @@ impl App {
                 self.state.control.settle(&mut self.state.project);
                 if let Some(f) = self.state.file.take() {
                     crate::lemon_state::apply(&mut self.state, &mut self.plugins, &f);
+                    crate::modulation::assign_all(&mut self.state);
                     self.state.file = Some(f);
                 }
                 // The original's Patcher slots that are a plain serial chain open as containers (README.md slice 5).
@@ -2062,6 +2067,7 @@ impl App {
         // Hosted CLAP / VST3 plugins are written as wrapped plugins with their current state (spec: flp/events/plugins.md).
         let mut proj = s.project.clone();
         // Lemon Studio's own state goes into `LMex` (a .lemon target only, `lemon_or_flp`).
+        crate::modulation::assign_all(s);
         let extra = crate::lemon_state::events(s, &self.plugins);
         crate::project_info::stamp(s, &mut proj);
         crate::data_folder::stamp(s, &mut proj);
@@ -2124,6 +2130,7 @@ impl App {
     pub(crate) fn mark_saved(&mut self) {
         // New things get their ids before the copy, so ids alone are no unsaved change.
         self.state.control.settle(&mut self.state.project);
+        crate::modulation::assign_all(&mut self.state);
         self.saved = (self.state.project.clone(), self.state.tempo, crate::lemon_state::saved_form(&self.state, &self.plugins));
         self.state.plugin_edited = false;
     }

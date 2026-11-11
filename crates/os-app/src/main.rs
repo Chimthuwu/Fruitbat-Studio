@@ -66,6 +66,7 @@ mod init;
 mod knobs;
 mod layout;
 mod lemon_state;
+mod modulation;
 mod loading;
 mod missing;
 mod mix_threads;

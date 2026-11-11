@@ -85,6 +85,16 @@ pub struct Hosted {
     pub hide_preset: bool,
 }
 
+impl Hosted {
+    /// The plugin's native parameter ids (CLAP `clap_id` / VST3 `ParamID`) in positional order, once the
+    /// UI has read its parameter list. `None` until asked. Read-only: the modulation resolver uses this to
+    /// map a [`os_model::modulation::ParameterKey::PluginNativeId`] to a positional index without depending
+    /// on any FLP target encoding.
+    pub fn param_ids(&self) -> Option<Vec<u32>> {
+        self.infos.get().map(|v| v.iter().map(|i| i.id).collect())
+    }
+}
+
 /// When the UI last locked an instance for one of its per-tick jobs: the attention count it acted on, and when.
 #[derive(Debug, Clone, Copy)]
 pub struct Look {

@@ -15,6 +15,8 @@ use crate::app::State;
 use crate::playlist::{ICONS, IconOwner};
 use crate::plugins::Plugins;
 use os_flp::{Event, FlpFile, Value, lemon};
+use os_model::modulation::{IdentityRegistry, OwnerLocator, PersistentObjectId};
+use std::collections::BTreeMap;
 
 /// The payload layout written (the first byte of each event). A reader ignores an event with a layout it does not know.
 const LAYOUT: u8 = 1;
@@ -57,6 +59,7 @@ pub fn events(s: &State, plugins: &Plugins) -> Vec<Event> {
     if !s.project.auto_lanes.is_empty() {
         v.push(lane_bindings(s));
     }
+    v.push(owner_ids(s));
     v
 }
 
@@ -72,6 +75,87 @@ pub fn saved_form(s: &State, plugins: &Plugins) -> Vec<u8> {
     b
 }
 
+/// The `LMex` event holding the modulation identity registry (K.2/K.3).
+pub fn owner_ids(s: &State) -> Event {
+    Event::new(lemon::OWNER_IDS, Value::var(write_identity(&s.identity)))
+}
+
+/// Serializes the identity registry: layout version, id counter, the `id -> locator` map, then any
+/// explicit native bindings. Little-endian; readers ignore a layout they do not know.
+fn write_identity(reg: &IdentityRegistry) -> Vec<u8> {
+    let mut b = vec![LAYOUT];
+    b.extend_from_slice(&reg.next.to_le_bytes());
+    b.extend_from_slice(&(reg.owners.len() as u32).to_le_bytes());
+    for (id, loc) in &reg.owners {
+        b.extend_from_slice(&id.0.to_le_bytes());
+        match loc {
+            OwnerLocator::Channel(i) => {
+                b.push(0);
+                b.extend_from_slice(&i.to_le_bytes());
+            }
+            OwnerLocator::Track(i) => {
+                b.push(1);
+                b.extend_from_slice(&i.to_le_bytes());
+            }
+            OwnerLocator::Slot(t, k) => {
+                b.push(2);
+                b.extend_from_slice(&t.to_le_bytes());
+                b.push(*k);
+            }
+            OwnerLocator::Member(t, k, m) => {
+                b.push(3);
+                b.extend_from_slice(&t.to_le_bytes());
+                b.push(*k);
+                b.extend_from_slice(&m.to_le_bytes());
+            }
+        }
+    }
+    b.extend_from_slice(&(reg.native_bindings.len() as u32).to_le_bytes());
+    for (owner, map) in &reg.native_bindings {
+        b.extend_from_slice(&owner.0.to_le_bytes());
+        b.extend_from_slice(&(map.len() as u32).to_le_bytes());
+        for (idx, native) in map {
+            b.extend_from_slice(&idx.to_le_bytes());
+            b.extend_from_slice(&native.to_le_bytes());
+        }
+    }
+    b
+}
+
+/// Inverse of [`write_identity`]; `None` for an unrecognized layout or a truncated payload.
+fn read_identity(d: &[u8]) -> Option<IdentityRegistry> {
+    let mut r = Reader(d);
+    if r.u8()? != LAYOUT {
+        return None;
+    }
+    let next = r.u32()?;
+    let count = r.u32()? as usize;
+    let mut owners = BTreeMap::new();
+    for _ in 0..count {
+        let id = PersistentObjectId(r.u32()?);
+        let loc = match r.u8()? {
+            0 => OwnerLocator::Channel(r.u16()?),
+            1 => OwnerLocator::Track(r.u16()?),
+            2 => OwnerLocator::Slot(r.u16()?, r.u8()?),
+            3 => OwnerLocator::Member(r.u16()?, r.u8()?, r.u32()?),
+            _ => return None,
+        };
+        owners.insert(id, loc);
+    }
+    let nb_count = r.u32()? as usize;
+    let mut native_bindings = BTreeMap::new();
+    for _ in 0..nb_count {
+        let owner = PersistentObjectId(r.u32()?);
+        let mc = r.u32()? as usize;
+        let mut map = BTreeMap::new();
+        for _ in 0..mc {
+            map.insert(r.u16()?, r.u32()?);
+        }
+        native_bindings.insert(owner, map);
+    }
+    Some(IdentityRegistry { owners, next, native_bindings })
+}
+
 /// Puts the state a `.lemon` file holds into `s` and `plugins` (a project just opened, its ids given). An FLP has
 /// none; its channels and mixer tracks show the icons their numbers stand for instead ([`from_flp`]).
 pub fn apply(s: &mut State, plugins: &mut Plugins, file: &FlpFile) {
@@ -82,6 +166,12 @@ pub fn apply(s: &mut State, plugins: &mut Plugins, file: &FlpFile) {
     let read = |id| lemon::data(file, id).filter(|d| d.first() == Some(&LAYOUT));
     if let Some(&on) = read(lemon::LINEAR_MODE).as_deref().and_then(|d| d.get(1)) {
         s.project.linear_mode = on != 0;
+    }
+    // The modulation system's persistent device/owner identity registry (M0, K.2/K.3).
+    if let Some(d) = read(lemon::OWNER_IDS) {
+        if let Some(reg) = read_identity(&d) {
+            s.identity = reg;
+        }
     }
     if let Some(d) = read(lemon::TRACKS) {
         s.project.tracks = read_tracks(&d[1..]);
@@ -859,5 +949,45 @@ mod tests {
         assert_eq!(s.state.mixer.slot_colors.len(), 1);
         assert_eq!(s.state.mixer.slot_colors.get(&(2, 0)), Some(&os_model::Rgb::new(10, 200, 30)));
         let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+#[cfg(test)]
+mod modulation_identity_tests {
+    use super::*;
+    use os_model::modulation::{IdentityRegistry, OwnerLocator, PersistentObjectId};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn identity_registry_round_trips_through_lemon_event() {
+        // M0 persistence (K.3): the owner/parameter identity survives a `.lemon` save and load.
+        let mut reg = IdentityRegistry::default();
+        reg.next = 5;
+        reg.owners.insert(PersistentObjectId(1), OwnerLocator::Channel(3));
+        reg.owners.insert(PersistentObjectId(2), OwnerLocator::Slot(2, 0));
+        reg.owners.insert(PersistentObjectId(3), OwnerLocator::Member(2, 0, 1));
+        reg.owners.insert(PersistentObjectId(4), OwnerLocator::Track(5));
+        let mut nb: BTreeMap<PersistentObjectId, BTreeMap<u16, u32>> = BTreeMap::new();
+        let mut m = BTreeMap::new();
+        m.insert(0u16, 100u32);
+        nb.insert(PersistentObjectId(2), m);
+        reg.native_bindings = nb;
+
+        let bytes = write_identity(&reg);
+        let back = read_identity(&bytes).expect("round trip");
+        assert_eq!(back, reg);
+    }
+
+    #[test]
+    fn identity_event_id_is_free_and_after_existing() {
+        // 192–205 are taken by other Lemon Studio state (K.3); the identity registry uses a fresh id.
+        assert!(lemon::OWNER_IDS > lemon::LANE_BINDINGS);
+        assert_eq!(lemon::OWNER_IDS, 206);
+    }
+
+    #[test]
+    fn identity_rejects_unknown_layout() {
+        assert!(read_identity(&[0u8]).is_none());
+        assert!(read_identity(&[]).is_none());
     }
 }
