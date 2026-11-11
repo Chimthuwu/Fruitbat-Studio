@@ -1591,11 +1591,12 @@ pub struct MixerTrack {
     /// Per slot: enabled (the slot LED) and mix level 0..=1 (spec: ui/mixer.md §7).
     pub slot_on: [bool; 10],
     pub slot_mix: [f64; 10],
-    /// The Analog Channel Strip's seven control words (0..=65535) as stored: Lemon Studio's port of the Michael Lane
+    /// The Analog Channel Strip's eight control words (0..=65535) as stored: Lemon Studio's port of the Michael Lane
     /// Edition strip (plan v3 Appendix C). All zero on a track that never used it. Word 0 is the low cut
     /// (`os_dsp::strip::cut_hz`: 20 Hz at word 0, the section's off position, to 350 Hz) and word 3 the gate
-    /// (`os_dsp::strip::gate_threshold_db`: -72 dB at word 0, the section off, to -18 dB); word 2 is the drive, 4 TAME and 6 the drive's character, so words 1 and 5 are unused so far.
-    pub strip: [u16; 7],
+    /// (`os_dsp::strip::gate_threshold_db`: -72 dB at word 0, the section off, to -18 dB); word 2 is the drive with its
+    /// character in word 6, word 1 the compressor with its profile in word 5, word 4 TAME and word 7 the de-esser.
+    pub strip: [u16; 8],
     /// The strip's bypass switch: `true` (the default) passes the track through untouched, and a track that never
     /// turned the strip on stores nothing (`LSCS`, plan v3 §6.4).
     pub strip_bypassed: bool,
@@ -1730,7 +1731,7 @@ impl MixerTrack {
             pan: Some(0.0),
             stereo_separation: Some(0.0),
             polarity: false,
-            strip: [0; 7],
+            strip: [0; 8],
             strip_bypassed: true,
             swap: false,
             slots_enabled: true,

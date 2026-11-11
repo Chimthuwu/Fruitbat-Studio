@@ -97,6 +97,8 @@ pub enum MCmd {
     StripComp(u16, u16),
     /// The compressor's profile (word 5; `os_dsp::strip::PROFILES` order).
     StripCompProfile(u16, u16),
+    /// The de-esser's amount on the track's strip (word 7; 0 = off).
+    StripDeess(u16, u16),
     Solo(u16),
     /// Solo with the tracks routed into it too (spec: ui/mixer-track-commands.md §5).
     AltSolo(u16),
@@ -1769,6 +1771,16 @@ fn track_items(s: &State, n: u16) -> Vec<PItem> {
                 .map(|(i, p)| PItem::new(p.name, mx(MCmd::StripCompProfile(n, os_dsp::strip::comp_profile_word(i)))).mark(Mark::Radio(strip_comp_profile(t) == i)))
                 .collect(),
         ),
+        PItem::sub(
+            "De-esser",
+            [0u16, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+                .into_iter()
+                .map(|pct| {
+                    let label = if pct == 0 { "Off".to_string() } else { format!("{pct} %") };
+                    PItem::new(label, mx(MCmd::StripDeess(n, os_dsp::strip::deess_word(f32::from(pct) / 100.0)))).mark(Mark::Radio(strip_deess(t) == pct))
+                })
+                .collect(),
+        ),
     ]
 }
 
@@ -1805,6 +1817,11 @@ fn strip_comp(t: Option<&os_model::MixerTrack>) -> u16 {
 /// A strip's compressor profile from control word 5 (`os_dsp::strip::comp_profile`: 0 General to 5 Drums).
 fn strip_comp_profile(t: Option<&os_model::MixerTrack>) -> usize {
     t.map_or(0, |m| os_dsp::strip::comp_profile(m.strip[5]))
+}
+
+/// A strip's de-esser amount in percent from control word 7 (`os_dsp::strip::deess_amount`), 0 for the section off.
+fn strip_deess(t: Option<&os_model::MixerTrack>) -> u16 {
+    t.map_or(0, |m| (os_dsp::strip::deess_amount(m.strip[7]) * 100.0).round() as u16)
 }
 
 /// The saved mixer track states, one entry each running `cmd` with its file; a greyed "(no saved states)" without any.
@@ -2072,7 +2089,7 @@ pub fn run(app: &mut App, c: MCmd) -> Option<String> {
     // A slot's sidechain input is the track's own (its slot's saved state).
     // Quick Sidechain changes the destination's chain and the source's routing in one undo step.
     // The Analog Channel Strip is the track's own state: one undo step on that track (plan v3 Milestone 0).
-    if let MCmd::StripBypass(t) | MCmd::StripLowCut(t, _) | MCmd::StripGate(t, _) | MCmd::StripDrive(t, _) | MCmd::StripDriveType(t, _) | MCmd::StripTame(t, _) | MCmd::StripComp(t, _) | MCmd::StripCompProfile(t, _) = &c {
+    if let MCmd::StripBypass(t) | MCmd::StripLowCut(t, _) | MCmd::StripGate(t, _) | MCmd::StripDrive(t, _) | MCmd::StripDriveType(t, _) | MCmd::StripTame(t, _) | MCmd::StripComp(t, _) | MCmd::StripCompProfile(t, _) | MCmd::StripDeess(t, _) = &c {
         let t = *t;
         return crate::control::edit_app(app, "Analog channel strip", Region::Track(t), |app| run_now(app, c));
     }
@@ -2296,6 +2313,14 @@ fn run_now(app: &mut App, c: MCmd) -> Option<String> {
         MCmd::StripCompProfile(n, profile) => {
             if let Some(t) = track_mut(s, n) {
                 t.strip[5] = profile;
+                t.strip_bypassed = false;
+                changed(s);
+            }
+            None
+        }
+        MCmd::StripDeess(n, word) => {
+            if let Some(t) = track_mut(s, n) {
+                t.strip[7] = word;
                 t.strip_bypassed = false;
                 changed(s);
             }
@@ -3944,7 +3969,7 @@ mod tests {
         }
         let t = |a: &App| track(&a.state, 2).unwrap().clone();
         assert!(t(&a).strip_bypassed, "a track starts with the strip off");
-        assert_eq!(t(&a).strip, [0; 7]);
+        assert_eq!(t(&a).strip, [0; 8]);
         let steps = a.state.history.at();
         run(&mut a, MCmd::StripBypass(2));
         assert!(!t(&a).strip_bypassed);
@@ -3989,6 +4014,11 @@ mod tests {
         assert_eq!(a.state.history.at(), steps + 2);
         crate::history::undo(&mut a.state);
         assert_eq!(t(&a).strip[5], 0, "the profile is back to General");
+        run(&mut a, MCmd::StripDeess(2, os_dsp::strip::deess_word(0.7)));
+        assert!((os_dsp::strip::deess_amount(t(&a).strip[7]) - 0.7).abs() < 0.001);
+        assert_eq!(a.state.history.at(), steps + 2);
+        crate::history::undo(&mut a.state);
+        assert_eq!(t(&a).strip[7], 0, "the de-esser is back off");
         // The track menu offers all of it, ticked from the track's state.
         let items = track_items(&a.state, 2);
         let on = items.iter().find(|i| i.label == "Analog strip").unwrap();

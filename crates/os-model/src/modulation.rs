@@ -112,6 +112,9 @@ impl ParamResolution {
     }
 }
 
+/// The reserved slot value for a channel-container member's place (matches `container::CHANNEL`).
+pub const CHANNEL_SENTINEL: u8 = 0xFF;
+
 /// The authoritative mapping from persistent owner identity to the owner's current location,
 /// plus the counter that mints new identities. Persisted in the `.lemon` extension.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -123,6 +126,62 @@ pub struct IdentityRegistry {
     /// Any native parameter bindings the user has explicitly established, keyed by path. Persisted
     /// so a native id survives even when its `LegacyPluginIndex` would otherwise be the only record.
     pub native_bindings: BTreeMap<PersistentObjectId, BTreeMap<u16, u32>>,
+}
+
+impl IdentityRegistry {
+    /// Updates every owner's locator through a mixer place move (`track` and `slot` map an old place to
+    /// its new one, `None` for one that vanished). The persistent id is preserved; an owner whose place
+    /// is gone is dropped (its assignments become explicitly missing rather than silently kept). This is
+    /// the identity counterpart of [`crate::Project::follow_mixer_places`], driven by the same closures so
+    /// device identity follows the device exactly as its `Target`s do (K.5 §6, K.6).
+    pub fn retarget_mixer_places(&mut self, track: &dyn Fn(u16) -> Option<u16>, slot: &dyn Fn(u16, u8) -> Option<(u16, u8)>) {
+        let mut moved: Vec<(PersistentObjectId, OwnerLocator)> = Vec::new();
+        let mut gone: Vec<PersistentObjectId> = Vec::new();
+        for (&id, &loc) in &self.owners {
+            let next = match loc {
+                OwnerLocator::Channel(i) => track(i).map(OwnerLocator::Channel),
+                OwnerLocator::Track(i) => track(i).map(OwnerLocator::Track),
+                OwnerLocator::Slot(t, k) => slot(t, k).map(|(t, k)| OwnerLocator::Slot(t, k)),
+                OwnerLocator::Member(t, k, m) => {
+                    if k == CHANNEL_SENTINEL {
+                        track(t).map(|nt| OwnerLocator::Member(nt, CHANNEL_SENTINEL, m))
+                    } else {
+                        slot(t, k).map(|(nt, nk)| OwnerLocator::Member(nt, nk, m))
+                    }
+                }
+            };
+            match next {
+                Some(nl) if nl != loc => moved.push((id, nl)),
+                Some(_) => {}
+                None => gone.push(id),
+            }
+        }
+        for (id, nl) in moved {
+            self.owners.insert(id, nl);
+        }
+        for id in gone {
+            self.owners.remove(&id);
+        }
+    }
+
+    /// Applies explicit old→new locator moves (used by container wraps). Each owner at an `old` locator is
+    /// re-bound to `new`, keeping its persistent id; owners not listed are left alone. This is the identity
+    /// counterpart of [`crate::container::Moved::retarget`]: plugins wrapped into a container become members,
+    /// and a wrapped container's members keep their identities at their new container place (K.5 §6, K.6).
+    pub fn retarget_owners(&mut self, moves: &[(OwnerLocator, OwnerLocator)]) {
+        if moves.is_empty() {
+            return;
+        }
+        let mut done: Vec<(PersistentObjectId, OwnerLocator)> = Vec::new();
+        for (&id, &loc) in &self.owners {
+            if let Some((_, new)) = moves.iter().find(|(old, _)| *old == loc) {
+                done.push((id, *new));
+            }
+        }
+        for (id, new) in done {
+            self.owners.insert(id, new);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -167,5 +226,44 @@ mod tests {
             matches!(target::decode(t), target::Target::SlotParam { .. }),
             "the existing decoder still recognises the target"
         );
+    }
+
+    #[test]
+    fn retarget_mixer_places_preserves_identity() {
+        // M0 move preservation (K.5 §6, K.6): device identity follows the device through a mixer move.
+        let mut r = IdentityRegistry::default();
+        r.owners.insert(PersistentObjectId(1), OwnerLocator::Channel(2));
+        r.owners.insert(PersistentObjectId(2), OwnerLocator::Track(3));
+        r.owners.insert(PersistentObjectId(3), OwnerLocator::Slot(1, 0));
+        r.owners.insert(PersistentObjectId(4), OwnerLocator::Member(1, 0, 2));
+        r.owners.insert(PersistentObjectId(5), OwnerLocator::Member(5, CHANNEL_SENTINEL, 1));
+        // Reorder: track 2->0, 3->1; slot (1,0)->(0,2); track 5 vanished (delete).
+        let track = |t: u16| match t { 2 => Some(0), 3 => Some(1), 5 => None, _ => Some(t) };
+        let slot = |t: u16, k: u8| if (t, k) == (1, 0) { Some((0, 2)) } else { Some((t, k)) };
+        r.retarget_mixer_places(&track, &slot);
+        assert_eq!(r.owners.get(&PersistentObjectId(1)), Some(&OwnerLocator::Channel(0)), "channel owner keeps its id at its new track");
+        assert_eq!(r.owners.get(&PersistentObjectId(2)), Some(&OwnerLocator::Track(1)));
+        assert_eq!(r.owners.get(&PersistentObjectId(3)), Some(&OwnerLocator::Slot(0, 2)), "slot owner follows the slot move");
+        assert_eq!(r.owners.get(&PersistentObjectId(4)), Some(&OwnerLocator::Member(0, 2, 2)), "member follows its container's slot move");
+        assert!(r.owners.get(&PersistentObjectId(5)).is_none(), "a vanished track's owner is dropped, not silently kept");
+    }
+
+    #[test]
+    fn retarget_owners_wrap_to_member() {
+        // M0 container wrap (K.5 §6, K.6): a wrapped plugin and a wrapped container's members keep their
+        // persistent ids at their new member place.
+        let mut r = IdentityRegistry::default();
+        r.owners.insert(PersistentObjectId(1), OwnerLocator::Slot(1, 0));
+        r.owners.insert(PersistentObjectId(2), OwnerLocator::Channel(3));
+        r.owners.insert(PersistentObjectId(3), OwnerLocator::Member(1, 0, 5));
+        let moves = vec![
+            (OwnerLocator::Slot(1, 0), OwnerLocator::Member(4, 2, 100)),
+            (OwnerLocator::Member(1, 0, 5), OwnerLocator::Member(4, 2, 200)),
+            (OwnerLocator::Channel(3), OwnerLocator::Member(4, 2, 101)),
+        ];
+        r.retarget_owners(&moves);
+        assert_eq!(r.owners.get(&PersistentObjectId(1)), Some(&OwnerLocator::Member(4, 2, 100)), "wrapped slot plugin keeps id as member");
+        assert_eq!(r.owners.get(&PersistentObjectId(2)), Some(&OwnerLocator::Member(4, 2, 101)), "wrapped channel instrument keeps id as member");
+        assert_eq!(r.owners.get(&PersistentObjectId(3)), Some(&OwnerLocator::Member(4, 2, 200)), "nested member keeps id at new container place");
     }
 }

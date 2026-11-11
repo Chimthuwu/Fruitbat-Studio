@@ -4320,16 +4320,17 @@ pub fn default_arrangement() -> Arrangement {
 
 /// What `apply` cannot store in `file` yet: the mixer and playlist of a project made by [`create`] (their file
 /// has none). Empty when nothing would be lost.
-/// The Analog Channel Strip's chunk: the seven control words of every track whose strip is not at its default, and
-/// the bypass switch (Lemon Studio's port of the Michael Lane Edition strip; plan v3 §6.4). Version 4 is the first one
-/// Lemon Studio writes: the fork's versions 5 and 6 add SnapTune's four words, which this port does not have.
+/// The Analog Channel Strip's chunk: the eight control words of every track whose strip is not at its default, and
+/// the bypass switch (Lemon Studio's port of the Michael Lane Edition strip; plan v3 §6.4). Version 7 is the first one
+/// with the de-esser's word; version 4, with seven, is still read. The fork's versions 5 and 6 add SnapTune's four
+/// words, which this port does not have, so those chunks are left alone and 5 and 6 are skipped.
 const STRIP_TAG: [u8; 4] = *b"LSCS";
-const STRIP_VERSION: u8 = 4;
+const STRIP_VERSION: u8 = 7;
 
 /// The strip chunk's payload, or `None` when no track has strip state: payload version, count, then per track its
-/// index, seven words and the bypass flag.
+/// index, eight words and the bypass flag.
 fn strip_payload(project: &Project) -> Option<Vec<u8>> {
-    let tracks: Vec<&MixerTrack> = project.mixer.iter().filter(|m| m.strip != [0; 7] || !m.strip_bypassed).collect();
+    let tracks: Vec<&MixerTrack> = project.mixer.iter().filter(|m| m.strip != [0; 8] || !m.strip_bypassed).collect();
     if tracks.is_empty() {
         return None;
     }
@@ -4347,11 +4348,12 @@ fn strip_payload(project: &Project) -> Option<Vec<u8>> {
 
 /// Writes the project's strip state into `file`, or removes the chunk when no track has any. A chunk written by
 /// another build (a fork's version 5 or 6, with SnapTune's words) is left as it is: its state is not this build's.
+/// A version 4 chunk, from a build before the de-esser, is this build's and is written again at the current version.
 fn store_strip(project: &Project, file: &mut FlpFile) {
     use crate::container::{Chunk, ChunkBody, Tag};
     let at = file.chunks.iter().position(|c| c.tag.0 == STRIP_TAG);
     if let Some(i) = at {
-        let ours = matches!(&file.chunks[i].body, ChunkBody::Raw(d) if d.first() == Some(&STRIP_VERSION));
+        let ours = matches!(&file.chunks[i].body, ChunkBody::Raw(d) if d.first() == Some(&4) || d.first() == Some(&STRIP_VERSION));
         if !ours {
             return;
         }
@@ -4376,22 +4378,29 @@ fn read_strip(file: &FlpFile, mixer: &mut [MixerTrack]) {
     }) else {
         return;
     };
-    if data.len() < 3 || data[0] != STRIP_VERSION {
+    // Version 4 wrote seven words; the de-esser added the eighth. Anything else is another build's and is left alone.
+    let words = match data.first() {
+        Some(4) => 7,
+        Some(&STRIP_VERSION) => 8,
+        _ => return,
+    };
+    if data.len() < 3 {
         return;
     }
+    let record = 2 + 2 * words + 1;
     let n = usize::from(u16::from_le_bytes([data[1], data[2]]));
     let mut at = 3;
     for _ in 0..n {
-        let Some(head) = data.get(at..at + 17) else { return };
+        let Some(head) = data.get(at..at + record) else { return };
         let index = u16::from_le_bytes([head[0], head[1]]);
-        let mut words = [0u16; 7];
-        for (k, w) in words.iter_mut().enumerate() {
+        let mut strip = [0u16; 8];
+        for (k, w) in strip.iter_mut().take(words).enumerate() {
             *w = u16::from_le_bytes([head[2 + 2 * k], head[3 + 2 * k]]);
         }
-        let bypassed = head[16] & 1 != 0;
-        at += 17;
+        let bypassed = head[2 + 2 * words] & 1 != 0;
+        at += record;
         if let Some(m) = mixer.iter_mut().find(|m| m.index == index) {
-            m.strip = words;
+            m.strip = strip;
             m.strip_bypassed = bypassed;
         }
     }
@@ -6204,23 +6213,23 @@ mod tests {
         let bare = create(&p).unwrap();
         assert!(!bare.chunks.iter().any(|c| c.tag.0 == *b"LSCS"), "a default project stores no strip chunk");
 
-        p.mixer[1].strip = [1234, 2, 3, 4, 5, 6, 7];
+        p.mixer[1].strip = [1234, 2, 3, 4, 5, 6, 7, 8];
         p.mixer[1].strip_bypassed = false;
         let file = create(&p).unwrap();
         assert!(file.chunks.iter().any(|c| c.tag.0 == *b"LSCS"));
         let back = load(&FlpFile::parse(&file.to_bytes().unwrap()).unwrap()).unwrap();
-        assert_eq!(back.mixer[1].strip, [1234, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(back.mixer[1].strip, [1234, 2, 3, 4, 5, 6, 7, 8]);
         assert!(!back.mixer[1].strip_bypassed);
         assert_eq!(back.mixer[2].strip, [0; 7]);
         assert!(back.mixer[2].strip_bypassed);
 
         // In place (`apply`): the chunk follows the state, and goes when no track has any.
         let mut f = create(&p).unwrap();
-        p.mixer[1].strip = [9, 0, 0, 0, 0, 0, 0];
+        p.mixer[1].strip = [9, 0, 0, 0, 0, 0, 0, 0];
         apply(&p, &mut f).unwrap();
         let back = load(&FlpFile::parse(&f.to_bytes().unwrap()).unwrap()).unwrap();
         assert_eq!(back.mixer[1].strip[0], 9);
-        p.mixer[1].strip = [0; 7];
+        p.mixer[1].strip = [0; 8];
         p.mixer[1].strip_bypassed = true;
         apply(&p, &mut f).unwrap();
         assert!(!f.chunks.iter().any(|c| c.tag.0 == *b"LSCS"), "no strip state: the chunk goes");
@@ -6234,7 +6243,7 @@ mod tests {
         let mut p = new_project();
         p.mixer = (0..3).map(MixerTrack::new).collect();
         p.arrangements.push(default_arrangement());
-        p.mixer[1].strip = [1, 0, 0, 0, 0, 0, 0];
+        p.mixer[1].strip = [1, 0, 0, 0, 0, 0, 0, 0];
         let mut f = create(&p).unwrap();
         f.chunks.push(Chunk { tag: Tag(*b"ZZZZ"), body: ChunkBody::Raw(vec![1, 2, 3, 4]) });
         apply(&p, &mut f).unwrap();

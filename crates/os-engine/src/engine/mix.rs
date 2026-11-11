@@ -201,7 +201,7 @@ impl MixTrack {
             slots_enabled: true,
             threaded: true,
             eq: os_dsp::mixer::TrackEq::default(),
-            strip: os_dsp::strip::Strip::new([0; 7], true),
+            strip: os_dsp::strip::Strip::new([0; 8], true),
             effects: Vec::new(),
             slot_on: [true; 10],
             slot_mix: [12800; 10],

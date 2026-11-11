@@ -771,6 +771,31 @@ impl Moved {
         if let Some(Some(n)) = self.target(s.events.target) {
             s.events.target = n;
         }
+        // M0 (K.5 §6, K.6): device identity follows the wrap into a container. A wrapped plugin's owner
+        // becomes a member of the new container; a wrapped container's members keep their identities at
+        // their new container place.
+        let mut pairs: Vec<(os_model::modulation::OwnerLocator, os_model::modulation::OwnerLocator)> = Vec::new();
+        for m in &self.moves {
+            match &m.ids {
+                Ids::Plugin(id) => {
+                    let old = if m.from.1 == CHANNEL {
+                        os_model::modulation::OwnerLocator::Channel(m.from.0)
+                    } else {
+                        os_model::modulation::OwnerLocator::Slot(m.from.0, m.from.1)
+                    };
+                    pairs.push((old, os_model::modulation::OwnerLocator::Member(self.to.0, self.to.1, *id)));
+                }
+                Ids::Members(ids) => {
+                    for &(old_member, new_member) in ids {
+                        pairs.push((
+                            os_model::modulation::OwnerLocator::Member(m.from.0, m.from.1, old_member),
+                            os_model::modulation::OwnerLocator::Member(self.to.0, self.to.1, new_member),
+                        ));
+                    }
+                }
+            }
+        }
+        s.identity.retarget_owners(&pairs);
         stuck.len()
     }
 }

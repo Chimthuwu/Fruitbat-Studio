@@ -6406,7 +6406,7 @@ mod tests {
         };
         let plain = insert_project();
         let mut set = plain.clone();
-        set.mixer[1].strip = [65535, 1234, 4321, 999, 7, 65, 32000];
+        set.mixer[1].strip = [65535, 1234, 4321, 999, 7, 65, 32000, 40000];
         assert!(set.mixer[1].strip_bypassed, "a strip is off until it is turned on");
         assert_eq!(render(&plain), render(&set), "bypassed: bit for bit");
     }

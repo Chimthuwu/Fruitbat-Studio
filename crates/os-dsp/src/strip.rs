@@ -3,7 +3,7 @@
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! The Analog Channel Strip: Lemon Studio's port of the Michael Lane Edition fork's console strip (plan v3 Appendix C).
-//! The low cut, the gate, the drive, TAME and the compressor are here; the de-esser follows.
+//! The low cut, the gate, the drive, TAME, the compressor and the de-esser are here, in the fork's order.
 //!
 //! A strip is bypassed, faded out, and only then does the engine stop calling it: a bypassed strip passes the track
 //! through sample for sample (plan v3 §6.3). The sections are stereo-linked in their settings with one filter state per
@@ -741,12 +741,152 @@ impl Compressor {
     }
 }
 
-/// A track's Analog Channel Strip: the low cut, the gate, the drive, TAME and the compressor today, the de-esser to come. Bypassed, it fades the processed
-/// signal out to the dry one and then stops touching the buffer (`idle`), so a bypassed strip passes a track through
-/// sample for sample (plan v3 §6.3).
+/// How many frames of edges the de-esser's detector compares.
+const DEESS_HISTORY: usize = 21;
+
+/// The furthest the de-esser takes a band down: the fork's Depth, `1 / 0.5001`.
+const DEESS_DEPTH: f32 = 1.0 / 0.5001;
+
+/// The de-esser's control word as an amount: word 0 is the section off, 65535 is all the way in.
+pub fn deess_amount(word: u16) -> f32 {
+    f32::from(word) / 65535.0
+}
+
+/// The word for an amount 0..=1.
+pub fn deess_word(amount: f32) -> u16 {
+    (amount.clamp(0.0, 1.0) * 65535.0).round() as u16
+}
+
+/// The de-esser: the fork's port of Airwindows DeBess, a detector that watches how sharp the signal's edges are and pulls
+/// the sharpest ones down toward a two-sample average of the signal. It looks at the edges of both channels over the last
+/// twenty frames, alternates two banks of state frame by frame so a reduction does not read as one frame of dip, and takes
+/// a band no more than about 6 dB down. There is no look-ahead and no delay line in the audio path. Word 7 is the amount
+/// (0 = off); the amount and the fade glide over 20 ms and 10 ms, so switching it in or out does not click.
+pub struct Deess {
+    /// Per channel, the last twenty frames' samples the detector measures its slopes from.
+    samples: [[f32; DEESS_HISTORY]; 2],
+    /// Per channel, the slopes between them.
+    slopes: [[f32; DEESS_HISTORY]; 2],
+    /// Per channel and per alternating bank: the two-sample average, and the gain the sharp edges are pulled down by.
+    low: [[f32; 2]; 2],
+    ratio: [[f32; 2]; 2],
+    /// Which of the two banks this frame uses; the fork alternates them every frame.
+    flip: usize,
+    /// The amount as it glides (0..1), 20 ms either way.
+    amount: Glide,
+    /// How much of the reduced signal is heard: 0 dry, 1 reduced (the section fades in and out with it).
+    wet: Glide,
+    /// The amount's control word (0 = off).
+    word: u16,
+}
+
+/// One block's de-esser settings: the amount and the fade glide through it, and the rate's intensity scale is fixed.
+struct DeessBlock {
+    amount: Ramp,
+    wet: Ramp,
+    /// How much a sharp edge counts at this rate: the fork's `8192 / (rate / 44100)`.
+    scale: f32,
+}
+
+impl Deess {
+    pub fn new(word: u16) -> Deess {
+        Deess {
+            samples: [[0.0; DEESS_HISTORY]; 2],
+            slopes: [[0.0; DEESS_HISTORY]; 2],
+            low: [[0.0; 2]; 2],
+            ratio: [[1.0; 2]; 2],
+            flip: 0,
+            amount: Glide::new(deess_amount(word)),
+            wet: Glide::new(if word == 0 { 0.0 } else { 1.0 }),
+            word,
+        }
+    }
+
+    /// The section's control word (0 = off).
+    pub fn set(&mut self, word: u16) {
+        self.word = word;
+    }
+
+    /// True when the section is off and faded out: it has no state worth keeping and writes nothing.
+    pub fn idle(&self) -> bool {
+        self.word == 0 && self.wet.current == 0.0
+    }
+
+    /// Empties the detector and the banks: a section switched in again starts from silence, not from where it was.
+    pub fn reset(&mut self) {
+        self.samples = [[0.0; DEESS_HISTORY]; 2];
+        self.slopes = [[0.0; DEESS_HISTORY]; 2];
+        self.low = [[0.0; 2]; 2];
+        self.ratio = [[1.0; 2]; 2];
+        self.flip = 0;
+    }
+
+    /// Plans a block; `None` when the section is off and has glided out (its state is cleared).
+    fn block(&mut self, frames: usize, rate: u32) -> Option<DeessBlock> {
+        let rate = rate.max(1);
+        let ratef = rate as f32;
+        let target = deess_amount(self.word);
+        if target == 0.0 && self.amount.current == 0.0 {
+            self.reset();
+            return None;
+        }
+        Some(DeessBlock {
+            amount: self.amount.block(target, frames, 1.0 / (0.020 * ratef)),
+            wet: self.wet.block(if self.word == 0 { 0.0 } else { 1.0 }, frames, 1.0 / (0.010 * ratef)),
+            scale: 8192.0 / (ratef / 44_100.0),
+        })
+    }
+
+    /// One stereo frame: both channels through the same detector, the amount and the fade moving together.
+    fn frame(&mut self, b: &mut DeessBlock, input: [f32; 2]) -> [f32; 2] {
+        let amount = b.amount.next();
+        let wet = b.wet.next();
+        let intensity = amount.powi(5) * b.scale;
+        let bank = self.flip;
+        let mut out = input;
+        for ch in 0..2 {
+            let x = input[ch];
+            let s = &mut self.samples[ch];
+            s[0] = x;
+            for i in (1..=20).rev() {
+                s[i] = s[i - 1];
+            }
+            let m = &mut self.slopes[ch];
+            m[1] = (s[1] - s[2]) * ((s[1] - s[2]) / 1.3);
+            for i in (2..20).rev() {
+                m[i] = (s[i] - s[i + 1]) * ((s[i - 1] - s[i]) / 1.3);
+            }
+            // A sharp edge is a big second difference: the sharper it is, the more the de-esser takes down.
+            let mut sense = (m[1] - m[2]).abs() * 400.0;
+            for i in (1..20).rev() {
+                let mult = (m[i] - m[i + 1]).abs() * 400.0;
+                if mult < 1.0 {
+                    sense *= mult;
+                }
+            }
+            sense = (1.0 + intensity * intensity * sense).min(intensity);
+            self.low[ch][bank] = self.low[ch][bank] * 0.5 + x * 0.5;
+            self.ratio[ch][bank] = (self.ratio[ch][bank] * 0.995 + sense * 0.005).min(DEESS_DEPTH);
+            // The upstream gate watches bank 1 while the filter alternates: kept as it is, so the two sides agree.
+            let output = if self.ratio[ch][1] > 1.0 {
+                self.low[ch][bank] + (x - self.low[ch][bank]) / self.ratio[ch][bank]
+            } else {
+                x
+            };
+            out[ch] = x + (output - x) * wet;
+        }
+        self.flip ^= 1;
+        out
+    }
+}
+
+/// A track's Analog Channel Strip: the low cut, the gate, the drive, TAME, the compressor and the de-esser. Bypassed, it
+/// fades the processed signal out to the dry one and then stops touching the buffer (`idle`), so a bypassed strip passes
+/// a track through sample for sample (plan v3 §6.3).
 pub struct Strip {
-    /// The seven stored control words, as the project keeps them: 0 low cut, 1-6 for the sections still to come.
-    pub words: [u16; 7],
+    /// The eight stored control words, as the project keeps them: 0 low cut, 1 compressor, 2 drive, 3 gate, 4 TAME,
+    /// 5 compressor profile, 6 drive character, 7 de-esser.
+    pub words: [u16; 8],
     /// The bypass switch as the project stores it.
     pub bypassed: bool,
     /// How much of the processed signal is heard: 0 fully dry, 1 fully processed.
@@ -756,15 +896,16 @@ pub struct Strip {
     drive: Drive,
     tame: Tame,
     comp: Compressor,
+    deess: Deess,
 }
 
 impl Strip {
-    pub fn new(words: [u16; 7], bypassed: bool) -> Strip {
-        Strip { words, bypassed, wet: Glide::new(if bypassed { 0.0 } else { 1.0 }), low: LowCut::new(words[0]), gate: Gate::new(words[3]), drive: Drive::new(words[2], words[6]), tame: Tame::new(words[4]), comp: Compressor::new(words[1], words[5]) }
+    pub fn new(words: [u16; 8], bypassed: bool) -> Strip {
+        Strip { words, bypassed, wet: Glide::new(if bypassed { 0.0 } else { 1.0 }), low: LowCut::new(words[0]), gate: Gate::new(words[3]), drive: Drive::new(words[2], words[6]), tame: Tame::new(words[4]), comp: Compressor::new(words[1], words[5]), deess: Deess::new(words[7]) }
     }
 
     /// The project's settings for the strip (a track rebuilt from a changed project).
-    pub fn set(&mut self, words: [u16; 7], bypassed: bool) {
+    pub fn set(&mut self, words: [u16; 8], bypassed: bool) {
         self.words = words;
         self.bypassed = bypassed;
         self.low.set(words[0]);
@@ -772,6 +913,7 @@ impl Strip {
         self.drive.set(words[2], words[6]);
         self.tame.set(words[4]);
         self.comp.set(words[1], words[5]);
+        self.deess.set(words[7]);
     }
 
     /// True when bypassed and faded out: the engine skips the strip and passes the track through.
@@ -792,6 +934,7 @@ impl Strip {
             self.drive.reset();
             self.tame.reset();
             self.comp.reset();
+            self.deess.reset();
             return;
         }
         let mut low = self.low.block(frames, rate);
@@ -799,6 +942,7 @@ impl Strip {
         let mut drive = self.drive.block(frames, rate);
         let mut tame = self.tame.block(frames, rate);
         let mut comp = self.comp.block(frames, rate);
+        let mut deess = self.deess.block(frames, rate);
         for f in buf.chunks_exact_mut(2) {
             let w = wet.next();
             // Fully dry: nothing is written, so the samples stay as they arrived.
@@ -832,11 +976,14 @@ impl Strip {
             if let Some(b) = &mut tame {
                 y = self.tame.frame(b, y);
             }
-            // Then the compressor, at the end of the chain.
+            // Then the compressor, and the de-esser last (the fork's order).
             if let Some(b) = &mut comp {
                 let g = self.comp.gain(b, y[0], y[1]);
                 y[0] *= g;
                 y[1] *= g;
+            }
+            if let Some(b) = &mut deess {
+                y = self.deess.frame(b, y);
             }
             for (ch, s) in f.iter_mut().enumerate() {
                 let a = y[ch];
@@ -874,14 +1021,14 @@ mod tests {
     }
 
     fn strip(hz: f32) -> Strip {
-        Strip::new([cut_word(hz), 0, 0, 0, 0, 0, 0], false)
+        Strip::new([cut_word(hz), 0, 0, 0, 0, 0, 0, 0], false)
     }
 
     /// Word 0 is the section off: not a filter at 20 Hz, but nothing at all — sample for sample.
     #[test]
     fn the_low_cut_at_its_minimum_passes_the_signal_through() {
         let dry: Vec<f32> = (0..480).flat_map(|i| { let x = (i as f32 * 0.07).sin() * 0.5; [x, -x] }).collect();
-        let mut s = Strip::new([0; 7], false);
+        let mut s = Strip::new([0; 8], false);
         let mut buf = dry.clone();
         s.process(&mut buf, RATE);
         assert_eq!(buf, dry);
@@ -915,7 +1062,7 @@ mod tests {
         let mut buf = sine(200.0, BLOCK * 2 * 20);
         for (i, c) in buf.chunks_mut(BLOCK * 2).enumerate() {
             if i == 10 {
-                s.set([cut_word(350.0), 0, 0, 0, 0, 0, 0], false);
+                s.set([cut_word(350.0), 0, 0, 0, 0, 0, 0, 0], false);
             }
             s.process(c, RATE);
         }
@@ -931,10 +1078,10 @@ mod tests {
         let mut s = strip(100.0);
         let mut dc = vec![1.0f32; BLOCK * 2 * 10];
         run(&mut s, &mut dc);
-        s.set([0; 7], false);
+        s.set([0; 8], false);
         let mut dc = vec![1.0f32; BLOCK * 2 * 5];
         run(&mut s, &mut dc);
-        s.set([cut_word(100.0), 0, 0, 0, 0, 0, 0], false);
+        s.set([cut_word(100.0), 0, 0, 0, 0, 0, 0, 0], false);
         let mut quiet = vec![0.0f32; BLOCK * 2 * 3];
         run(&mut s, &mut quiet);
         assert!(quiet.iter().all(|x| x.abs() < 1e-6), "no stale state: {:?}", quiet[0]);
@@ -958,7 +1105,7 @@ mod tests {
     #[test]
     fn a_bypassed_strip_does_not_touch_the_buffer() {
         let dry: Vec<f32> = (0..480).flat_map(|i| { let x = (i as f32 * 0.01).sin() * 0.5; [x, x] }).collect();
-        let mut s = Strip::new([cut_word(350.0), 1234, 4321, 999, 7, 65, 32000], true);
+        let mut s = Strip::new([cut_word(350.0), 1234, 4321, 999, 7, 65, 32000, 40000], true);
         assert!(s.idle());
         let mut buf = dry.clone();
         if !s.idle() {
@@ -990,7 +1137,7 @@ mod tests {
 
     /// A gate strip with threshold `db` and nothing else set.
     fn gate_strip(db: f32) -> Strip {
-        Strip::new([0, 0, 0, gate_word(db), 0, 0, 0], false)
+        Strip::new([0, 0, 0, gate_word(db), 0, 0, 0, 0], false)
     }
 
     /// A quiet tone under the gate's threshold is shut.
@@ -1062,7 +1209,7 @@ mod tests {
     #[test]
     fn the_drive_off_passes_the_signal_through() {
         let dry = sine(1_000.0, BLOCK * 2 * 4);
-        let mut s = Strip::new([0, 0, 0, 0, 0, drive_kind_word(3), 0], false);
+        let mut s = Strip::new([0, 0, 0, 0, 0, 0, drive_kind_word(3), 0], false);
         let mut buf = dry.clone();
         run(&mut s, &mut buf);
         assert_eq!(buf, dry);
@@ -1072,7 +1219,7 @@ mod tests {
     #[test]
     fn the_drive_rounds_a_loud_signal_down() {
         let dry = sine(1_000.0, BLOCK * 2 * 40);
-        let mut s = Strip::new([0, 0, u16::MAX, 0, 0, drive_kind_word(0), 0], false);
+        let mut s = Strip::new([0, 0, u16::MAX, 0, 0, 0, drive_kind_word(0), 0], false);
         let mut buf = dry.clone();
         run(&mut s, &mut buf);
         let peak = |b: &[f32]| b.iter().fold(0.0f32, |m, x| m.max(x.abs()));
@@ -1085,7 +1232,7 @@ mod tests {
     #[test]
     fn the_drive_keeps_a_quiet_signal_at_its_level() {
         let dry: Vec<f32> = sine(1_000.0, BLOCK * 2 * 40).iter().map(|x| x * 0.01).collect();
-        let mut s = Strip::new([0, 0, u16::MAX, 0, 0, drive_kind_word(0), 0], false);
+        let mut s = Strip::new([0, 0, u16::MAX, 0, 0, 0, drive_kind_word(0), 0], false);
         let mut buf = dry.clone();
         run(&mut s, &mut buf);
         let (a, b) = (rms(&dry[dry.len() - BLOCK * 2..]), rms(&buf[buf.len() - BLOCK * 2..]));
@@ -1095,7 +1242,7 @@ mod tests {
     /// The tube character's asymmetry does not leave a floor under the track: the DC blocker takes it out.
     #[test]
     fn the_drive_blocks_the_offset_the_tube_character_makes() {
-        let mut s = Strip::new([0, 0, u16::MAX, 0, 0, drive_kind_word(0), 0], false);
+        let mut s = Strip::new([0, 0, u16::MAX, 0, 0, 0, drive_kind_word(0), 0], false);
         let mut buf = vec![0.3f32; BLOCK * 2 * 40];
         run(&mut s, &mut buf);
         let tail = &buf[buf.len() - BLOCK * 2..];
@@ -1106,7 +1253,7 @@ mod tests {
     #[test]
     fn every_drive_character_is_bounded() {
         for kind in 0..4 {
-            let mut s = Strip::new([0, 0, u16::MAX, 0, 0, drive_kind_word(kind), 0], false);
+            let mut s = Strip::new([0, 0, u16::MAX, 0, 0, 0, drive_kind_word(kind), 0], false);
             let mut buf = sine(1_000.0, BLOCK * 2 * 20);
             run(&mut s, &mut buf);
             assert!(buf.iter().all(|x| x.is_finite() && x.abs() < 1.0), "{}", DRIVE_TYPES[kind]);
@@ -1116,11 +1263,11 @@ mod tests {
     /// A character change crossfades: switching from tube to clip mid-tone leaves no click.
     #[test]
     fn a_character_change_does_not_click() {
-        let mut s = Strip::new([0, 0, u16::MAX, 0, 0, drive_kind_word(0), 0], false);
+        let mut s = Strip::new([0, 0, u16::MAX, 0, 0, 0, drive_kind_word(0), 0], false);
         let mut buf = sine(1_000.0, BLOCK * 2 * 40);
         for (i, c) in buf.chunks_mut(BLOCK * 2).enumerate() {
             if i == 20 {
-                s.set([0, 0, u16::MAX, 0, 0, drive_kind_word(3), 0], false);
+                s.set([0, 0, u16::MAX, 0, 0, 0, drive_kind_word(3), 0], false);
             }
             s.process(c, RATE);
         }
@@ -1133,7 +1280,7 @@ mod tests {
     #[test]
     fn the_compressor_off_passes_the_signal_through() {
         let dry = sine(1_000.0, 480);
-        let mut s = Strip::new([0; 7], false);
+        let mut s = Strip::new([0; 8], false);
         let mut buf = dry.clone();
         s.process(&mut buf, RATE);
         assert_eq!(buf, dry);
@@ -1143,7 +1290,7 @@ mod tests {
     #[test]
     fn the_compressor_takes_a_loud_signal_down() {
         let dry = sine(1_000.0, BLOCK * 2 * 40);
-        let mut s = Strip::new([0, u16::MAX, 0, 0, 0, 0, 0], false);
+        let mut s = Strip::new([0, u16::MAX, 0, 0, 0, 0, 0, 0], false);
         let mut buf = dry.clone();
         run(&mut s, &mut buf);
         let rms_tail = |b: &[f32]| rms(&b[b.len() - BLOCK * 2..]);
@@ -1158,7 +1305,7 @@ mod tests {
     #[test]
     fn the_compressor_narrows_the_dynamic_range() {
         let quiet: Vec<f32> = sine(1_000.0, BLOCK * 2 * 40).iter().map(|x| x * 0.02).collect();
-        let mut s = Strip::new([0, u16::MAX, 0, 0, 0, 0, 0], false);
+        let mut s = Strip::new([0, u16::MAX, 0, 0, 0, 0, 0, 0], false);
         let mut buf = quiet.clone();
         run(&mut s, &mut buf);
         let rms_tail = |b: &[f32]| rms(&b[b.len() - BLOCK * 2..]);
@@ -1171,7 +1318,7 @@ mod tests {
     #[test]
     fn every_compressor_profile_is_bounded() {
         for profile in 0..PROFILES.len() {
-            let mut s = Strip::new([0, u16::MAX, 0, 0, 0, 0, comp_profile_word(profile)], false);
+            let mut s = Strip::new([0, u16::MAX, 0, 0, 0, comp_profile_word(profile), 0, 0], false);
             let mut buf = sine(1_000.0, BLOCK * 2 * 20);
             run(&mut s, &mut buf);
             assert!(buf.iter().all(|x| x.is_finite() && x.abs() < 1.0), "{}", PROFILES[profile].name);
@@ -1218,7 +1365,7 @@ mod tests {
     #[test]
     fn the_tame_takes_a_resonance_down() {
         let dry = resonance_signal(2_300.0, RATE as usize / 3);
-        let mut s = Strip::new([0, 0, 0, 0, u16::MAX, 0, 0], false);
+        let mut s = Strip::new([0, 0, 0, 0, u16::MAX, 0, 0, 0], false);
         let mut buf = dry.clone();
         run(&mut s, &mut buf);
         let start = buf.len() / 3;
@@ -1232,7 +1379,7 @@ mod tests {
     #[test]
     fn the_tame_leaves_broad_noise_alone() {
         let dry = resonance_signal(0.0, RATE as usize / 3);
-        let mut s = Strip::new([0, 0, 0, 0, u16::MAX, 0, 0], false);
+        let mut s = Strip::new([0, 0, 0, 0, u16::MAX, 0, 0, 0], false);
         let mut buf = dry.clone();
         run(&mut s, &mut buf);
         let (a, b) = (rms(&dry[dry.len() / 2..]), rms(&buf[buf.len() / 2..]));
@@ -1244,7 +1391,7 @@ mod tests {
     #[test]
     fn the_tame_off_passes_the_signal_through() {
         let dry = resonance_signal(2_300.0, 480);
-        let mut s = Strip::new([0; 7], false);
+        let mut s = Strip::new([0; 8], false);
         let mut buf = dry.clone();
         s.process(&mut buf, RATE);
         assert_eq!(buf, dry);
@@ -1255,9 +1402,58 @@ mod tests {
     fn the_tame_holds_the_stereo_image() {
         let dry = resonance_signal(3_000.0, RATE as usize / 6);
         let mut buf: Vec<f32> = dry.chunks_exact(2).flat_map(|f| [f[0], -f[0] * 0.3]).collect();
-        let mut s = Strip::new([0, 0, 0, 0, u16::MAX, 0, 0], false);
+        let mut s = Strip::new([0, 0, 0, 0, u16::MAX, 0, 0, 0], false);
         run(&mut s, &mut buf);
         assert!(buf.chunks_exact(2).all(|f| (f[1] + f[0] * 0.3).abs() < 2e-5), "the image holds");
+    }
+
+    /// A strip with only the de-esser set.
+    fn deess_strip(pct: u16) -> Strip {
+        Strip::new([0, 0, 0, 0, 0, 0, 0, deess_word(f32::from(pct) / 100.0)], false)
+    }
+
+    /// A 220 Hz tone: well below what the de-esser listens for.
+    #[test]
+    fn the_de_esser_leaves_a_tone_alone() {
+        let dry = sine(220.0, BLOCK * 2 * 40);
+        let mut s = deess_strip(100);
+        let mut buf = dry.clone();
+        run(&mut s, &mut buf);
+        let (a, b) = (rms(&dry[dry.len() - BLOCK * 2..]), rms(&buf[buf.len() - BLOCK * 2..]));
+        assert!((b / a - 1.0).abs() < 0.02, "the tone passes: {b} of {a}");
+    }
+
+    /// Full on, the de-esser takes the edge off broadband material: the signal loses energy, and not all of it.
+    #[test]
+    fn the_de_esser_takes_the_edge_off_sibilance() {
+        let dry = resonance_signal(0.0, RATE as usize / 3);
+        let mut s = deess_strip(100);
+        let mut buf = dry.clone();
+        run(&mut s, &mut buf);
+        let (a, b) = (rms(&dry[dry.len() / 2..]), rms(&buf[buf.len() / 2..]));
+        assert!(b < a * 0.95, "the edge is taken off: {b} of {a}");
+        assert!(b > a * 0.5, "but the signal is not gone: {b} of {a}");
+        assert!(buf.iter().all(|x| x.is_finite() && x.abs() < 1.0));
+    }
+
+    /// Every section at once, de-esser last: the chain stays linked, finite and bounded.
+    #[test]
+    fn the_whole_chain_stays_linked_and_bounded() {
+        let dry = resonance_signal(2_300.0, RATE as usize / 3);
+        let mut s = Strip::new([
+            cut_word(60.0),
+            comp_word(0.5),
+            drive_word(0.6),
+            gate_word(-54.0),
+            u16::MAX,
+            comp_profile_word(1),
+            drive_kind_word(1),
+            u16::MAX,
+        ], false);
+        let mut buf = dry.clone();
+        run(&mut s, &mut buf);
+        assert!(buf.iter().all(|x| x.is_finite() && x.abs() < 2.0));
+        assert!(buf.chunks_exact(2).all(|f| (f[1] - f[0]).abs() < 1e-6), "linked");
     }
 
     /// The word and the cutoff are each other's inverse across the range.
