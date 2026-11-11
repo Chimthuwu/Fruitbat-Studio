@@ -534,66 +534,136 @@ fn plugin_list(ui: &mut Ui, s: &State, n: u16, r: Rect) {
     }
 }
 
-/// A section's knob: its label over a mixer knob, the hint its own value ("Low cut: 120Hz", …).
-fn console_knob(ui: &mut Ui, s: &State, r: Rect, id: KnobId, label: &str) {
-    ui.c.text_center(Font::new(8), Rect::new(r.x, r.y + 2.0, r.w, 10.0), ui.t.s(0x8f979c), label);
-    let radius = ((r.w * 0.27).min((r.h - 26.0) * 0.5)).clamp(4.0, 11.0);
-    let (cx, cy) = (r.cx(), r.y + 16.0 + (r.h - 20.0) * 0.5);
+/// The console's per-section ink, the Michael Lane Edition's colours (`views/mixer/analog.rs`): low cut cream, drive
+/// amber, compressor wheat, de-esser steel blue.
+const CUT_INK: Color = Color::rgb(0xc8c2ad);
+const DRIVE_INK: Color = Color::rgb(0xd1a77e);
+const COMP_INK: Color = Color::rgb(0xcbb578);
+const DS_INK: Color = Color::rgb(0x91b9c9);
+
+/// One console row's plate: the Edition's recessed strip, a highlight along its top and a shadow along its bottom.
+fn console_plate(ui: &mut Ui, r: Rect) {
+    ui.c.fill_rect_gradient(r, Color::rgb(0x383c3a), Color::rgb(0x292d2b), 2.0);
+    ui.c.line(r.x + 2.0, r.y, r.right() - 2.0, r.y, 0.8, Color::rgb(0x858a80).with_alpha(48));
+    ui.c.line(r.x + 2.0, r.bottom(), r.right() - 2.0, r.bottom(), 1.0, Color::rgb(0x111315).with_alpha(180));
+}
+
+/// A row's label, centred in the `frac`..`frac + span` part of the row (the Edition's halves: 0..0.54 and 0.54..1).
+fn console_label(ui: &mut Ui, row: Rect, frac: f32, span: f32, text: &str, ink: Color) {
+    ui.c.text_center(Font::new(8), Rect::new(row.x + row.w * frac, row.y + 2.0, row.w * span, 10.0), ink, text);
+}
+
+/// A section's knob: the Edition's flat coloured cap with its cream pointer, `frac` across the row, and its value
+/// written under it when the row is tall enough ("OUT" at zero, as the Edition reads).
+fn console_knob(ui: &mut Ui, s: &State, row: Rect, frac: f32, id: KnobId, ink: Color, values: bool) {
+    let radius = (row.h * 0.22).min((row.h - 13.0) * 0.5).min(row.w * 0.19).clamp(3.0, 11.0);
+    let cx = row.x + row.w * frac;
+    let cy = row.y + 10.0 + (row.h - 12.0) * 0.45;
     ui.hit(
-        Rect::new(cx - radius - 2.0, cy - radius - 2.0, 2.0 * (radius + 2.0), 2.0 * (radius + 2.0)),
+        Rect::new(cx - radius - 3.0, row.y + 10.0, 2.0 * radius + 6.0, (row.h - 12.0).max(1.0)),
         Action::Knob(id),
         s.knob_text(id),
     );
-    mixer_knob(ui, cx, cy, radius, radius + 2.5, s.knob(id), Some(false));
+    let hov = ui.hovering(Rect::new(cx - radius, cy - radius, 2.0 * radius, 2.0 * radius));
+    let value = s.knob(id);
+    ui.c.fill_circle(cx, cy + 1.0, radius + 1.5, Color::rgb(0x141718));
+    ui.c.fill_circle(cx, cy, radius + 0.5, ink.mix(Color::rgb(0x202627), 0.35));
+    ui.c.fill_circle(cx, cy - 0.7, (radius - 1.2).max(1.0), ink.mix(Color::rgb(if hov { 0x6b7068 } else { 0x515550 }), 0.24));
+    let angle = (-225.0 + 270.0 * value) * PI / 180.0;
+    let tip = (cx + angle.cos() * (radius - 1.4), cy + angle.sin() * (radius - 1.4));
+    ui.c.polyline(&[(cx + angle.cos() * radius * 0.25, cy + angle.sin() * radius * 0.25), tip], 1.8, Color::rgb(0xf3edd9));
+    if values && row.h >= 46.0 {
+        let text = s.knob_text(id);
+        let read = if value == 0.0 { "OUT".to_string() } else { text.split(": ").nth(1).unwrap_or("").to_string() };
+        ui.c.text_center(Font::new(8), Rect::new(cx - 18.0, row.y + row.h - 12.0, 36.0, 9.0), Color::rgb(0xd7d4c6), &read);
+    }
 }
 
-/// A picker (the drive's character, the compressor's profile): its label and a small button that cycles on a click.
-fn console_pick(ui: &mut Ui, r: Rect, pick: MHit, label: &str, value: &str, hint: String) {
-    ui.c.text_center(Font::new(8), Rect::new(r.x, r.y + 2.0, r.w, 10.0), ui.t.s(0x8f979c), label);
-    let b = Rect::new(r.x + 2.0, r.y + 18.0, (r.w - 4.0).max(10.0), 17.0);
-    let hov = ui.hit(b, Action::Mix(pick), hint);
-    ui.c.fill_rrect(b, 3.0, if hov { ui.t.button_hi } else { ui.t.s(0x202729) });
-    ui.c.stroke_rrect(b, 3.0, 1.0, ui.t.s(0x59636a));
-    ui.c.text_clip(Font::new(7), b.x + 3.0, b.y + 4.0, b.w - 5.0, ui.t.s(0xc9d0d4), value);
+/// The strip's STRIP switch: the Edition's labelled faceplate with its two-ended rocker (`knobs_switch`).
+fn console_switch(ui: &mut Ui, r: Rect, on: bool) {
+    let hov = ui.hovering(r);
+    ui.c.text_center(Font::new(8).bold(), Rect::new(r.x, r.y, r.w, 10.0), Color::rgb(0xe1ddd1), "STRIP");
+    let plate = Rect::new(r.x + 1.0, r.y + 11.0, r.w - 2.0, (r.h - 12.0).max(8.0));
+    ui.c.fill_rrect(plate.outset(1.0), 2.0, Color::rgb(0x10181a));
+    ui.c.fill_rrect(plate, 2.0, if hov { Color::rgb(0xb0b9b5) } else { Color::rgb(0x798682) });
+    let rocker = plate.inset(2.0);
+    let h = rocker.h / 2.0;
+    for i in 0..2 {
+        let raised = (i == 1) == on;
+        ui.c.fill_rect_gradient(
+            Rect::new(rocker.x, rocker.y + i as f32 * h, rocker.w, h),
+            Color::rgb(if raised { 0xe9e7d9 } else { 0x767c71 }),
+            Color::rgb(if raised { 0xa6ada0 } else { 0x4a5147 }),
+            1.0,
+        );
+    }
+    ui.c.line(rocker.x, rocker.cy(), rocker.right(), rocker.cy(), 1.0, Color::rgb(0x111315));
 }
 
-/// The Analog Channel Strip's console: its switch, then low cut and gate, drive and character, TAME and compressor,
-/// profile and de-esser. Every control writes a word of the track's strip, so the panel and the right-click menu change
-/// the same state (`crate::mixer::MCmd`).
+/// The Analog Channel Strip's console: the STRIP switch, then the Edition's four rows of section controls — low cut
+/// and gate, drive with its character's button, compressor (its profile cycles from the label, as the Edition's little
+/// triangle says) and TAME, and the de-esser. Every control writes a word of the track's strip, so the panel and the
+/// right-click menu change the same state (`crate::mixer::MCmd`).
 fn console_panel(ui: &mut Ui, s: &State, n: u16, r: Rect) {
     let track = mx::track(s, n);
-    let on = track.is_some_and(|m| !m.strip_bypassed);
-    let top = Rect::new(r.x, r.y, r.w, 18.0);
-    let hov = ui.hit(
+    let bypass = track.is_some_and(|m| m.strip_bypassed);
+    let top = Rect::new(r.x, r.y, r.w, 28.0);
+    let _ = ui.hit(
         top,
         Action::Mix(MHit::StripPower(n)),
-        format!("Analog channel strip: {}", if on { "on" } else { "bypassed (click to switch on)" }),
+        format!("Analog channel strip: {}", if bypass { "bypassed (click to switch on)" } else { "on" }),
     );
-    ui.c.fill_rrect(top.inset(1.0), 3.0, if hov { ui.t.button_hi } else { ui.t.s(0x1b1e20) });
-    ui.c.text_center(Font::new(7), top, if on { ui.t.h(0x8ec63a) } else { ui.t.s(0x6d7275) }, "STRIP");
+    console_switch(ui, top, !bypass);
     let Some(m) = track else { return };
-    // A narrow strip (the 44 px layouts) has room for the six sections alone: three rows of two, with the drive's
-    // character and the compressor's profile left to the right-click menu. A wider one adds their pickers as a row.
-    let picks = r.w >= 50.0;
-    let body = Rect::new(r.x, top.bottom() + 2.0, r.w, (r.bottom() - top.bottom() - 2.0).max(40.0));
-    let row = body.h / if picks { 4.0 } else { 3.0 };
-    let half = r.w / 2.0;
-    let cell = |i: usize, k: usize| Rect::new(body.x + half * k as f32, body.y + row * i as f32, half, row);
-    console_knob(ui, s, cell(0, 0), KnobId::Strip(n, 0), "CUT");
-    console_knob(ui, s, cell(0, 1), KnobId::Strip(n, 3), "GATE");
-    console_knob(ui, s, cell(1, 0), KnobId::Strip(n, 2), if picks { "DRIVE" } else { "DRV" });
-    console_knob(ui, s, cell(1, 1), KnobId::Strip(n, 4), "TAME");
-    console_knob(ui, s, cell(2, 0), KnobId::Strip(n, 1), "COMP");
-    console_knob(ui, s, cell(2, 1), KnobId::Strip(n, 7), if picks { "DE-ESS" } else { "DS" });
-    if !picks {
-        return;
-    }
+    // The Edition's rows are 57 px at most, one per section; the long labels and the value readouts need a panel wide
+    // enough for them (Wide 2's 64 px, Wide 3's 80 px), so a narrow one takes the short labels the Edition uses on its
+    // own compact strips.
+    let wide = r.w >= 64.0;
+    let values = r.w >= 80.0;
+    let body = Rect::new(r.x, top.bottom() + 3.0, r.w, (r.bottom() - top.bottom() - 3.0).max(40.0));
+    let row = (body.h / 4.0).min(57.0);
+    let at = |i: usize| Rect::new(body.x, body.y + row * i as f32, body.w, (row - 2.0).max(6.0));
+
+    // Low cut and gate.
+    let b = at(0);
+    console_plate(ui, b);
+    console_label(ui, b, 0.0, 0.54, if wide { "LOW CUT" } else { "CUT" }, CUT_INK);
+    console_label(ui, b, 0.54, 0.46, "GATE", CUT_INK);
+    console_knob(ui, s, b, 0.27, KnobId::Strip(n, 0), CUT_INK, values);
+    console_knob(ui, s, b, 0.73, KnobId::Strip(n, 3), CUT_INK, values);
+
+    // Drive, with the character's button where the Edition keeps it (the row's right half).
+    let b = at(1);
+    console_plate(ui, b);
+    console_label(ui, b, 0.0, 0.54, "DRIVE", DRIVE_INK);
+    console_knob(ui, s, b, 0.27, KnobId::Strip(n, 2), DRIVE_INK, values);
     let kind = os_dsp::strip::drive_kind(m.strip[6]).min(os_dsp::strip::DRIVE_TYPES.len() - 1);
     let kind_name = os_dsp::strip::DRIVE_TYPES[kind];
-    console_pick(ui, cell(3, 0), MHit::StripKind(n), "CHAR", kind_name, format!("Drive character: {kind_name} (click to change)"));
+    let bt = Rect::new(b.x + b.w * 0.54, b.cy() - 9.0, (b.w * 0.46 - 1.0).max(10.0), 18.0);
+    let hov = ui.hit(bt, Action::Mix(MHit::StripKind(n)), format!("Drive character: {kind_name} (click to change)"));
+    ui.c.fill_rrect(bt, 3.0, if hov { ui.t.button_hi } else { ui.t.s(0x202729) });
+    ui.c.stroke_rrect(bt, 3.0, 1.0, ui.t.s(0x59636a));
+    ui.c.text_center(Font::new(8), Rect::new(bt.x, bt.y, bt.w - 6.0, bt.h), DRIVE_INK, kind_name);
+    ui.c.fill_polygon(&[(bt.right() - 6.0, bt.cy() - 1.0), (bt.right() - 2.0, bt.cy() - 1.0), (bt.right() - 4.0, bt.cy() + 2.0)], DRIVE_INK);
+
+    // Compressor, its profile cycling from the label, and TAME.
+    let b = at(2);
+    console_plate(ui, b);
     let profile = os_dsp::strip::comp_profile(m.strip[5]).min(os_dsp::strip::PROFILES.len() - 1);
     let profile_name = os_dsp::strip::PROFILES[profile].name;
-    console_pick(ui, cell(3, 1), MHit::StripProfile(n), "PROF", profile_name, format!("Compressor profile: {profile_name} (click to change)"));
+    let label = Rect::new(b.x, b.y, b.w * 0.54, 12.0);
+    ui.c.text_center(Font::new(8), Rect::new(label.x, label.y + 2.0, label.w, 10.0), COMP_INK, "COMP");
+    ui.c.fill_polygon(&[(label.right() - 5.0, b.y + 5.0), (label.right() - 1.0, b.y + 5.0), (label.right() - 3.0, b.y + 8.0)], COMP_INK);
+    ui.hit(label, Action::Mix(MHit::StripProfile(n)), format!("Compressor profile: {profile_name} (click to change)"));
+    console_label(ui, b, 0.54, 0.46, "TAME", COMP_INK);
+    console_knob(ui, s, b, 0.27, KnobId::Strip(n, 1), COMP_INK, values);
+    console_knob(ui, s, b, 0.73, KnobId::Strip(n, 4), COMP_INK, values);
+
+    // The de-esser on its own, centred as the Edition's DS row.
+    let b = at(3);
+    console_plate(ui, b);
+    ui.c.text_center(Font::new(8), Rect::new(b.x, b.y + 2.0, b.w, 10.0), DS_INK, if wide { "DE-ESS" } else { "DS" });
+    console_knob(ui, s, b, 0.5, KnobId::Strip(n, 7), DS_INK, values);
 }
 
 /// One strip; `left` is its left edge (44 px pitch). Columns: knobs at +22, meter / fader at +32,
