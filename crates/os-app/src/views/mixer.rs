@@ -575,7 +575,12 @@ fn console_knob(ui: &mut Ui, s: &State, row: Rect, frac: f32, id: KnobId, ink: C
     if values && row.h >= 46.0 {
         let text = s.knob_text(id);
         let read = if value == 0.0 { "OUT".to_string() } else { text.split(": ").nth(1).unwrap_or("").to_string() };
-        ui.c.text_center(Font::new(8), Rect::new(cx - 18.0, row.y + row.h - 12.0, 36.0, 9.0), Color::rgb(0xd7d4c6), &read);
+        // The readout sits in its knob's half of the row, so it fits too in a narrow column (Extra large keeps the
+        // console in the strip's 55 px control column, where a fixed 36 px box would run over its neighbour).
+        let bw = (row.w * 0.5 - 2.0).min(36.0);
+        let bx = (cx - bw * 0.5).clamp(row.x, row.right() - bw);
+        let f = if bw < 30.0 { Font::new(7) } else { Font::new(8) };
+        ui.c.text_center(f, Rect::new(bx, row.y + row.h - 11.0, bw, 8.0), Color::rgb(0xd7d4c6), &read);
     }
 }
 
@@ -619,7 +624,7 @@ fn console_panel(ui: &mut Ui, s: &State, n: u16, r: Rect) {
     // enough for them (Wide 2's 64 px, Wide 3's 80 px), so a narrow one takes the short labels the Edition uses on its
     // own compact strips.
     let wide = r.w >= 64.0;
-    let values = r.w >= 80.0;
+    let values = r.w >= 50.0;
     let body = Rect::new(r.x, top.bottom() + 3.0, r.w, (r.bottom() - top.bottom() - 3.0).max(40.0));
     let row = (body.h / 4.0).min(57.0);
     let at = |i: usize| Rect::new(body.x, body.y + row * i as f32, body.w, (row - 2.0).max(6.0));
