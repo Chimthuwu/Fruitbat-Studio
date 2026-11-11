@@ -321,6 +321,10 @@ pub enum Action {
     PlMarkers,
     PlHeader(u16),
     PlLed(u16),
+    /// The playlist header's S button and horizontal pan fader, for a lane hardwired to a mixer strip (Linear mode):
+    /// they write that strip's solo and pan (`MHit::Led`'s solo and `KnobId::MixPan`'s pan).
+    PlSolo(u16),
+    PlPan(u16),
     /// A group track's collapse arrow (spec: ui/playlist.md §6a).
     PlGroupArrow(u16),
     /// A linear track's automation lane's collapse arrow (spec: model/track-model.md §6b): row, target.
@@ -894,6 +898,9 @@ pub enum Drag {
     /// Change a channel's mixer track (spec: ui/channel-rack.md §5).
     RackMixer { ch: usize, y0: f32, v0: u16 },
     Fader { track: u16, y0: f32, v0: f64 },
+    /// The playlist header's horizontal pan fader held: the strip's pan follows the pointer along `r` (Linear mode's
+    /// track headers, one undo step per drag as a knob's).
+    PlPan { id: crate::knobs::KnobId, r: Rect },
     /// A press on a track's equaliser graph `g`: band `band` follows the cursor.
     EqGraph { track: u16, band: u8, g: Rect },
     /// The Limit dialog's keys held (either button): the key under the mouse becomes the green key; its name strip held:
@@ -6171,6 +6178,14 @@ impl App {
                     }
                     self.damage_band(HINT_RECT);
                 }
+                Drag::PlPan { id, r } => {
+                    self.state.set_knob(id, ((x - r.x) / r.w).clamp(0.0, 1.0));
+                    self.record_knob(id);
+                    self.multilink_knob(id.target());
+                    self.hint = Cow::Owned(self.state.knob_text(id));
+                    self.damage_rect(r.outset(6.0));
+                    self.damage_band(HINT_RECT);
+                }
                 Drag::LimitKeys => {
                     let k = views::piano_dlg::kb_key(&self.state, x, y, false);
                     crate::piano_dlg::set_green(&mut self.state, k);
@@ -6359,6 +6374,11 @@ impl App {
     /// on the press: drags (knobs, faders, sliders, value boxes, scroll bars, grids, steps, window title bars), menu and
     /// list openers, list rows, text fields, scroll bar arrows and the tempo tapper's pad.
     fn acts_on_release(&self, a: &Action) -> bool {
+        // The playlist header's pan fader starts its drag on the press, as a knob or a fader does (the S beside it is a
+        // button and acts on the release).
+        if matches!(a, Action::PlPan(_)) {
+            return false;
+        }
         use crate::dialog::DHit;
         use crate::mixer::MHit;
         use crate::project_forms::FHit;
@@ -6450,7 +6470,7 @@ impl App {
                     | Action::PianoTool(_)
                     | Action::PianoLanePick(_)
                     | Action::PlTool(_)
-                    | Action::PlLed(_)
+                    | Action::PlLed(_) | Action::PlSolo(_) | Action::PlPan(_)
                     | Action::PlGroupArrow(_)
                     | Action::PlLaneArrow(_, _)
                     | Action::PlStretch
@@ -7886,7 +7906,7 @@ impl App {
         let pl_grid = self.pl_grid;
         let pl_area = matches!(
             area,
-            Some(Action::PlaylistArea | Action::PlRuler | Action::PlMarkers | Action::PlHeader(_) | Action::PlLed(_) | Action::PlGroupArrow(_) | Action::PlLaneArrow(..))
+            Some(Action::PlaylistArea | Action::PlRuler | Action::PlMarkers | Action::PlHeader(_) | Action::PlLed(_) | Action::PlSolo(_) | Action::PlPan(_) | Action::PlGroupArrow(_) | Action::PlLaneArrow(..))
         );
         let s = &mut self.state;
         let (dx, dy) = if shift { (dy, dx) } else { (dx, dy) };
@@ -7913,13 +7933,13 @@ impl App {
                 Some(Win::Playlist)
             }
             // Shift+wheel over the track headers moves the selected track (spec: ui/playlist.md §6).
-            Some(Action::PlHeader(_) | Action::PlLed(_) | Action::PlGroupArrow(_) | Action::PlLaneArrow(..)) if shift => {
+            Some(Action::PlHeader(_) | Action::PlLed(_) | Action::PlSolo(_) | Action::PlPan(_) | Action::PlGroupArrow(_) | Action::PlLaneArrow(..)) if shift => {
                 let d = if dx + dy > 0.0 { -1 } else { 1 };
                 crate::playlist::snapshot(s);
                 crate::playlist::shift_tracks(s, d);
                 None
             }
-            Some(Action::PlHeader(_) | Action::PlLed(_) | Action::PlGroupArrow(_) | Action::PlLaneArrow(..)) => {
+            Some(Action::PlHeader(_) | Action::PlLed(_) | Action::PlSolo(_) | Action::PlPan(_) | Action::PlGroupArrow(_) | Action::PlLaneArrow(..)) => {
                 s.playlist_scroll.1 = (s.playlist_scroll.1 - sy * row_h).max(0.0);
                 Some(Win::Playlist)
             }
@@ -8726,6 +8746,29 @@ impl App {
                 pl::press_header(self, t, right, at);
             }
             Action::PlLed(t) => pl::press_led(self, t, right),
+            // The playlist header's S button and pan fader (a lane's strip, Linear mode): the channel's own solo and
+            // pan, so the track header and the mixer strip are one control seen in two windows.
+            Action::PlSolo(t) => {
+                crate::playlist::snapshot(&mut self.state);
+                crate::playlist::toggle_solo(&mut self.state, t);
+                self.invalidate();
+            }
+            Action::PlPan(t) => {
+                let id = crate::knobs::KnobId::MixPan(t);
+                let r = self.hits.iter().rev().find(|h| h.action == Action::PlPan(t)).map(|h| h.rect);
+                let ctrl = self.ctrl;
+                crate::mixer::select(&mut self.state, t, ctrl);
+                crate::history::knob(&mut self.state, id, false);
+                if right {
+                    // Right click: centred, as a knob's menu offers.
+                    self.state.set_knob(id, 0.5);
+                } else if let Some(r) = r {
+                    self.state.set_knob(id, ((self.mouse.0 - r.x) / r.w).clamp(0.0, 1.0));
+                    self.drag = Some(Drag::PlPan { id, r });
+                }
+                self.hint = Cow::Owned(self.state.knob_text(id));
+                self.invalidate();
+            }
             Action::PlGroupArrow(t) => {
                 pl::toggle_collapse(&mut self.state, t);
                 self.invalidate();
@@ -9291,7 +9334,7 @@ impl App {
             | Action::PlRuler
             | Action::PlMarkers
             | Action::PlHeader(_)
-            | Action::PlLed(_)
+            | Action::PlLed(_) | Action::PlSolo(_) | Action::PlPan(_)
             | Action::PlGroupArrow(_)
             | Action::PlLaneArrow(..)
             | Action::PlArrangement
@@ -12434,6 +12477,50 @@ mod tests {
         assert_eq!(app.state.menu_open, Some(0), "the entry's press keeps the menu");
         app.mouse_up();
         assert_eq!(app.state.menu_open, None, "the entry's release runs it and closes the menu");
+    }
+
+    /// A linear lane's header wears its mixer channel's solo and pan: the S button solos the lane with the channel,
+    /// and the horizontal pan fader writes the channel's pan (a drag follows the pointer, a right click centres it).
+    #[test]
+    fn the_linear_header_solos_and_pans_its_strip() {
+        let Ok(mut c) = Canvas::new(1920, 1080, 1.0) else { return }; // no system font: skip
+        let mut app = App::new(None);
+        app.state.project = test_project();
+        app.state.project.linear_mode = true;
+        crate::playlist::run(&mut app, crate::playlist::Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi));
+        frame(&mut app, &mut c, None);
+        let strip = crate::track_links::lane_track(&app.state, 0).map(|tr| tr.mixer_strip).expect("a linear track on lane 0");
+        let pan = |app: &App| crate::mixer::track(&app.state, strip).and_then(|m| m.pan);
+        // The pan fader: a press part way along it sets the strip's pan there, and the drag follows.
+        let r = hit_rect(&app, &Action::PlPan(strip));
+        app.mouse_move(r.x + r.w * 0.75, r.cy());
+        app.mouse_down();
+        assert!((pan(&app).unwrap_or(0.0) - 0.5).abs() < 0.12, "three quarters along reads {:?}", pan(&app));
+        app.mouse_move(r.x + r.w * 0.25, r.cy());
+        assert!((pan(&app).unwrap_or(0.0) + 0.5).abs() < 0.12, "a quarter along reads {:?}", pan(&app));
+        app.mouse_up();
+        // A right click centres it.
+        let r = hit_rect(&app, &Action::PlPan(strip));
+        app.mouse_move(r.cx(), r.cy());
+        app.mouse_down_right();
+        assert_eq!(pan(&app), Some(0.0), "the right click centres the pan");
+        app.mouse_up();
+        frame(&mut app, &mut c, None);
+        // The S button solos the lane, and with it the lane's channel: the strip stays on, the others go off.
+        let s = hit_rect(&app, &Action::PlSolo(0));
+        click(&mut app, &mut c, s);
+        assert!(app.state.playlist.solo.is_some(), "the lane is soloed");
+        assert!(crate::playlist::track_on(&app.state, 0), "the soloed lane plays");
+        assert!(crate::mixer::track(&app.state, strip).is_some_and(|m| m.enabled), "its channel plays");
+        assert!(
+            (0..4).all(|lane| crate::playlist::track_on(&app.state, lane) == (lane == 0)),
+            "the other lanes are muted, and with them their channels"
+        );
+        // Again: the solo is over and every channel is back.
+        let s = hit_rect(&app, &Action::PlSolo(0));
+        click(&mut app, &mut c, s);
+        assert!(app.state.playlist.solo.is_none(), "the solo ended");
+        assert!(app.state.project.mixer.iter().all(|m| m.enabled), "all channels are back on");
     }
 
     /// A damage-region repaint must give the pixels of a full repaint (anti-aliased edges cut by

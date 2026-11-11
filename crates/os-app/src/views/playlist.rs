@@ -1132,6 +1132,14 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
     let mix = lane.map(|_| Rect::new(hr.right() - 21.0, hr.y + 2.0, 19.0, (hr.h - 4.0).max(8.0)));
     let led = if mix.is_some() { Rect::new(led.x - 36.0, led.y, led.w, led.h) } else { led };
     ui.hit(led, Action::PlLed(row), "Mute track (right-click / Ctrl+click: solo)");
+    // The lane's mixer strip's own solo and pan (Linear mode): an S beside the mute LED and the pan as a horizontal
+    // fader under the name, so the header wears the channel it plays through (Bitwig-style, as the mute does).
+    let strip = lane.and_then(|tr| crate::mixer::track(s, tr.mixer_strip));
+    let solo = strip.map(|_| Rect::new(led.right() + 3.0, led.y, 14.0, 14.0));
+    let pan = strip.and_then(|_| {
+        let r = Rect::new(hr.x + 4.0, led.y - 9.0, (led.x - 8.0 - (hr.x + 4.0)).max(0.0), 7.0);
+        (r.w >= 26.0 && led.y - hr.y >= 24.0).then_some(r)
+    });
     // An audio or instrument track (§6c): a light disc with "A" / "I" before its name, which is drawn bright.
     let link = crate::track_links::link(s, row);
     let badge = match link.kind {
@@ -1160,7 +1168,7 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
         let name_w = if short { hr.w - 26.0 } else { hr.w - 4.0 } - (name_x - hr.x - 2.0) - mix.map_or(0.0, |_| 21.0);
         ui.c.text_clip(Font::new(16), name_x, hr.y + 1.0, name_w, text, &pl::track_name(s, row));
     }
-    if !short {
+    if !short && pan.is_none() {
         ui.c.text(Font::new(14), hr.x + 14.0, led.y - 6.0, text.shade(-0.2), "...");
     }
     let info = pl::track_info(s, row);
@@ -1196,6 +1204,28 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
         );
     } else {
         super::led(ui, led.cx(), led.cy(), on);
+    }
+    if let (Some(m), Some(r)) = (strip, pan) {
+        // The strip's pan as a fader: 0 % at the left edge, 100 % at the right, the thumb where the mixer's knob points.
+        let id = crate::knobs::KnobId::MixPan(m.index);
+        let v = s.knob(id);
+        let text = crate::knobs::pan_text((v * 2.0 - 1.0).clamp(-1.0, 1.0));
+        let hov = ui.hit(r.outset(2.0), Action::PlPan(m.index), format!("Pan: {text} (drag, right-click: centred)"));
+        ui.c.fill_rrect(r, 3.0, ui.t.s(0x141618).with_alpha(200));
+        // The centre mark, so centred reads at a glance.
+        ui.c.fill_rect(Rect::new(r.cx() - 0.5, r.y + 1.5, 1.0, r.h - 3.0), ui.t.tx(0x8b979e).with_alpha(110));
+        let tx = r.x + 3.0 + v * (r.w - 6.0);
+        let thumb = if hov { ui.t.accent.shade(0.18) } else { ui.t.accent };
+        ui.c.fill_rrect(Rect::new(tx - 2.0, r.y - 1.5, 5.0, r.h + 3.0), 2.0, thumb);
+    }
+    if let (Some(m), Some(b)) = (strip, solo) {
+        // The strip's solo: lit while this lane (or its channel in the mixer) is the soloed one.
+        let soloed = s.playlist.solo.as_ref().is_some_and(|(t, _)| *t == row)
+            || (m.enabled && s.mixer.solo.as_ref().is_some_and(|(keep, _)| keep.contains(&m.index)));
+        let hov = ui.hit(b, Action::PlSolo(row), "Solo track: mutes the other lanes and their mixer channels");
+        let base = if soloed { ui.t.h(0xf0c230) } else if hov { ui.t.button_hi } else { ui.t.s(0x141618).with_alpha(150) };
+        ui.c.fill_rrect(b, 3.0, base);
+        ui.c.text_center(Font::new(13), b, if soloed { ui.t.s(0x1b1d1f) } else { text.shade(-0.05) }, "S");
     }
     if let (Some(tr), Some(mix)) = (lane, mix) {
         linear_mix(ui, s, mix, tr);
