@@ -34,6 +34,11 @@ pub enum MHit {
     Led(u16),
     Polarity(u16),
     Swap(u16),
+    /// The Analog Channel Strip's console panel (wide layouts, `views::mixer::console_panel`): its switch, the drive
+    /// character and the compressor profile, each a click that cycles.
+    StripPower(u16),
+    StripKind(u16),
+    StripProfile(u16),
     /// The ▲ "route to this track" button.
     Route(u16),
     /// The small green "^" above a send knob (removes that route).
@@ -634,6 +639,43 @@ pub fn hit(app: &mut App, h: MHit) -> Option<String> {
                 changed(s);
                 Some(())
             })?;
+            None
+        }
+        // The strip's console panel: its switch, the drive character and the compressor profile, one step each.
+        MHit::StripPower(n) => {
+            select(s, n, ctrl);
+            let _ = edit(s, "Analog strip", Region::Track(n), |s| {
+                let m = track_mut(s, n)?;
+                m.strip_bypassed = !m.strip_bypassed;
+                changed(s);
+                Some(())
+            });
+            None
+        }
+        MHit::StripKind(n) => {
+            select(s, n, ctrl);
+            let word = track(s, n).map_or(0, |m| m.strip[6]);
+            let next = os_dsp::strip::drive_kind_word((os_dsp::strip::drive_kind(word) + 1) % os_dsp::strip::DRIVE_TYPES.len());
+            let _ = edit(s, "Analog strip", Region::Track(n), |s| {
+                let m = track_mut(s, n)?;
+                m.strip[6] = next;
+                m.strip_bypassed = false;
+                changed(s);
+                Some(())
+            });
+            None
+        }
+        MHit::StripProfile(n) => {
+            select(s, n, ctrl);
+            let word = track(s, n).map_or(0, |m| m.strip[5]);
+            let next = os_dsp::strip::comp_profile_word((os_dsp::strip::comp_profile(word) + 1) % os_dsp::strip::PROFILES.len());
+            let _ = edit(s, "Analog strip", Region::Track(n), |s| {
+                let m = track_mut(s, n)?;
+                m.strip[5] = next;
+                m.strip_bypassed = false;
+                changed(s);
+                Some(())
+            });
             None
         }
         MHit::Route(dst) => edit(s, ROUTING, Region::Project, |s| route(s, dst, ctrl, shift)),
@@ -3956,6 +3998,36 @@ mod tests {
         assert_eq!(a.state.history.at(), steps + 1);
         crate::history::undo(&mut a.state);
         assert_eq!(col(&a, 4), None);
+    }
+
+    /// The console panel's switch and pickers write the strip's words, each as its own undo step (`MHit::StripPower`,
+    /// `StripKind`, `StripProfile`; drawn by `views::mixer::console_panel`).
+    #[test]
+    fn the_console_panel_writes_the_strip() {
+        let mut a = app();
+        // Undo puts a track back by its identity (`track_place`): a loaded project's tracks have their own.
+        for m in &mut a.state.project.mixer {
+            m.id = os_model::Id(u32::from(m.index) + 1);
+        }
+        let word = |a: &App, i: usize| track(&a.state, 2).unwrap().strip[i];
+        assert!(track(&a.state, 2).unwrap().strip_bypassed);
+        let steps = a.state.history.at();
+        crate::mixer::hit(&mut a, MHit::StripPower(2));
+        assert!(!track(&a.state, 2).unwrap().strip_bypassed);
+        assert_eq!(a.state.history.at(), steps + 1);
+        assert_eq!(os_dsp::strip::drive_kind(word(&a, 6)), 0);
+        crate::mixer::hit(&mut a, MHit::StripKind(2));
+        assert_eq!(os_dsp::strip::drive_kind(word(&a, 6)), 1, "the character moves to the next one");
+        for _ in 1..os_dsp::strip::DRIVE_TYPES.len() {
+            crate::mixer::hit(&mut a, MHit::StripKind(2));
+        }
+        assert_eq!(os_dsp::strip::drive_kind(word(&a, 6)), 0, "and back round");
+        crate::mixer::hit(&mut a, MHit::StripProfile(2));
+        assert_eq!(os_dsp::strip::comp_profile(word(&a, 5)), 1);
+        assert_eq!(a.state.history.at(), steps + 6, "one step each: the switch, four characters, the profile");
+        crate::history::undo(&mut a.state);
+        assert_eq!(os_dsp::strip::comp_profile(word(&a, 5)), 0);
+        assert!(!track(&a.state, 2).unwrap().strip_bypassed, "the switch stays on");
     }
 
     /// plan v3 Milestone 1: the Analog Channel Strip's switch and low cut are the track's own state, one undo step

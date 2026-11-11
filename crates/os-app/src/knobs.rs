@@ -35,6 +35,10 @@ pub enum KnobId {
     /// Mixer track `.0`'s equaliser: band `.1` (0 low shelf, 1 peaking, 2 high shelf), setting `.2` (0 gain, the
     /// band's fader; 1 frequency; 2 width) (model `MixerTrack::eq`; spec: ui/mixer.md §8, audio/mixer.md "Equaliser").
     Eq(u16, u8, u8),
+    /// Mixer track `.0`'s Analog Channel Strip: control word `.1` (0 low cut, 1 comp, 2 drive, 3 gate, 4 TAME,
+    /// 7 de-esser) as a 0..1 knob, its own word over 65535 (the only word a section turns up in a menu; the strip's
+    /// console panel, `views::mixer::console_panel`).
+    Strip(u16, u8),
     /// A knob of the piano roll's Strum dialog (dialog state, not project data; spec: ui/piano-strum.md §1).
     Strum(crate::strum::Knob),
     /// A knob (or the Range box) of the piano roll's Arpeggiate dialog (dialog state; spec: ui/piano-arpeggiate.md §1).
@@ -194,6 +198,7 @@ impl KnobId {
             KnobId::AutoLfo(_, k) => k.pos(&os_model::clip_lfo::ClipLfo::default()),
             KnobId::MidiOut(_, k) => k.pos(&crate::lemon_midi_out::Settings::default()),
             KnobId::Eq(_, b, f) => eq_pos(f, os_model::EQ_DEFAULT[usize::from(b.min(2))][usize::from(f.min(2))]),
+            KnobId::Strip(..) => 0.0,
             _ => 0.5,
         }
     }
@@ -270,6 +275,10 @@ impl State {
                 let (b, f) = (usize::from(b.min(2)), usize::from(f.min(2)));
                 let eq = self.project.mixer.iter().find(|m| m.index == t).map_or(os_model::EQ_DEFAULT, |m| m.eq);
                 eq_pos(f as u8, eq[b][f])
+            }
+            KnobId::Strip(t, w) => {
+                let word = self.project.mixer.iter().find(|m| m.index == t).map_or(0, |m| m.strip[usize::from(w.min(7))]);
+                f32::from(word) / 65535.0
             }
             KnobId::Strum(k) => (self.strum.set.get(k) + 1.0) / 2.0,
             KnobId::Arp(k) => self.arp.set.get(k),
@@ -367,6 +376,14 @@ impl State {
                 if let Some(m) = self.project.mixer.iter_mut().find(|m| m.index == t) {
                     let stored = if f == 0 { ((v * 2.0 - 1.0) * 1800.0).round() as i32 } else { (v * 65536.0).round() as i32 };
                     m.eq[usize::from(b.min(2))][usize::from(f.min(2))] = stored;
+                    self.piano.dirty = true;
+                }
+            }
+            // Turning a section up switches the strip itself back on, as its menu does (`MCmd::StripLowCut` …).
+            KnobId::Strip(t, w) => {
+                if let Some(m) = self.project.mixer.iter_mut().find(|m| m.index == t) {
+                    m.strip[usize::from(w.min(7))] = (v * 65535.0).round() as u16;
+                    m.strip_bypassed = false;
                     self.piano.dirty = true;
                 }
             }
@@ -469,6 +486,19 @@ impl State {
                     0 => format!("{band} level: {:.1}dB", ((n * 2.0 - 1.0) * 1800.0).round() / 100.0),
                     1 => format!("{band} freq: {:.0}Hz", os_dsp::mixer::eq_frequency((n * 65536.0).round() as i32)),
                     _ => format!("{band} width: {n:.2}"),
+                }
+            }
+            // "Low cut: 120Hz", "Gate: -42dB", "Drive: 40%", "TAME: 60%", "Compressor: 40%", "De-esser: 30%".
+            KnobId::Strip(_, w) => {
+                let word = (n * 65535.0).round() as u16;
+                match w {
+                    0 => format!("Low cut: {:.0}Hz", os_dsp::strip::cut_hz(word)),
+                    1 => format!("Compressor: {:.0}%", os_dsp::strip::comp_amount(word) * 100.0),
+                    2 => format!("Drive: {:.0}%", os_dsp::strip::drive_amount(word) * 100.0),
+                    3 if word == 0 => "Gate: off".into(),
+                    3 => format!("Gate: {:.0}dB", os_dsp::strip::gate_threshold_db(word)),
+                    4 => format!("TAME: {:.0}%", os_dsp::strip::tame_amount(word) * 100.0),
+                    _ => format!("De-esser: {:.0}%", os_dsp::strip::deess_amount(word) * 100.0),
                 }
             }
             KnobId::Strum(_) | KnobId::Arp(_) | KnobId::PianoDlg(_) | KnobId::AutoLfo(..) | KnobId::MidiOut(..) => return None,
@@ -592,6 +622,25 @@ mod tests {
         crate::prefs::set_slider(s, 3);
         app.reset_control(Control::Slider(s.label));
         assert_eq!(crate::prefs::slider(s), s.default);
+    }
+
+    /// The console panel's knobs are the strip's words: word 0 is the low cut in Hz, the rest amounts, word 3 the gate's
+    /// threshold (`views::mixer::console_panel`).
+    #[test]
+    fn strip_knobs_read_the_sections() {
+        let mut app = crate::app::App::new(None);
+        let s = &mut app.state;
+        let t = s.project.mixer[1].index;
+        assert_eq!(s.knob_text(KnobId::Strip(t, 0)), "Low cut: 20Hz");
+        assert_eq!(s.knob_text(KnobId::Strip(t, 3)), "Gate: off");
+        s.set_knob(KnobId::Strip(t, 3), 0.75);
+        assert!(s.knob_text(KnobId::Strip(t, 3)).starts_with("Gate: -"), "{}", s.knob_text(KnobId::Strip(t, 3)));
+        s.set_knob(KnobId::Strip(t, 7), 0.3);
+        assert_eq!(s.knob_text(KnobId::Strip(t, 7)), "De-esser: 30%");
+        s.set_knob(KnobId::Strip(t, 2), 0.5);
+        assert_eq!(s.knob_text(KnobId::Strip(t, 2)), "Drive: 50%");
+        assert!(s.knob(KnobId::Strip(t, 3)) > 0.7);
+        assert!(s.piano.dirty);
     }
 
     #[test]

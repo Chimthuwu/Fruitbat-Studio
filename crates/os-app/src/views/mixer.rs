@@ -534,6 +534,65 @@ fn plugin_list(ui: &mut Ui, s: &State, n: u16, r: Rect) {
     }
 }
 
+/// The width from which a strip draws the console panel instead of its meter and rotated name: Wide 2 (64 px) and up.
+const CONSOLE_W: f32 = 64.0;
+
+/// A section's knob: its label over a mixer knob, the hint its own value ("Low cut: 120Hz", …).
+fn console_knob(ui: &mut Ui, s: &State, r: Rect, id: KnobId, label: &str) {
+    ui.c.text_center(Font::new(8), Rect::new(r.x, r.y + 2.0, r.w, 10.0), ui.t.s(0x8f979c), label);
+    let radius = ((r.w * 0.27).min((r.h - 26.0) * 0.5)).clamp(4.0, 11.0);
+    let (cx, cy) = (r.cx(), r.y + 16.0 + (r.h - 20.0) * 0.5);
+    ui.hit(
+        Rect::new(cx - radius - 2.0, cy - radius - 2.0, 2.0 * (radius + 2.0), 2.0 * (radius + 2.0)),
+        Action::Knob(id),
+        s.knob_text(id),
+    );
+    mixer_knob(ui, cx, cy, radius, radius + 2.5, s.knob(id), Some(false));
+}
+
+/// A picker (the drive's character, the compressor's profile): its label and a small button that cycles on a click.
+fn console_pick(ui: &mut Ui, r: Rect, pick: MHit, label: &str, value: &str, hint: String) {
+    ui.c.text_center(Font::new(8), Rect::new(r.x, r.y + 2.0, r.w, 10.0), ui.t.s(0x8f979c), label);
+    let b = Rect::new(r.x + 2.0, r.y + 18.0, (r.w - 4.0).max(10.0), 17.0);
+    let hov = ui.hit(b, Action::Mix(pick), hint);
+    ui.c.fill_rrect(b, 3.0, if hov { ui.t.button_hi } else { ui.t.s(0x202729) });
+    ui.c.stroke_rrect(b, 3.0, 1.0, ui.t.s(0x59636a));
+    ui.c.text_clip(Font::new(7), b.x + 3.0, b.y + 4.0, b.w - 5.0, ui.t.s(0xc9d0d4), value);
+}
+
+/// The Analog Channel Strip's console: its switch, then low cut and gate, drive and character, TAME and compressor,
+/// profile and de-esser. Every control writes a word of the track's strip, so the panel and the right-click menu change
+/// the same state (`crate::mixer::MCmd`).
+fn console_panel(ui: &mut Ui, s: &State, n: u16, r: Rect) {
+    let track = mx::track(s, n);
+    let on = track.is_some_and(|m| !m.strip_bypassed);
+    let top = Rect::new(r.x, r.y, r.w, 18.0);
+    let hov = ui.hit(
+        top,
+        Action::Mix(MHit::StripPower(n)),
+        format!("Analog channel strip: {}", if on { "on" } else { "bypassed (click to switch on)" }),
+    );
+    ui.c.fill_rrect(top.inset(1.0), 3.0, if hov { ui.t.button_hi } else { ui.t.s(0x1b1e20) });
+    ui.c.text_center(Font::new(7), top, if on { ui.t.h(0x8ec63a) } else { ui.t.s(0x6d7275) }, "STRIP");
+    let Some(m) = track else { return };
+    let body = Rect::new(r.x, top.bottom() + 2.0, r.w, (r.bottom() - top.bottom() - 2.0).max(40.0));
+    let row = body.h / 4.0;
+    let half = r.w / 2.0;
+    let cell = |i: usize, k: usize| Rect::new(body.x + half * k as f32, body.y + row * i as f32, half, row);
+    console_knob(ui, s, cell(0, 0), KnobId::Strip(n, 0), "CUT");
+    console_knob(ui, s, cell(0, 1), KnobId::Strip(n, 3), "GATE");
+    console_knob(ui, s, cell(1, 0), KnobId::Strip(n, 2), "DRIVE");
+    let kind = os_dsp::strip::drive_kind(m.strip[6]).min(os_dsp::strip::DRIVE_TYPES.len() - 1);
+    let kind_name = os_dsp::strip::DRIVE_TYPES[kind];
+    console_pick(ui, cell(1, 1), MHit::StripKind(n), "CHAR", kind_name, format!("Drive character: {kind_name} (click to change)"));
+    console_knob(ui, s, cell(2, 0), KnobId::Strip(n, 4), "TAME");
+    console_knob(ui, s, cell(2, 1), KnobId::Strip(n, 1), "COMP");
+    let profile = os_dsp::strip::comp_profile(m.strip[5]).min(os_dsp::strip::PROFILES.len() - 1);
+    let profile_name = os_dsp::strip::PROFILES[profile].name;
+    console_pick(ui, cell(3, 0), MHit::StripProfile(n), "PROFILE", profile_name, format!("Compressor profile: {profile_name} (click to change)"));
+    console_knob(ui, s, cell(3, 1), KnobId::Strip(n, 7), "DE-ESS");
+}
+
 /// One strip; `left` is its left edge (44 px pitch). Columns: knobs at +22, meter / fader at +32,
 /// name and small controls at +12 (spec §7).
 fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, ly: &Ly) {
@@ -610,55 +669,65 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
     ui.c.fill_rrect(Rect::new(left + 1.0, ly.y(PANEL_Y0), w - 2.0, ly.y(PANEL_Y1) - ly.y(PANEL_Y0)), 9.0, ui.t.s(0x1d1f21));
     ui.c.fill_rect(Rect::new(left + 1.0, ly.y(PANEL_Y0), w - 2.0, 12.0), ui.t.s(0x1d1f21));
 
-    // Meter slot with its tick marks; the selected strip gets a green frame.
-    let meter = Rect::new(mx - 7.5, ly.y(METER_Y0), 16.0, ly.y(METER_Y1) - ly.y(METER_Y0));
-    if lemon {
-        ui.c.fill_rrect(meter, lk::r_small(t), ui.t.s(0x191d1e));
-        ui.c.fill_rrect(Rect::new(meter.x + 2.0, meter.y + 2.0, 12.0, meter.h - 4.0), 2.5, ui.t.s(0x232729));
+    // Wide layouts (Wide 2 and up) draw the Analog Channel Strip's console in the head panel instead of the meter and
+    // the rotated name: the tracks' sections at a glance, as the Michael Lane Edition's wide strips do. Narrow strips
+    // keep the meter (spec: ui/mixer.md §2).
+    let console = w >= CONSOLE_W;
+    if console {
+        // Extra large keeps its plugin list column on the right, so the console takes the strip's 44 px control column.
+        let sw = if extra { 55.0 } else { w - 2.0 };
+        console_panel(ui, s, n, Rect::new(left + 1.0, ly.y(PANEL_Y0) + 2.0, sw, (ly.y(METER_Y1) - ly.y(PANEL_Y0) - 4.0).max(24.0)));
     } else {
-        ui.c.fill_rrect(meter, 2.0, ui.t.s(0x191d1e));
-        ui.c.fill_rect(Rect::new(meter.x + 2.0, meter.y + 2.0, 11.0, meter.h - 4.0), ui.t.s(0x232729));
-    }
-    for y in [181.0, 230.0, 278.0, 327.0, 375.0, 423.0] {
-        ui.c.fill_rect(Rect::new(meter.x + 3.0, ly.y(y), 9.0, 1.0), ui.t.s(0x111315));
-    }
-    // Per-track peak meter (spec: ui/mixer.md §9): two 6 px bars on the same scale as the "C" column.
-    ui.live(Live::Meter, meter);
-    if s.mixer.waveforms {
-        wave(ui, s, n, Rect::new(meter.x + 2.0, meter.y + 2.0, 12.0, meter.h - 4.0));
-    } else if let Some(m) = s.mixer.meters.get(usize::from(n)) {
-        let cfg = &s.mixer.meter_cfg;
-        let (top, bot) = (meter.y + 2.0, meter.bottom() - 2.0);
-        let floor = cfg.v[meters::k::FLOOR_DB];
-        let alt = crate::prefs::check(&crate::prefs::ALTERNATE_METER_SCALE);
-        let ys = |db: f32| bot - meters::frac(db, floor, alt) * (bot - top);
-        for i in 0..2 {
-            meter_bar(ui, meter.x + 2.0 + 6.0 * i as f32, 6.0, bot, m.db[i], m.hold[i], cfg, &ys);
+        // Meter slot with its tick marks; the selected strip gets a green frame.
+        let meter = Rect::new(mx - 7.5, ly.y(METER_Y0), 16.0, ly.y(METER_Y1) - ly.y(METER_Y0));
+        if lemon {
+            ui.c.fill_rrect(meter, lk::r_small(t), ui.t.s(0x191d1e));
+            ui.c.fill_rrect(Rect::new(meter.x + 2.0, meter.y + 2.0, 12.0, meter.h - 4.0), 2.5, ui.t.s(0x232729));
+        } else {
+            ui.c.fill_rrect(meter, 2.0, ui.t.s(0x191d1e));
+            ui.c.fill_rect(Rect::new(meter.x + 2.0, meter.y + 2.0, 11.0, meter.h - 4.0), ui.t.s(0x232729));
         }
-    }
-    if selected {
-        ui.c.stroke_rrect(Rect::new(meter.x - 1.0, meter.y - 2.0, meter.w + 2.0, meter.h + 4.0), if lemon { lk::r_btn(t) } else { 1.0 }, 2.0, t.accent);
-    }
+        for y in [181.0, 230.0, 278.0, 327.0, 375.0, 423.0] {
+            ui.c.fill_rect(Rect::new(meter.x + 3.0, ly.y(y), 9.0, 1.0), ui.t.s(0x111315));
+        }
+        // Per-track peak meter (spec: ui/mixer.md §9): two 6 px bars on the same scale as the "C" column.
+        ui.live(Live::Meter, meter);
+        if s.mixer.waveforms {
+            wave(ui, s, n, Rect::new(meter.x + 2.0, meter.y + 2.0, 12.0, meter.h - 4.0));
+        } else if let Some(m) = s.mixer.meters.get(usize::from(n)) {
+            let cfg = &s.mixer.meter_cfg;
+            let (top, bot) = (meter.y + 2.0, meter.bottom() - 2.0);
+            let floor = cfg.v[meters::k::FLOOR_DB];
+            let alt = crate::prefs::check(&crate::prefs::ALTERNATE_METER_SCALE);
+            let ys = |db: f32| bot - meters::frac(db, floor, alt) * (bot - top);
+            for i in 0..2 {
+                meter_bar(ui, meter.x + 2.0 + 6.0 * i as f32, 6.0, bot, m.db[i], m.hold[i], cfg, &ys);
+            }
+        }
+        if selected {
+            ui.c.stroke_rrect(Rect::new(meter.x - 1.0, meter.y - 2.0, meter.w + 2.0, meter.h + 4.0), if lemon { lk::r_btn(t) } else { 1.0 }, 2.0, t.accent);
+        }
 
-    // Name, rotated, reading upward from the bottom of the meter.
-    let name = track.and_then(|m| m.name.clone()).unwrap_or_else(|| if n == 0 { "Master".into() } else { format!("Bus {n}") });
-    let name_c = track
-        .and_then(|m| m.color)
-        .map(super::rgb)
-        .map_or(if selected { ui.t.tx(0xaab2b7) } else if also { ui.t.tx(0xe4e8ea) } else { ui.t.s(0x7f868a) }, |c| {
-            if also { c.mix(ui.t.tx(0xffffff), 0.5) } else { c.mix(ui.t.s(0x7f868a), 0.4) }
-        });
-    // Change icon... (Lemon Studio's design): the icon at the bottom of the name's column, the name above it.
-    let icon = crate::playlist::window_icon(&s.project, &s.playlist.icons, crate::playlist::TRACK_ICON_KEY + usize::from(n));
-    if let Some(ic) = icon {
-        icons::draw(ui.c, ic, Rect::new(sx - 9.0, meter.bottom() - 12.0, 12.0, 12.0), name_c);
+        // Name, rotated, reading upward from the bottom of the meter.
+        let name = track.and_then(|m| m.name.clone()).unwrap_or_else(|| if n == 0 { "Master".into() } else { format!("Bus {n}") });
+        let name_c = track
+            .and_then(|m| m.color)
+            .map(super::rgb)
+            .map_or(if selected { ui.t.tx(0xaab2b7) } else if also { ui.t.tx(0xe4e8ea) } else { ui.t.s(0x7f868a) }, |c| {
+                if also { c.mix(ui.t.tx(0xffffff), 0.5) } else { c.mix(ui.t.s(0x7f868a), 0.4) }
+            });
+        // Change icon... (Lemon Studio's design): the icon at the bottom of the name's column, the name above it.
+        let icon = crate::playlist::window_icon(&s.project, &s.playlist.icons, crate::playlist::TRACK_ICON_KEY + usize::from(n));
+        if let Some(ic) = icon {
+            icons::draw(ui.c, ic, Rect::new(sx - 9.0, meter.bottom() - 12.0, 12.0, 12.0), name_c);
+        }
+        let lead = if icon.is_some() { 15.0 } else { 0.0 };
+        // The clip follows the name's column, not a fixed 22 px from the strip's edge: a wider layout (Wide 2, Wide 3,
+        // Wide alt) pushed the rotated name past the old clip and cut it off.
+        ui.c.push_clip(Rect::new(sx - 7.0, ly.y(PANEL_Y0), 20.0, (ly.y(METER_Y1) - ly.y(PANEL_Y0)).max(0.0)));
+        ui.c.text_vertical(Font::new(15), sx - 7.0, meter.bottom() - 1.0 - lead, name_c, &name);
+        ui.c.pop_clip();
     }
-    let lead = if icon.is_some() { 15.0 } else { 0.0 };
-    // The clip follows the name's column, not a fixed 22 px from the strip's edge: a wider layout (Wide 2, Wide 3,
-    // Wide alt) pushed the rotated name past the old clip and cut it off.
-    ui.c.push_clip(Rect::new(sx - 7.0, ly.y(PANEL_Y0), 20.0, (ly.y(METER_Y1) - ly.y(PANEL_Y0)).max(0.0)));
-    ui.c.text_vertical(Font::new(15), sx - 7.0, meter.bottom() - 1.0 - lead, name_c, &name);
-    ui.c.pop_clip();
     // Extra large (layout 7): the strip's own plugin list, right of its controls (the Michael Lane Edition's column).
     if extra {
         let lr = Rect::new(left + 57.0, ly.y(PANEL_Y0) + 4.0, (w - 61.0).max(20.0), (bottom - ly.y(PANEL_Y0) - 175.0).max(19.0));
@@ -1073,6 +1142,26 @@ mod tests {
 
     fn track_create(s: &mut crate::app::State, kind: &str) {
         crate::control::apply(s, &crate::control::By::User, None, vec![Command::TrackCreate { kind: kind.into(), name: None, color: None }]).unwrap();
+    }
+
+    /// Wide layouts (Wide 2 and up) draw the strip's console panel: its switch and its section knobs are hit targets;
+    /// the default Wide layout keeps the meter and the rotated name.
+    #[test]
+    fn wide_strips_show_the_console() {
+        let mut app = app();
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let ws = &mut app.state.wins[crate::app::Win::Mixer.slot().unwrap()];
+        (ws.maxed, ws.rect) = (false, os_ui::Rect::new(100.0, 83.0, 1200.0, 900.0));
+        app.state.z = vec![crate::app::Win::Mixer];
+        let has = |a: &App, want: Action| a.hits.iter().any(|h| h.action == want);
+        app.state.mixer.layout = 4; // Wide 2, 64 px
+        app.paint(&mut c, None);
+        assert!(has(&app, Action::Mix(MHit::StripPower(2))), "the strip's switch");
+        assert!(has(&app, Action::Knob(KnobId::Strip(2, 7))), "the de-esser's knob");
+        app.state.mixer.layout = 3; // Wide, 44 px
+        app.paint(&mut c, None);
+        assert!(!has(&app, Action::Mix(MHit::StripPower(2))), "narrow strips keep the meter");
+        assert!(has(&app, Action::Fader(2)));
     }
 
     /// Classic mode's strips: in index order, as always — the view ordering and the docks are unchanged.
