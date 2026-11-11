@@ -534,9 +534,6 @@ fn plugin_list(ui: &mut Ui, s: &State, n: u16, r: Rect) {
     }
 }
 
-/// The width from which a strip draws the console panel instead of its meter and rotated name: Wide 2 (64 px) and up.
-const CONSOLE_W: f32 = 64.0;
-
 /// A section's knob: its label over a mixer knob, the hint its own value ("Low cut: 120Hz", …).
 fn console_knob(ui: &mut Ui, s: &State, r: Rect, id: KnobId, label: &str) {
     ui.c.text_center(Font::new(8), Rect::new(r.x, r.y + 2.0, r.w, 10.0), ui.t.s(0x8f979c), label);
@@ -575,22 +572,28 @@ fn console_panel(ui: &mut Ui, s: &State, n: u16, r: Rect) {
     ui.c.fill_rrect(top.inset(1.0), 3.0, if hov { ui.t.button_hi } else { ui.t.s(0x1b1e20) });
     ui.c.text_center(Font::new(7), top, if on { ui.t.h(0x8ec63a) } else { ui.t.s(0x6d7275) }, "STRIP");
     let Some(m) = track else { return };
+    // A narrow strip (the 44 px layouts) has room for the six sections alone: three rows of two, with the drive's
+    // character and the compressor's profile left to the right-click menu. A wider one adds their pickers as a row.
+    let picks = r.w >= 50.0;
     let body = Rect::new(r.x, top.bottom() + 2.0, r.w, (r.bottom() - top.bottom() - 2.0).max(40.0));
-    let row = body.h / 4.0;
+    let row = body.h / if picks { 4.0 } else { 3.0 };
     let half = r.w / 2.0;
     let cell = |i: usize, k: usize| Rect::new(body.x + half * k as f32, body.y + row * i as f32, half, row);
     console_knob(ui, s, cell(0, 0), KnobId::Strip(n, 0), "CUT");
     console_knob(ui, s, cell(0, 1), KnobId::Strip(n, 3), "GATE");
-    console_knob(ui, s, cell(1, 0), KnobId::Strip(n, 2), "DRIVE");
+    console_knob(ui, s, cell(1, 0), KnobId::Strip(n, 2), if picks { "DRIVE" } else { "DRV" });
+    console_knob(ui, s, cell(1, 1), KnobId::Strip(n, 4), "TAME");
+    console_knob(ui, s, cell(2, 0), KnobId::Strip(n, 1), "COMP");
+    console_knob(ui, s, cell(2, 1), KnobId::Strip(n, 7), if picks { "DE-ESS" } else { "DS" });
+    if !picks {
+        return;
+    }
     let kind = os_dsp::strip::drive_kind(m.strip[6]).min(os_dsp::strip::DRIVE_TYPES.len() - 1);
     let kind_name = os_dsp::strip::DRIVE_TYPES[kind];
-    console_pick(ui, cell(1, 1), MHit::StripKind(n), "CHAR", kind_name, format!("Drive character: {kind_name} (click to change)"));
-    console_knob(ui, s, cell(2, 0), KnobId::Strip(n, 4), "TAME");
-    console_knob(ui, s, cell(2, 1), KnobId::Strip(n, 1), "COMP");
+    console_pick(ui, cell(3, 0), MHit::StripKind(n), "CHAR", kind_name, format!("Drive character: {kind_name} (click to change)"));
     let profile = os_dsp::strip::comp_profile(m.strip[5]).min(os_dsp::strip::PROFILES.len() - 1);
     let profile_name = os_dsp::strip::PROFILES[profile].name;
-    console_pick(ui, cell(3, 0), MHit::StripProfile(n), "PROFILE", profile_name, format!("Compressor profile: {profile_name} (click to change)"));
-    console_knob(ui, s, cell(3, 1), KnobId::Strip(n, 7), "DE-ESS");
+    console_pick(ui, cell(3, 1), MHit::StripProfile(n), "PROF", profile_name, format!("Compressor profile: {profile_name} (click to change)"));
 }
 
 /// One strip; `left` is its left edge (44 px pitch). Columns: knobs at +22, meter / fader at +32,
@@ -669,10 +672,26 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
     ui.c.fill_rrect(Rect::new(left + 1.0, ly.y(PANEL_Y0), w - 2.0, ly.y(PANEL_Y1) - ly.y(PANEL_Y0)), 9.0, ui.t.s(0x1d1f21));
     ui.c.fill_rect(Rect::new(left + 1.0, ly.y(PANEL_Y0), w - 2.0, 12.0), ui.t.s(0x1d1f21));
 
+    // The strip's panel button: the Analog Channel Strip's console shown or hidden for this channel alone, whatever
+    // the layout (`mx::console_shown`).
+    let panel = Rect::new(left + 2.0, ly.y(HEAD_Y0) + 3.0, 13.0, 15.0);
+    let shown = mx::console_shown(s, n);
+    let hov = ui.hit(
+        panel,
+        Action::Mix(MHit::StripPanel(n)),
+        format!("Analog strip panel: {}  (shown by the wide layouts)", if shown { "shown" } else { "hidden" }),
+    );
+    ui.c.fill_rrect(panel, 2.5, if shown { ui.t.h(0x8ec63a) } else if hov { ui.t.button_hi } else { ui.t.s(0x2b2e30) });
+    let mut g = Glyph::new();
+    for k in 0..3 {
+        g.rect(panel.x + 3.0, panel.y + 4.0 + 3.0 * k as f32, 7.0, 1.2);
+    }
+    ui.c.glyph(if shown { ui.t.s(0x141719) } else if hov { ui.t.tx(0xffffff) } else { ui.t.s(0x9aa1a5) }, &g);
+
     // Wide layouts (Wide 2 and up) draw the Analog Channel Strip's console in the head panel instead of the meter and
     // the rotated name: the tracks' sections at a glance, as the Michael Lane Edition's wide strips do. Narrow strips
-    // keep the meter (spec: ui/mixer.md §2).
-    let console = w >= CONSOLE_W;
+    // keep the meter until their panel button asks for the console (spec: ui/mixer.md §2).
+    let console = shown;
     if console {
         // Extra large keeps its plugin list column on the right, so the console takes the strip's 44 px control column.
         let sw = if extra { 55.0 } else { w - 2.0 };
@@ -1145,7 +1164,7 @@ mod tests {
     }
 
     /// Wide layouts (Wide 2 and up) draw the strip's console panel: its switch and its section knobs are hit targets;
-    /// the default Wide layout keeps the meter and the rotated name.
+    /// the default Wide layout keeps the meter until the strip's own panel button asks for the console.
     #[test]
     fn wide_strips_show_the_console() {
         let mut app = app();
@@ -1154,13 +1173,28 @@ mod tests {
         (ws.maxed, ws.rect) = (false, os_ui::Rect::new(100.0, 83.0, 1200.0, 900.0));
         app.state.z = vec![crate::app::Win::Mixer];
         let has = |a: &App, want: Action| a.hits.iter().any(|h| h.action == want);
+        let paint = |app: &mut App, c: &mut os_ui::Canvas| app.paint(c, None);
         app.state.mixer.layout = 4; // Wide 2, 64 px
-        app.paint(&mut c, None);
+        paint(&mut app, &mut c);
         assert!(has(&app, Action::Mix(MHit::StripPower(2))), "the strip's switch");
         assert!(has(&app, Action::Knob(KnobId::Strip(2, 7))), "the de-esser's knob");
+        assert!(has(&app, Action::Knob(KnobId::Strip(2, 1))), "the compressor's, too");
         app.state.mixer.layout = 3; // Wide, 44 px
-        app.paint(&mut c, None);
+        paint(&mut app, &mut c);
         assert!(!has(&app, Action::Mix(MHit::StripPower(2))), "narrow strips keep the meter");
+        assert!(has(&app, Action::Mix(MHit::StripPanel(2))), "the panel button is on every strip");
+        // The button shows the compact console on that one channel, and hides a wide layout's again.
+        crate::mixer::hit(&mut app, MHit::StripPanel(2));
+        paint(&mut app, &mut c);
+        assert!(has(&app, Action::Mix(MHit::StripPower(2))), "shown for that channel alone");
+        assert!(has(&app, Action::Knob(KnobId::Strip(2, 0))), "its low cut");
+        assert!(!has(&app, Action::Mix(MHit::StripPower(3))), "the neighbour is untouched");
+        app.state.mixer.layout = 4;
+        paint(&mut app, &mut c);
+        crate::mixer::hit(&mut app, MHit::StripPanel(2));
+        paint(&mut app, &mut c);
+        assert!(!has(&app, Action::Mix(MHit::StripPower(2))), "hidden on that channel");
+        assert!(has(&app, Action::Mix(MHit::StripPower(3))), "the rest follow the layout");
         assert!(has(&app, Action::Fader(2)));
     }
 

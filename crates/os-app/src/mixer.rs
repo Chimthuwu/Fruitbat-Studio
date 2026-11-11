@@ -39,6 +39,9 @@ pub enum MHit {
     StripPower(u16),
     StripKind(u16),
     StripProfile(u16),
+    /// The strip's own panel button: shows or hides the console on that channel alone (`console_shown`), whatever the
+    /// layout. Session state, not project data.
+    StripPanel(u16),
     /// The ▲ "route to this track" button.
     Route(u16),
     /// The small green "^" above a send knob (removes that route).
@@ -251,6 +254,18 @@ pub fn strip_w(s: &State) -> f32 {
     LAYOUT_W[usize::from(s.mixer.layout.min(7))]
 }
 
+/// The strip width from which the strips draw the Analog Channel Strip's console panel on their own: Wide 2 (64 px) and
+/// up, where it has room beside the plugin list column. Narrower strips keep their meter until their own panel button
+/// asks for the console (`console_shown`).
+pub const CONSOLE_W: f32 = 64.0;
+
+/// Whether track `n`'s strip shows the console panel: the wide layouts do by default, and the strip's own panel button
+/// overrides that for that one channel (`MixerUi::console`), so the sections can be shown or hidden without changing
+/// the layout.
+pub fn console_shown(s: &State, n: u16) -> bool {
+    s.mixer.console.get(&n).copied().unwrap_or(strip_w(s) >= CONSOLE_W)
+}
+
 /// Mixer state that is not project data.
 pub struct MixerUi {
     /// Selected tracks besides the current one (Ctrl+click, §2).
@@ -277,6 +292,9 @@ pub struct MixerUi {
     /// scrolling up, newest at the bottom; `waves` holds them per track (L, R, linear), newest last.
     pub waveforms: bool,
     pub waves: Vec<std::collections::VecDeque<[f32; 2]>>,
+    /// The tracks whose strip panel the strip's own button has shown or hidden (`console_shown`); a track not in here
+    /// follows the layout. Session state, like the mixer's other view switches.
+    pub console: HashMap<u16, bool>,
     /// View ▸ Extra properties (Lemon Studio's design, saved in `.lemon` files, on by default): the strips show the reverse
     /// polarity and swap buttons and the stereo separation knob.
     pub extra: bool,
@@ -288,7 +306,8 @@ pub const WAVE_LEN: usize = 600;
 impl Default for MixerUi {
     fn default() -> Self {
         MixerUi { sel: Vec::new(), layout: WIDE, slot_names: HashMap::new(), slot_colors: HashMap::new(), pending: Vec::new(), meters: Vec::new(),
-            meter_cfg: Default::default(), meter_at: None, solo: None, wheel_grab: None, waveforms: false, waves: Vec::new(), extra: true }
+            meter_cfg: Default::default(), meter_at: None, solo: None, wheel_grab: None, waveforms: false, waves: Vec::new(),
+            console: HashMap::new(), extra: true }
     }
 }
 
@@ -676,6 +695,13 @@ pub fn hit(app: &mut App, h: MHit) -> Option<String> {
                 changed(s);
                 Some(())
             });
+            None
+        }
+        // A view switch, not project data: no undo step (`MixerUi::console`).
+        MHit::StripPanel(n) => {
+            select(s, n, ctrl);
+            let shown = console_shown(s, n);
+            s.mixer.console.insert(n, !shown);
             None
         }
         MHit::Route(dst) => edit(s, ROUTING, Region::Project, |s| route(s, dst, ctrl, shift)),
