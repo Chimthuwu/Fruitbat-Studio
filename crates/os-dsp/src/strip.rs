@@ -3,7 +3,7 @@
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! The Analog Channel Strip: Lemon Studio's port of the Michael Lane Edition fork's console strip (plan v3 Appendix C).
-//! The low cut, the gate, the drive and TAME are here; the compressor and the de-esser follow one at a time.
+//! The low cut, the gate, the drive, TAME and the compressor are here; the de-esser follows.
 //!
 //! A strip is bypassed, faded out, and only then does the engine stop calling it: a bypassed strip passes the track
 //! through sample for sample (plan v3 §6.3). The sections are stereo-linked in their settings with one filter state per
@@ -599,7 +599,149 @@ impl Tame {
     }
 }
 
-/// A track's Analog Channel Strip: the low cut, the gate, the drive and TAME today, the rest as it is ported. Bypassed, it fades the processed
+/// A compressor's settings, as the fork tables them per material.
+pub struct Profile {
+    pub name: &'static str,
+    /// How fast the level follower and the gain move toward more reduction, and how fast they come back.
+    pub attack: f32,
+    pub release: f32,
+    pub ratio: f32,
+    /// How far the threshold at -6 dB falls as the amount goes from 0 to 1.
+    pub range: f32,
+}
+
+/// The six profiles, in the order word 5 counts them.
+pub const PROFILES: [Profile; 6] = [
+    Profile { name: "General", attack: 0.010, release: 0.150, ratio: 2.0, range: 30.0 },
+    Profile { name: "Vocal", attack: 0.008, release: 0.100, ratio: 2.0, range: 28.0 },
+    Profile { name: "Guitar", attack: 0.015, release: 0.120, ratio: 2.0, range: 26.0 },
+    Profile { name: "Bass", attack: 0.025, release: 0.200, ratio: 2.5, range: 30.0 },
+    Profile { name: "Synthesizer", attack: 0.012, release: 0.180, ratio: 1.5, range: 26.0 },
+    Profile { name: "Drums", attack: 0.025, release: 0.080, ratio: 2.5, range: 24.0 },
+];
+
+/// The profile control word 5 stands for: 0 General to 5 Drums.
+pub fn comp_profile(word: u16) -> usize {
+    ((f32::from(word) / 65535.0) * 5.0).round().clamp(0.0, 5.0) as usize
+}
+
+/// The word for a profile index (`PROFILES` order).
+pub fn comp_profile_word(profile: usize) -> u16 {
+    ((profile.min(5) as f32 / 5.0) * 65535.0).round() as u16
+}
+
+/// The compressor's control word as an amount: word 0 is the section off, 65535 is all the way in.
+pub fn comp_amount(word: u16) -> f32 {
+    f32::from(word) / 65535.0
+}
+
+/// The word for an amount 0..=1.
+pub fn comp_word(amount: f32) -> u16 {
+    (amount.clamp(0.0, 1.0) * 65535.0).round() as u16
+}
+
+/// The compressor: a level follower on the mean power of both channels (the settings are stereo-linked), a -6 dB
+/// threshold that falls with the amount, a ratio that widens with it, and 3 dB of soft knee either side. The makeup is
+/// worked out at a fixed -18 dB reference rather than from what is playing, so it does not chase silence or pump gain
+/// between phrases. Word 1 is the amount (0 = off) and word 5 the profile.
+pub struct Compressor {
+    /// The amount as it glides (0..1), 20 ms either way.
+    amount: Glide,
+    /// The level it follows, as mean power over both channels.
+    env: f32,
+    /// The gain it is applying: 1 passes the signal, below 1 takes it down.
+    gain: f32,
+    /// The amount's control word (0 = off) and the profile's.
+    word: u16,
+    profile: u16,
+}
+
+/// One block's compressor settings: the profile is fixed within it, and the amount glides through it.
+struct CompBlock {
+    amount: Ramp,
+    /// The follower's and the gain's retention coefficients: closer to 1 is slower.
+    attack: f32,
+    release: f32,
+    profile: usize,
+    /// This frame's amount, moved once and used for both channels.
+    a: f32,
+}
+
+impl Compressor {
+    pub fn new(word: u16, profile: u16) -> Compressor {
+        Compressor { amount: Glide::new(comp_amount(word)), env: 0.0, gain: 1.0, word, profile }
+    }
+
+    /// The section's control words: the amount (0 = off) and the profile.
+    pub fn set(&mut self, word: u16, profile: u16) {
+        self.word = word;
+        self.profile = profile;
+    }
+
+    /// True when the amount is at zero: there is nothing left to take down.
+    pub fn idle(&self) -> bool {
+        self.word == 0 && self.amount.current == 0.0
+    }
+
+    /// Back to unity: a section switched in again does not start on the gain it was holding.
+    pub fn reset(&mut self) {
+        self.env = 0.0;
+        self.gain = 1.0;
+    }
+
+    /// Plans a block; `None` when the section is off and has glided out (its state is cleared).
+    fn block(&mut self, frames: usize, rate: u32) -> Option<CompBlock> {
+        let rate = rate.max(1);
+        let target = comp_amount(self.word);
+        if target == 0.0 && self.amount.current == 0.0 {
+            self.reset();
+            return None;
+        }
+        let ratef = rate as f32;
+        let profile = comp_profile(self.profile);
+        let p = &PROFILES[profile];
+        let amount = self.amount.block(target, frames, 1.0 / (0.020 * ratef));
+        Some(CompBlock {
+            amount,
+            attack: (-1.0 / (ratef * p.attack)).exp(),
+            release: (-1.0 / (ratef * p.release)).exp(),
+            profile,
+            a: 0.0,
+        })
+    }
+
+    /// The gain for one frame pair, the amount gliding and the follower moving with it.
+    fn gain(&mut self, b: &mut CompBlock, l: f32, r: f32) -> f32 {
+        b.a = b.amount.next();
+        let amount = b.a;
+        let p = &PROFILES[b.profile];
+        let power = (l * l + r * r) * 0.5;
+        self.env = b.attack * self.env + (1.0 - b.attack) * power;
+        let threshold = -6.0 - p.range * amount;
+        let ratio = p.ratio + 2.0 * amount;
+        // 0 dB below the knee, the full slope above it, a quadratic join across it.
+        let reduction = |db: f32| {
+            let over = db - threshold;
+            let slope = 1.0 - 1.0 / ratio;
+            if over <= -3.0 {
+                0.0
+            } else if over >= 3.0 {
+                over * slope
+            } else {
+                (over + 3.0).powi(2) * slope / 12.0
+            }
+        };
+        let db = 10.0 * self.env.max(1e-20).log10();
+        // Fixed-reference automatic makeup, not one that follows the level.
+        let makeup = reduction(-18.0).min(18.0);
+        let wanted = 10f32.powf((makeup - reduction(db)) * amount / 20.0);
+        let response = if wanted < self.gain { b.attack } else { b.release };
+        self.gain = response * self.gain + (1.0 - response) * wanted;
+        self.gain
+    }
+}
+
+/// A track's Analog Channel Strip: the low cut, the gate, the drive, TAME and the compressor today, the de-esser to come. Bypassed, it fades the processed
 /// signal out to the dry one and then stops touching the buffer (`idle`), so a bypassed strip passes a track through
 /// sample for sample (plan v3 §6.3).
 pub struct Strip {
@@ -613,11 +755,12 @@ pub struct Strip {
     gate: Gate,
     drive: Drive,
     tame: Tame,
+    comp: Compressor,
 }
 
 impl Strip {
     pub fn new(words: [u16; 7], bypassed: bool) -> Strip {
-        Strip { words, bypassed, wet: Glide::new(if bypassed { 0.0 } else { 1.0 }), low: LowCut::new(words[0]), gate: Gate::new(words[3]), drive: Drive::new(words[2], words[6]), tame: Tame::new(words[4]) }
+        Strip { words, bypassed, wet: Glide::new(if bypassed { 0.0 } else { 1.0 }), low: LowCut::new(words[0]), gate: Gate::new(words[3]), drive: Drive::new(words[2], words[6]), tame: Tame::new(words[4]), comp: Compressor::new(words[1], words[5]) }
     }
 
     /// The project's settings for the strip (a track rebuilt from a changed project).
@@ -628,6 +771,7 @@ impl Strip {
         self.gate.set(words[3]);
         self.drive.set(words[2], words[6]);
         self.tame.set(words[4]);
+        self.comp.set(words[1], words[5]);
     }
 
     /// True when bypassed and faded out: the engine skips the strip and passes the track through.
@@ -647,12 +791,14 @@ impl Strip {
             self.gate.reset();
             self.drive.reset();
             self.tame.reset();
+            self.comp.reset();
             return;
         }
         let mut low = self.low.block(frames, rate);
         let mut gate = self.gate.block(frames, rate);
         let mut drive = self.drive.block(frames, rate);
         let mut tame = self.tame.block(frames, rate);
+        let mut comp = self.comp.block(frames, rate);
         for f in buf.chunks_exact_mut(2) {
             let w = wet.next();
             // Fully dry: nothing is written, so the samples stay as they arrived.
@@ -685,6 +831,12 @@ impl Strip {
             // Then TAME, on the tone the drive left.
             if let Some(b) = &mut tame {
                 y = self.tame.frame(b, y);
+            }
+            // Then the compressor, at the end of the chain.
+            if let Some(b) = &mut comp {
+                let g = self.comp.gain(b, y[0], y[1]);
+                y[0] *= g;
+                y[1] *= g;
             }
             for (ch, s) in f.iter_mut().enumerate() {
                 let a = y[ch];
@@ -975,6 +1127,68 @@ mod tests {
         let max = buf.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
         // Both characters are held well inside the shaper's bounds, so a step would stand out.
         assert!(max < 0.1, "no click: {max}");
+    }
+
+    /// Word 1 is the section off: nothing at all, sample for sample.
+    #[test]
+    fn the_compressor_off_passes_the_signal_through() {
+        let dry = sine(1_000.0, 480);
+        let mut s = Strip::new([0; 7], false);
+        let mut buf = dry.clone();
+        s.process(&mut buf, RATE);
+        assert_eq!(buf, dry);
+    }
+
+    /// Full on, a tone above the threshold is taken down, and the gain holds still once it has settled.
+    #[test]
+    fn the_compressor_takes_a_loud_signal_down() {
+        let dry = sine(1_000.0, BLOCK * 2 * 40);
+        let mut s = Strip::new([0, u16::MAX, 0, 0, 0, 0, 0], false);
+        let mut buf = dry.clone();
+        run(&mut s, &mut buf);
+        let rms_tail = |b: &[f32]| rms(&b[b.len() - BLOCK * 2..]);
+        let ratio = rms_tail(&buf) / rms_tail(&dry);
+        assert!(ratio < 0.85, "taken down: {ratio}");
+        assert!(ratio > 0.3, "not squashed: {ratio}");
+        assert!(buf.iter().all(|x| x.is_finite()));
+    }
+
+    /// The makeup is fixed at the -18 dB reference: quiet material comes up rather than the loud material pulling it
+    /// around, so the two ends of the dynamic range move toward each other.
+    #[test]
+    fn the_compressor_narrows_the_dynamic_range() {
+        let quiet: Vec<f32> = sine(1_000.0, BLOCK * 2 * 40).iter().map(|x| x * 0.02).collect();
+        let mut s = Strip::new([0, u16::MAX, 0, 0, 0, 0, 0], false);
+        let mut buf = quiet.clone();
+        run(&mut s, &mut buf);
+        let rms_tail = |b: &[f32]| rms(&b[b.len() - BLOCK * 2..]);
+        let ratio = rms_tail(&buf) / rms_tail(&quiet);
+        assert!(ratio > 1.5, "quiet material lifted: {ratio}");
+        assert!(ratio < 6.0, "but not without bound: {ratio}");
+    }
+
+    /// Every profile stays bounded and finite, whatever its attack and release.
+    #[test]
+    fn every_compressor_profile_is_bounded() {
+        for profile in 0..PROFILES.len() {
+            let mut s = Strip::new([0, u16::MAX, 0, 0, 0, 0, comp_profile_word(profile)], false);
+            let mut buf = sine(1_000.0, BLOCK * 2 * 20);
+            run(&mut s, &mut buf);
+            assert!(buf.iter().all(|x| x.is_finite() && x.abs() < 1.0), "{}", PROFILES[profile].name);
+        }
+    }
+
+    /// The profile word counts the six profiles and comes back to itself.
+    #[test]
+    fn the_compressor_words_round_trip() {
+        for profile in 0..PROFILES.len() {
+            assert_eq!(comp_profile(comp_profile_word(profile)), profile, "{}", PROFILES[profile].name);
+        }
+        assert_eq!(comp_profile(0), 0);
+        assert_eq!(comp_profile(u16::MAX), 5);
+        for amount in [0.0f32, 0.1, 0.45, 1.0] {
+            assert!((comp_amount(comp_word(amount)) - amount).abs() < 0.001);
+        }
     }
 
     /// Noise, and a tone standing on it: a resonance to find.
