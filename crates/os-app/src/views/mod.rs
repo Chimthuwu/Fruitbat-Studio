@@ -377,11 +377,12 @@ pub fn window_body(ui: &mut Ui, r: Rect) {
     ui.hit(r, Action::Swallow, "");
 }
 
-/// Resize edges of a floating window: thin strips along the sides and small corner squares,
-/// reaching 3 px outside the window. Not for maximized or collapsed windows.
+/// Resize edges of a window: thin strips along the sides and small corner squares, reaching 3 px
+/// outside the window. A maximized one has them too: dragging an edge brings it back to its
+/// floating rect and resizes from there (`App::press`'s `WinResize`). Not for collapsed windows.
 pub fn resize_zones(ui: &mut Ui, s: &State, win: Win, r: Rect) {
     let Some(i) = win.slot() else { return };
-    if s.wins[i].maxed || s.wins[i].mini {
+    if s.wins[i].mini {
         return;
     }
     use crate::app::{EDGE_B, EDGE_L, EDGE_R, EDGE_T};

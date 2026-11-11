@@ -9294,6 +9294,11 @@ impl App {
             Action::MaxWin(w) if s.is_detached(w) => self.native.push((w, Native::Maximize)),
             Action::WinResize(win, edges) => {
                 let r0 = s.float_rect(win);
+                // A maximized window resizes from its floating rect: dragging an edge brings it back to it first, so its
+                // edges work whether it is maximized or not (the piano roll opens maximized).
+                if let Some(i) = win.slot() {
+                    s.wins[i].maxed = false;
+                }
                 self.drag = Some(Drag::WinResize { win, edges, m0: self.mouse, r0 });
             }
             Action::MinWin(w) => {
@@ -10472,6 +10477,26 @@ mod tests {
 
     fn frame(app: &mut App, c: &mut Canvas, damage: Option<Rect>) {
         app.paint(c, damage);
+    }
+
+    /// A maximized window's edges work: dragging one brings it back to its floating rect and resizes it from there.
+    /// The piano roll opens maximized, so without this it could not be resized at all.
+    #[test]
+    fn a_maximized_window_resizes_from_its_edge() {
+        let mut a = App::new(None);
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        a.act(Action::ToggleWin(Win::PianoRoll));
+        frame(&mut a, &mut c, None);
+        assert!(a.state.is_max(Win::PianoRoll), "the piano roll opens maximized");
+        let saved = a.state.wins[Win::PianoRoll.slot().unwrap()].rect;
+        let edge = hit_rect(&a, &Action::WinResize(Win::PianoRoll, EDGE_R));
+        a.mouse_move(edge.cx(), edge.cy());
+        a.mouse_down();
+        a.mouse_move(edge.cx() - 100.0, edge.cy());
+        let r = a.state.win_rect(Win::PianoRoll);
+        assert!(!a.state.is_max(Win::PianoRoll), "the drag brings it back to float");
+        assert_eq!((r.x, r.y, r.w, r.h), (saved.x, saved.y, saved.w - 100.0, saved.h));
+        a.mouse_up();
     }
 
     /// Paint what `App::take_damage` returned, as the shell does: each rect, or the whole frame.
