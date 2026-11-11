@@ -98,7 +98,8 @@ pub enum MCmd {
     /// and the profile in `strip[5]`).
     StripBypass(u16),
     StripLowCut(u16, u16),
-    StripGate(u16, u16),
+    /// The OTT's depth on the track's strip (word 3; 0 = off).
+    StripOtt(u16, u16),
     StripDrive(u16, u16),
     StripDriveType(u16, u16),
     /// TAME's amount on the track's strip (word 4; 0 = off).
@@ -1815,12 +1816,12 @@ fn track_items(s: &State, n: u16) -> Vec<PItem> {
                 .collect(),
         ),
         PItem::sub(
-            "Gate",
-            [0i32, -60, -54, -48, -42, -36, -30, -24, -18]
+            "OTT",
+            [0u16, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
                 .into_iter()
-                .map(|db| {
-                    let label = if db == 0 { "Off".to_string() } else { format!("{db} dB") };
-                    PItem::new(label, mx(MCmd::StripGate(n, os_dsp::strip::gate_word(db as f32)))).mark(Mark::Radio(strip_gate(t) == db))
+                .map(|pct| {
+                    let label = if pct == 0 { "Off".to_string() } else { format!("{pct} %") };
+                    PItem::new(label, mx(MCmd::StripOtt(n, os_dsp::strip::ott_word(f32::from(pct) / 100.0)))).mark(Mark::Radio(strip_ott(t) == pct))
                 })
                 .collect(),
         ),
@@ -1888,9 +1889,9 @@ fn strip_low_cut(t: Option<&os_model::MixerTrack>) -> u16 {
     t.map_or(20, |m| os_dsp::strip::cut_hz(m.strip[0]).round() as u16)
 }
 
-/// A strip's gate threshold in dB from control word 3 (`os_dsp::strip::gate_threshold_db`), 0 for the section off.
-fn strip_gate(t: Option<&os_model::MixerTrack>) -> i32 {
-    t.map_or(0, |m| if m.strip[3] == 0 { 0 } else { os_dsp::strip::gate_threshold_db(m.strip[3]).round() as i32 })
+/// A strip's OTT depth in percent from control word 3 (`os_dsp::strip::ott_amount`), 0 for the section off.
+fn strip_ott(t: Option<&os_model::MixerTrack>) -> u16 {
+    t.map_or(0, |m| (os_dsp::strip::ott_amount(m.strip[3]) * 100.0).round() as u16)
 }
 
 /// A strip's drive amount in percent from control word 2 (`os_dsp::strip::drive_amount`), 0 for the section off.
@@ -2222,7 +2223,7 @@ pub fn run(app: &mut App, c: MCmd) -> Option<String> {
     // A slot's sidechain input is the track's own (its slot's saved state).
     // Quick Sidechain changes the destination's chain and the source's routing in one undo step.
     // The Analog Channel Strip is the track's own state: one undo step on that track (plan v3 Milestone 0).
-    if let MCmd::StripBypass(t) | MCmd::StripLowCut(t, _) | MCmd::StripGate(t, _) | MCmd::StripDrive(t, _) | MCmd::StripDriveType(t, _) | MCmd::StripTame(t, _) | MCmd::StripComp(t, _) | MCmd::StripCompProfile(t, _) | MCmd::StripDeess(t, _) = &c {
+    if let MCmd::StripBypass(t) | MCmd::StripLowCut(t, _) | MCmd::StripOtt(t, _) | MCmd::StripDrive(t, _) | MCmd::StripDriveType(t, _) | MCmd::StripTame(t, _) | MCmd::StripComp(t, _) | MCmd::StripCompProfile(t, _) | MCmd::StripDeess(t, _) = &c {
         let t = *t;
         return crate::control::edit_app(app, "Analog channel strip", Region::Track(t), |app| run_now(app, c));
     }
@@ -2403,7 +2404,7 @@ fn run_now(app: &mut App, c: MCmd) -> Option<String> {
             }
             None
         }
-        MCmd::StripGate(n, word) => {
+        MCmd::StripOtt(n, word) => {
             if let Some(t) = track_mut(s, n) {
                 t.strip[3] = word;
                 t.strip_bypassed = false;
@@ -4226,8 +4227,8 @@ mod tests {
         assert_eq!(a.state.history.at(), steps + 2);
         crate::history::undo(&mut a.state);
         assert_eq!(t(&a).strip[0], 0);
-        run(&mut a, MCmd::StripGate(2, os_dsp::strip::gate_word(-48.0)));
-        assert!((os_dsp::strip::gate_threshold_db(t(&a).strip[3]) + 48.0).abs() < 0.5);
+        run(&mut a, MCmd::StripOtt(2, os_dsp::strip::ott_word(0.6)));
+        assert!((os_dsp::strip::ott_amount(t(&a).strip[3]) - 0.6).abs() < 0.001);
         assert_eq!(a.state.history.at(), steps + 2);
         crate::history::undo(&mut a.state);
         assert_eq!(t(&a).strip[3], 0, "the gate is back off");

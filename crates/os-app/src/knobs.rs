@@ -488,15 +488,15 @@ impl State {
                     _ => format!("{band} width: {n:.2}"),
                 }
             }
-            // "Low cut: 120Hz", "Gate: -42dB", "Drive: 40%", "TAME: 60%", "Compressor: 40%", "De-esser: 30%".
+            // "Low cut: 120Hz", "OTT: 40%", "Drive: 40%", "TAME: 60%", "Compressor: 40%", "De-esser: 30%".
             KnobId::Strip(_, w) => {
                 let word = (n * 65535.0).round() as u16;
                 match w {
                     0 => format!("Low cut: {:.0}Hz", os_dsp::strip::cut_hz(word)),
                     1 => format!("Compressor: {:.0}%", os_dsp::strip::comp_amount(word) * 100.0),
                     2 => format!("Drive: {:.0}%", os_dsp::strip::drive_amount(word) * 100.0),
-                    3 if word == 0 => "Gate: off".into(),
-                    3 => format!("Gate: {:.0}dB", os_dsp::strip::gate_threshold_db(word)),
+                    3 if word == 0 => "OTT: off".into(),
+                    3 => format!("OTT: {:.0}%", os_dsp::strip::ott_amount(word) * 100.0),
                     4 => format!("TAME: {:.0}%", os_dsp::strip::tame_amount(word) * 100.0),
                     _ => format!("De-esser: {:.0}%", os_dsp::strip::deess_amount(word) * 100.0),
                 }
@@ -632,9 +632,9 @@ mod tests {
         let s = &mut app.state;
         let t = s.project.mixer[1].index;
         assert_eq!(s.knob_text(KnobId::Strip(t, 0)), "Low cut: 20Hz");
-        assert_eq!(s.knob_text(KnobId::Strip(t, 3)), "Gate: off");
+        assert_eq!(s.knob_text(KnobId::Strip(t, 3)), "OTT: off");
         s.set_knob(KnobId::Strip(t, 3), 0.75);
-        assert!(s.knob_text(KnobId::Strip(t, 3)).starts_with("Gate: -"), "{}", s.knob_text(KnobId::Strip(t, 3)));
+        assert!(s.knob_text(KnobId::Strip(t, 3)).starts_with("OTT: 7"), "{}", s.knob_text(KnobId::Strip(t, 3)));
         s.set_knob(KnobId::Strip(t, 7), 0.3);
         assert_eq!(s.knob_text(KnobId::Strip(t, 7)), "De-esser: 30%");
         s.set_knob(KnobId::Strip(t, 2), 0.5);

@@ -1593,8 +1593,8 @@ pub struct MixerTrack {
     pub slot_mix: [f64; 10],
     /// The Analog Channel Strip's eight control words (0..=65535) as stored: Lemon Studio's port of the Michael Lane
     /// Edition strip (plan v3 Appendix C). All zero on a track that never used it. Word 0 is the low cut
-    /// (`os_dsp::strip::cut_hz`: 20 Hz at word 0, the section's off position, to 350 Hz) and word 3 the gate
-    /// (`os_dsp::strip::gate_threshold_db`: -72 dB at word 0, the section off, to -18 dB); word 2 is the drive with its
+    /// (`os_dsp::strip::cut_hz`: 20 Hz at word 0, the section's off position, to 350 Hz) and word 3 the OTT
+    /// (`os_dsp::strip::ott_amount`: 0 is the section off, 65535 all the way in); word 2 is the drive with its
     /// character in word 6, word 1 the compressor with its profile in word 5, word 4 TAME and word 7 the de-esser.
     pub strip: [u16; 8],
     /// The strip's bypass switch: `true` (the default) passes the track through untouched, and a track that never

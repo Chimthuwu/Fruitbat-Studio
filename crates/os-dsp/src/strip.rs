@@ -3,7 +3,8 @@
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! The Analog Channel Strip: Lemon Studio's port of the Michael Lane Edition fork's console strip (plan v3 Appendix C).
-//! The low cut, the gate, the drive, TAME, the compressor and the de-esser are here, in the fork's order.
+//! The low cut, the OTT, the drive, TAME, the compressor and the de-esser are here, in the fork's order. The gate the fork
+//! has in the OTT's place is gone: the user wanted a one-knob upward compressor there instead.
 //!
 //! A strip is bypassed, faded out, and only then does the engine stop calling it: a bypassed strip passes the track
 //! through sample for sample (plan v3 §6.3). The sections are stereo-linked in their settings with one filter state per
@@ -114,43 +115,62 @@ fn coefficients(cut: f32, rate: u32) -> [f64; 5] {
     [b0, b1, b0, -2.0 * cos / a0, (1.0 - alpha) / a0]
 }
 
-/// The gate's control word as a threshold: `-72 + 54v` dB, so -72 dB at word 0 (the section off) to -18 dB at 65535.
-pub fn gate_threshold_db(word: u16) -> f32 {
-    -72.0 + 54.0 * f32::from(word) / 65535.0
+/// The OTT's control word as a depth: word 0 is the section off, 65535 is all the way in.
+pub fn ott_amount(word: u16) -> f32 {
+    f32::from(word) / 65535.0
 }
 
-/// The word for a threshold in dB, clamped to the section's -72..=-18 dB.
-pub fn gate_word(db: f32) -> u16 {
-    (((db + 72.0) / 54.0).clamp(0.0, 1.0) * 65535.0).round() as u16
+/// The word for a depth 0..=1.
+pub fn ott_word(amount: f32) -> u16 {
+    (amount.clamp(0.0, 1.0) * 65535.0).round() as u16
 }
 
-/// The gate: an envelope follower on the louder channel (1 ms attack, 80 ms release) opens the gate 40 ms past the
-/// last sample above a threshold that follows the amount, and the amount doubles as the depth, so a small setting
-/// only dips the level. Word 0 is the section off, and the amount glides over 20 ms both ways, so it does not click.
-pub struct Gate {
-    /// The amount as it glides (0..1): the threshold and the depth both follow it.
+/// The OTT's crossovers: the low band under the first, the mid band up to the second, the rest above.
+const OTT_LOW: f32 = 250.0;
+const OTT_MID: f32 = 2_500.0;
+
+/// The level the OTT works around, and how far its upward half lifts at the depth's full setting.
+const OTT_THRESHOLD: f32 = -30.0;
+const OTT_LIFT: f32 = 18.0;
+
+/// Each band's share of the depth: the mids and highs carry OTT's character, the low end only a little.
+const OTT_WEIGHT: [f32; 3] = [0.6, 1.0, 0.85];
+
+/// OTT: the three-band upward and downward compressor, one knob for all of it (the "doom-comp" kind of upward
+/// compressor: quiet parts are pulled up as hard as loud parts are pushed down).
+///
+/// The signal is split at 250 Hz and 2.5 kHz by cascaded one-poles, so the three bands add back up to what came in. Each
+/// band's level is followed on the mean power of both channels (5 ms in, 120 ms out) and given one gain: above -30 dB it
+/// goes down 8:1, below it comes up 4:1 and no further than +18 dB. The depth scales all of it and doubles as the dry /
+/// wet mix, so a small setting only leans on the signal. Word 3 is the depth (0 = off) and glides over 20 ms both ways.
+pub struct Ott {
+    /// Per channel the two crossovers' one-pole states, `[low × 2, mid × 2]`.
+    lp: [[f32; 4]; 2],
+    /// The bands' levels as they are followed, in mean power over both channels (the settings are stereo-linked).
+    env: [f32; 3],
+    /// The gain each band is applied with, as it glides.
+    gain: [f32; 3],
+    /// The depth as it glides (0..1), 20 ms either way.
     amount: Glide,
-    /// The level the gate watches, the louder of the two channels (the settings are stereo-linked).
-    env: f32,
-    /// The gain the gate is applying, 1 open to near 0 shut.
-    gain: f32,
-    /// Samples of hold left since the level was last above the threshold.
-    hold: u32,
-    /// The section's control word (0 = off).
+    /// The depth's control word (0 = off).
     word: u16,
 }
 
-/// One block's gate settings: the rates are fixed per block, and the amount glides through it.
-struct GateBlock {
+/// One block's OTT settings: the coefficients are fixed within it and the depth glides through it.
+struct OttBlock {
+    amount: Ramp,
+    /// The two crossovers' one-pole coefficients, and 5 ms / 120 ms for the followers and the gains.
+    low: f32,
+    mid: f32,
     attack: f32,
     release: f32,
-    hold: u32,
-    amount: Ramp,
+    /// This frame's depth, moved once and used for both channels.
+    a: f32,
 }
 
-impl Gate {
-    pub fn new(word: u16) -> Gate {
-        Gate { amount: Glide::new(f32::from(word) / 65535.0), env: 0.0, gain: 1.0, hold: 0, word }
+impl Ott {
+    pub fn new(word: u16) -> Ott {
+        Ott { lp: [[0.0; 4]; 2], env: [0.0; 3], gain: [1.0; 3], amount: Glide::new(ott_amount(word)), word }
     }
 
     /// The section's control word (0 = off).
@@ -158,54 +178,74 @@ impl Gate {
         self.word = word;
     }
 
-    /// True when the section is off and its amount has reached zero: nothing is left to do.
+    /// True when the section is off and faded out: nothing is left to do.
     pub fn idle(&self) -> bool {
         self.word == 0 && self.amount.current == 0.0
     }
 
-    /// Back to open: a section switched in again does not start shut on what it heard before.
+    /// Empties the crossovers and the followers: a section switched in again starts from silence, not from where it was.
     pub fn reset(&mut self) {
-        self.env = 0.0;
-        self.gain = 1.0;
-        self.hold = 0;
+        self.lp = [[0.0; 4]; 2];
+        self.env = [0.0; 3];
+        self.gain = [1.0; 3];
     }
 
     /// Plans a block; `None` when the section is off and has glided out (its state is cleared).
-    fn block(&mut self, frames: usize, rate: u32) -> Option<GateBlock> {
+    fn block(&mut self, frames: usize, rate: u32) -> Option<OttBlock> {
         let rate = rate.max(1);
-        let target = if self.word == 0 { 0.0 } else { f32::from(self.word) / 65535.0 };
+        let target = ott_amount(self.word);
         if target == 0.0 && self.amount.current == 0.0 {
             self.reset();
             return None;
         }
-        let amount = self.amount.block(target, frames, 1.0 / (0.020 * f64::from(rate)) as f32);
-        Some(GateBlock {
-            attack: 1.0 - (-1.0 / (rate as f32 * 0.001)).exp(),
-            release: 1.0 - (-1.0 / (rate as f32 * 0.080)).exp(),
-            hold: (rate as f32 * 0.040) as u32,
-            amount,
+        let ratef = rate as f32;
+        let crossover = |hz: f32| 1.0 - (-std::f32::consts::TAU * hz / ratef).exp();
+        let follower = |seconds: f32| 1.0 - (-1.0 / (ratef * seconds)).exp();
+        Some(OttBlock {
+            amount: self.amount.block(target, frames, 1.0 / (0.020 * ratef)),
+            low: crossover(OTT_LOW),
+            mid: crossover(OTT_MID),
+            attack: follower(0.005),
+            release: follower(0.120),
+            a: 0.0,
         })
     }
 
-    /// The gain for one frame pair, the amount gliding and the follower moving with it.
-    fn gain(&mut self, b: &mut GateBlock, l: f32, r: f32) -> f32 {
-        let amount = b.amount.next();
-        let level = l.abs().max(r.abs());
-        self.env += (level - self.env) * if level > self.env { b.attack } else { b.release };
-        let threshold = 10f32.powf((-72.0 + 54.0 * amount) / 20.0);
-        if self.env >= threshold {
-            self.hold = b.hold;
-        } else {
-            self.hold = self.hold.saturating_sub(1);
+    /// One stereo frame: both sides share the gains, the crossovers keep a state per channel.
+    fn frame(&mut self, b: &mut OttBlock, input: [f32; 2]) -> [f32; 2] {
+        b.a = b.amount.next();
+        let amount = b.a;
+        let mut bands = [[0.0f32; 3]; 2];
+        for ch in 0..2 {
+            let s = &mut self.lp[ch];
+            s[0] += (input[ch] - s[0]) * b.low;
+            s[1] += (s[0] - s[1]) * b.low;
+            let rest = input[ch] - s[1];
+            s[2] += (rest - s[2]) * b.mid;
+            s[3] += (s[2] - s[3]) * b.mid;
+            bands[ch] = [s[1], s[3], rest - s[3]];
         }
-        let goal = if self.hold > 0 {
-            1.0
-        } else {
-            (self.env / (threshold * 0.5).max(1e-8)).powi(3).clamp(0.001, 1.0)
-        };
-        self.gain += (goal - self.gain) * if goal > self.gain { b.attack } else { b.release };
-        // Below an amount of 1/50 the depth fades in with the amount, so switching the gate in does not step.
-        1.0 + (self.gain - 1.0) * (amount * 50.0).min(1.0)
+        for i in 0..3 {
+            let power = (bands[0][i] * bands[0][i] + bands[1][i] * bands[1][i]) * 0.5;
+            let coef = if power > self.env[i] { b.attack } else { b.release };
+            self.env[i] += (power - self.env[i]) * coef;
+            let db = 10.0 * (self.env[i] + 1e-20).log10();
+            let over = db - OTT_THRESHOLD;
+            // OTT's two halves: 8:1 down above the threshold, 4:1 up below it, and the up side has a ceiling.
+            let down = over.max(0.0) * 0.875;
+            let up = ((-over).max(0.0) * 0.75).min(OTT_LIFT);
+            let wanted = 10f32.powf((up - down) * OTT_WEIGHT[i] * amount / 20.0);
+            let g = &mut self.gain[i];
+            let response = if wanted < *g { b.attack } else { b.release };
+            *g += (wanted - *g) * response;
+        }
+        let mut out = [0.0; 2];
+        for ch in 0..2 {
+            let dry = input[ch];
+            let wet = bands[ch][0] * self.gain[0] + bands[ch][1] * self.gain[1] + bands[ch][2] * self.gain[2];
+            out[ch] = dry + (wet - dry) * amount;
+        }
+        out
     }
 }
 
@@ -880,11 +920,11 @@ impl Deess {
     }
 }
 
-/// A track's Analog Channel Strip: the low cut, the gate, the drive, TAME, the compressor and the de-esser. Bypassed, it
+/// A track's Analog Channel Strip: the low cut, the OTT, the drive, TAME, the compressor and the de-esser. Bypassed, it
 /// fades the processed signal out to the dry one and then stops touching the buffer (`idle`), so a bypassed strip passes
 /// a track through sample for sample (plan v3 §6.3).
 pub struct Strip {
-    /// The eight stored control words, as the project keeps them: 0 low cut, 1 compressor, 2 drive, 3 gate, 4 TAME,
+    /// The eight stored control words, as the project keeps them: 0 low cut, 1 compressor, 2 drive, 3 OTT, 4 TAME,
     /// 5 compressor profile, 6 drive character, 7 de-esser.
     pub words: [u16; 8],
     /// The bypass switch as the project stores it.
@@ -892,7 +932,7 @@ pub struct Strip {
     /// How much of the processed signal is heard: 0 fully dry, 1 fully processed.
     wet: Glide,
     low: LowCut,
-    gate: Gate,
+    ott: Ott,
     drive: Drive,
     tame: Tame,
     comp: Compressor,
@@ -901,7 +941,7 @@ pub struct Strip {
 
 impl Strip {
     pub fn new(words: [u16; 8], bypassed: bool) -> Strip {
-        Strip { words, bypassed, wet: Glide::new(if bypassed { 0.0 } else { 1.0 }), low: LowCut::new(words[0]), gate: Gate::new(words[3]), drive: Drive::new(words[2], words[6]), tame: Tame::new(words[4]), comp: Compressor::new(words[1], words[5]), deess: Deess::new(words[7]) }
+        Strip { words, bypassed, wet: Glide::new(if bypassed { 0.0 } else { 1.0 }), low: LowCut::new(words[0]), ott: Ott::new(words[3]), drive: Drive::new(words[2], words[6]), tame: Tame::new(words[4]), comp: Compressor::new(words[1], words[5]), deess: Deess::new(words[7]) }
     }
 
     /// The project's settings for the strip (a track rebuilt from a changed project).
@@ -909,7 +949,7 @@ impl Strip {
         self.words = words;
         self.bypassed = bypassed;
         self.low.set(words[0]);
-        self.gate.set(words[3]);
+        self.ott.set(words[3]);
         self.drive.set(words[2], words[6]);
         self.tame.set(words[4]);
         self.comp.set(words[1], words[5]);
@@ -930,7 +970,7 @@ impl Strip {
         let mut wet = self.wet.block(target, frames, fade);
         if wet.is_flat() && wet.first() == 0.0 {
             self.low.reset();
-            self.gate.reset();
+            self.ott.reset();
             self.drive.reset();
             self.tame.reset();
             self.comp.reset();
@@ -938,7 +978,7 @@ impl Strip {
             return;
         }
         let mut low = self.low.block(frames, rate);
-        let mut gate = self.gate.block(frames, rate);
+        let mut ott = self.ott.block(frames, rate);
         let mut drive = self.drive.block(frames, rate);
         let mut tame = self.tame.block(frames, rate);
         let mut comp = self.comp.block(frames, rate);
@@ -961,12 +1001,11 @@ impl Strip {
                     None => *x,
                 };
             }
-            if let Some(b) = &mut gate {
-                let g = self.gate.gain(b, y[0], y[1]);
-                y[0] *= g;
-                y[1] *= g;
+            // Then the OTT, on what the low cut left (the fork's second row).
+            if let Some(b) = &mut ott {
+                y = self.ott.frame(b, y);
             }
-            // Then the drive, on what the gate let through.
+            // Then the drive, on what the OTT let through.
             if let Some(b) = &mut drive {
                 Drive::frame(b);
                 y[0] = self.drive.step(b, 0, y[0]);
@@ -1135,64 +1174,72 @@ mod tests {
         assert_eq!(b, dry);
     }
 
-    /// A gate strip with threshold `db` and nothing else set.
-    fn gate_strip(db: f32) -> Strip {
-        Strip::new([0, 0, 0, gate_word(db), 0, 0, 0, 0], false)
+    /// An OTT strip with depth `v` and nothing else set.
+    fn ott_strip(v: f32) -> Strip {
+        Strip::new([0, 0, 0, ott_word(v), 0, 0, 0, 0], false)
     }
 
-    /// A quiet tone under the gate's threshold is shut.
+    /// Word 3 at zero is the section off: sample for sample.
     #[test]
-    fn the_gate_shuts_a_signal_below_its_threshold() {
-        let mut s = gate_strip(-18.0);
-        let mut buf: Vec<f32> = sine(1_000.0, BLOCK * 2 * 40).iter().map(|x| x * 0.01).collect();
-        let dry = rms(&buf);
-        run(&mut s, &mut buf);
-        let tail = rms(&buf[buf.len() - BLOCK * 2..]);
-        assert!(tail < dry * 0.02, "shut: {tail} of {dry}");
-    }
-
-    /// A tone above the threshold comes through as it is.
-    #[test]
-    fn the_gate_leaves_a_signal_above_its_threshold() {
-        let dry = sine(1_000.0, BLOCK * 2 * 40);
-        let mut s = gate_strip(-18.0);
+    fn the_ott_off_passes_the_signal_through() {
+        let dry = sine(1_000.0, BLOCK * 2 * 4);
+        let mut s = Strip::new([0; 8], false);
         let mut buf = dry.clone();
         run(&mut s, &mut buf);
-        let (a, b) = (rms(&dry[dry.len() - BLOCK * 2..]), rms(&buf[buf.len() - BLOCK * 2..]));
-        assert!((b / a - 1.0).abs() < 0.01, "open: {b} / {a}");
+        assert_eq!(buf, dry);
     }
 
-    /// The hold keeps the gate open 40 ms past the last sample above the threshold, then it shuts.
+    /// The upward half: a quiet tone comes back louder, which is what the one knob is for.
     #[test]
-    fn the_gate_holds_open_after_a_burst() {
-        let frames = BLOCK * 120;
-        let burst = (BLOCK * 20)..(BLOCK * 22);
-        let mut buf: Vec<f32> = (0..frames)
-            .flat_map(|i| {
-                let a = if burst.contains(&i) { 0.5 } else { 0.01 };
-                let x = (std::f32::consts::TAU * 1_000.0 * i as f32 / RATE as f32).sin() * a;
-                [x, x]
-            })
-            .collect();
-        let dry = rms(&buf[BLOCK * 2 * 30..BLOCK * 2 * 40]);
-        let mut s = gate_strip(-18.0);
+    fn the_ott_lifts_a_quiet_signal() {
+        let quiet: Vec<f32> = sine(1_000.0, BLOCK * 2 * 40).iter().map(|x| x * 0.02).collect();
+        let dry = rms(&quiet[quiet.len() - BLOCK * 2..]);
+        let mut s = ott_strip(1.0);
+        let mut buf = quiet.clone();
         run(&mut s, &mut buf);
-        let held = rms(&buf[BLOCK * 2 * 22..BLOCK * 2 * 30]);
-        let shut = rms(&buf[BLOCK * 2 * 112..BLOCK * 2 * 120]);
-        assert!(held > dry * 0.6, "held open after the burst: {held} of {dry}");
-        assert!(shut < dry * 0.05, "shut after the hold: {shut} of {dry}");
+        let out = rms(&buf[buf.len() - BLOCK * 2..]);
+        assert!(out > dry * 1.8, "lifted: {out} of {dry}");
+        assert!(buf.iter().all(|x| x.is_finite()));
+    }
+
+    /// The downward half: a loud tone is taken down.
+    #[test]
+    fn the_ott_takes_a_loud_signal_down() {
+        let dry = sine(1_000.0, BLOCK * 2 * 40);
+        let level = rms(&dry[dry.len() - BLOCK * 2..]);
+        let mut s = ott_strip(1.0);
+        let mut buf = dry.clone();
+        run(&mut s, &mut buf);
+        let out = rms(&buf[buf.len() - BLOCK * 2..]);
+        assert!(out < level * 0.75, "taken down: {out} of {level}");
     }
 
     /// One gain for both channels: the settings are stereo-linked, as the fork's are.
     #[test]
-    fn the_gate_scales_both_channels_alike() {
-        let mut s = gate_strip(-18.0);
+    fn the_ott_scales_both_channels_alike() {
+        let mut s = ott_strip(1.0);
         let mut buf = sine(1_000.0, BLOCK * 2 * 40);
         for f in buf.chunks_exact_mut(2) {
             f[1] = f[0] * 0.2;
         }
         run(&mut s, &mut buf);
-        assert!(buf.chunks_exact(2).all(|f| (f[1] - f[0] * 0.2).abs() < 1e-6));
+        assert!(buf.chunks_exact(2).all(|f| (f[1] - f[0] * 0.2).abs() < 1e-5));
+    }
+
+    /// The depth's words round trip, and a small setting leans on the signal less than a large one.
+    #[test]
+    fn the_ott_words_round_trip_and_the_depth_scales_it() {
+        assert_eq!(ott_amount(0), 0.0);
+        assert!((ott_amount(ott_word(0.5)) - 0.5).abs() < 1e-4);
+        let quiet: Vec<f32> = sine(1_000.0, BLOCK * 2 * 40).iter().map(|x| x * 0.02).collect();
+        let level = |v: f32| {
+            let mut s = ott_strip(v);
+            let mut buf = quiet.clone();
+            run(&mut s, &mut buf);
+            rms(&buf[buf.len() - BLOCK * 2..])
+        };
+        let (a, b) = (level(0.3), level(1.0));
+        assert!(b > a, "more depth lifts more: {b} of {a}");
     }
 
     /// The drive's words and their values round trip.
@@ -1444,7 +1491,7 @@ mod tests {
             cut_word(60.0),
             comp_word(0.5),
             drive_word(0.6),
-            gate_word(-54.0),
+            ott_word(0.6),
             u16::MAX,
             comp_profile_word(1),
             drive_kind_word(1),

@@ -706,7 +706,7 @@ fn console_switch(ui: &mut Ui, r: Rect, on: bool, st: &ConsoleStyle) {
 }
 
 /// The Analog Channel Strip's console: the STRIP switch, then the Edition's four rows of section controls — low cut
-/// and gate, drive with its character's button, compressor (its profile cycles from the label, as the Edition's little
+/// and OTT, drive with its character's button, compressor (its profile cycles from the label, as the Edition's little
 /// triangle says) and TAME, and the de-esser. Every control writes a word of the track's strip, so the panel and the
 /// right-click menu change the same state (`crate::mixer::MCmd`).
 fn console_panel(ui: &mut Ui, s: &State, n: u16, r: Rect) {
@@ -732,11 +732,11 @@ fn console_panel(ui: &mut Ui, s: &State, n: u16, r: Rect) {
     let row = (body.h / 4.0).min(76.0);
     let at = |i: usize| Rect::new(body.x, body.y + row * i as f32, body.w, (row - 2.0).max(6.0));
 
-    // Low cut and gate.
+    // Low cut and OTT.
     let b = at(0);
     console_plate(ui, b, &st);
     console_label(ui, b, 0.0, 0.54, if wide { "LOW CUT" } else { "CUT" }, st.cut);
-    console_label(ui, b, 0.54, 0.46, "GATE", st.cut);
+    console_label(ui, b, 0.54, 0.46, "OTT", st.cut);
     console_knob(ui, s, b, 0.27, KnobId::Strip(n, 0), st.cut, values);
     console_knob(ui, s, b, 0.73, KnobId::Strip(n, 3), st.cut, values);
 
