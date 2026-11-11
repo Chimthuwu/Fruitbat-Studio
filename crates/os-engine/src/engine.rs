@@ -55,7 +55,7 @@ use channel::{Adjust, ChannelState, CtlEvent, CtlTo, stretched_frames};
 use jobs::{InstCx, InstLane, input, input_at, instrument_job, lock_busy};
 pub use live_edit::{LiveEdit, live_edits};
 pub use mix::{DeviceInput, input_channels};
-use mix::{DeviceIo, Fx, FxSlot, MixTrack, Route, mix_level, processing_order};
+use mix::{DeviceIo, Fx, FxSlot, MixTrack, Route, Strip, mix_level, processing_order};
 use render::{Lane, SINC_W, keyed_copy, mix_track, render_voice, render_voice_into};
 pub use sched::{swing_delay};
 use sched::{AutoClip, Sched, clip_audible, ctl_to, fallback_tone, param_points, point_level, schedule, schedule_controls};
@@ -499,6 +499,7 @@ impl Engine {
                         slots_enabled: m.slots_enabled,
                         threaded: m.threaded,
                         eq: os_dsp::mixer::TrackEq::new(m.eq, rate),
+                        strip: Strip::new(m.strip, m.strip_bypassed),
                         effects,
                         slot_on: m.slot_on,
                         slot_mix: m.slot_mix.map(mix_level),
@@ -6367,6 +6368,46 @@ mod tests {
             e.set_effect(1, 0, std::sync::Arc::new(std::sync::Mutex::new(Halve)));
         }
         e.render_all(512)
+    }
+
+    /// plan v3 §6.1: the strip runs before the insert slots. Insert 1's slot 0 clips at ±0.001 and the strip turns the
+    /// level up fourfold before it: strip first, the track stays within the clip's bound; the other way round, the
+    /// clip's output would be turned up fourfold.
+    #[test]
+    fn the_strip_runs_before_the_insert_slots() {
+        struct Clip;
+        impl crate::effects::Effect for Clip {
+            fn process(&mut self, buf: &mut [f32]) {
+                for s in buf.iter_mut() {
+                    *s = s.clamp(-0.001, 0.001);
+                }
+            }
+        }
+        let mut p = insert_project();
+        // Word 65535 is ×4 in the Milestone 0 mapping (`Strip::input_gain`).
+        p.mixer[1].strip = [65535, 0, 0, 0, 0, 0, 0];
+        p.mixer[1].strip_bypassed = false;
+        let mut lib = SampleLibrary::new(None);
+        let mut e = Engine::new(&p, &mut lib, 44100, PlayMode::Pattern(1));
+        e.tracks[1].effects = vec![super::mix::FxSlot::new(0, true, 12800, false, super::mix::Fx::Own(Box::new(Clip)))];
+        let out = e.render_all(512);
+        let peak = out.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
+        assert!(peak > 0.0 && peak <= 1.05e-3, "the clip is after the strip: {peak}");
+    }
+
+    /// plan v3 §6.3: a bypassed strip passes the track through sample for sample, whatever its control words hold.
+    #[test]
+    fn a_bypassed_strip_passes_the_track_through_exactly() {
+        let render = |p: &Project| {
+            let mut lib = SampleLibrary::new(None);
+            let mut e = Engine::new(p, &mut lib, 44100, PlayMode::Pattern(1));
+            e.render_all(512)
+        };
+        let plain = insert_project();
+        let mut set = plain.clone();
+        set.mixer[1].strip = [65535, 1234, 4321, 999, 7, 65, 32000];
+        assert!(set.mixer[1].strip_bypassed, "a strip is off until it is turned on");
+        assert_eq!(render(&plain), render(&set), "bypassed: bit for bit");
     }
 
     /// spec: ui/mixer.md §7: a slot's plugin processes its track; the LED bypasses it, the mix knob blends it.

@@ -1591,6 +1591,13 @@ pub struct MixerTrack {
     /// Per slot: enabled (the slot LED) and mix level 0..=1 (spec: ui/mixer.md §7).
     pub slot_on: [bool; 10],
     pub slot_mix: [f64; 10],
+    /// The Analog Channel Strip's seven control words (0..=65535) as stored: Lemon Studio's port of the Michael Lane
+    /// Edition strip (plan v3 Appendix C). All zero on a track that never used the strip. Word 0 is the temporary
+    /// Milestone 0 input gain (-12..+12 dB, 32768 = unity) until low cut takes it; words 1-6 are unused so far.
+    pub strip: [u16; 7],
+    /// The strip's bypass switch: `true` (the default) passes the track through untouched, and a track that never
+    /// turned the strip on stores nothing (`LSCS`, plan v3 §6.4).
+    pub strip_bypassed: bool,
     /// The three-band equaliser as stored, per band `[gain, frequency, width]`: gain -1800..=1800 in 0.01 dB,
     /// frequency and width 0..=65536 (spec: audio/mixer.md "Equaliser"). Band 1 low shelf, 2 peaking, 3 high shelf.
     pub eq: [[i32; 3]; 3],
@@ -1645,6 +1652,8 @@ impl PartialEq for MixerTrack {
             threaded,
             slot_on,
             slot_mix,
+            strip,
+            strip_bypassed,
             eq,
             latency_out,
             latency_in,
@@ -1675,6 +1684,8 @@ impl PartialEq for MixerTrack {
             && *threaded == o.threaded
             && *slot_on == o.slot_on
             && *slot_mix == o.slot_mix
+            && *strip == o.strip
+            && *strip_bypassed == o.strip_bypassed
             && *eq == o.eq
             && *latency_out == o.latency_out
             && *latency_in == o.latency_in
@@ -1718,6 +1729,8 @@ impl MixerTrack {
             pan: Some(0.0),
             stereo_separation: Some(0.0),
             polarity: false,
+            strip: [0; 7],
+            strip_bypassed: true,
             swap: false,
             slots_enabled: true,
             separator: false,

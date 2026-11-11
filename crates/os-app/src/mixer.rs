@@ -80,6 +80,12 @@ pub enum MCmd {
     Reset(u16),
     ResetRouting(u16),
     UnrouteTo(u16),
+    /// The routing arrow's Quick Sidechain (`crate::quick_sidechain`): a keyed Lemon Limiter in `dst`.
+    QuickSidechain(u16),
+    /// The Analog Channel Strip's switch on track `.0` (`MixerTrack::strip_bypassed`) and its input gain in dB
+    /// (`MixerTrack::strip[0]`; plan v3 Milestone 0).
+    StripBypass(u16),
+    StripInput(u16, i8),
     Solo(u16),
     /// Solo with the tracks routed into it too (spec: ui/mixer-track-commands.md §5).
     AltSolo(u16),
@@ -980,13 +986,18 @@ pub fn right(app: &mut App, h: MHit) -> bool {
         MHit::Add => s.playlist.popup = Some(track_menu(s, s.selected_mixer, at.0, at.1)),
         MHit::Led(n) => solo(s, n),
         MHit::Route(dst) => {
-            let items = vec![
+            let mut items = vec![
                 PItem::new("Route to this track", Cmd::Mixer(MCmd::Route { dst, only: false, side: false })),
                 PItem::new("Route to this track only", Cmd::Mixer(MCmd::Route { dst, only: true, side: false })),
                 PItem::sep(),
                 PItem::new("Sidechain to this track", Cmd::Mixer(MCmd::Route { dst, only: false, side: true })),
                 PItem::new("Sidechain to this track only", Cmd::Mixer(MCmd::Route { dst, only: true, side: true })),
             ];
+            // Quick Sidechain is opt-in (Settings ▸ Miscellaneous ▸ Quick Sidechain in the mixer).
+            if crate::prefs::check(&crate::prefs::QUICK_SIDECHAIN) {
+                items.push(PItem::sep());
+                items.push(PItem::new("Quick Sidechain", Cmd::Mixer(MCmd::QuickSidechain(dst))));
+            }
             s.playlist.popup = Some(Popup { x: at.0, y: at.1, items, sub: None, scroll: [0; 2] });
         }
         // The slot's plugin menu, like a left click (spec: ui/plugin-menu.md §1).
@@ -1245,6 +1256,23 @@ pub fn route_free(s: &mut State, rows: &[usize]) -> Option<String> {
     } else {
         format!("Routed {} channels to free tracks", rows.len())
     })
+}
+
+/// Sends channel row `row` to mixer track `dst` (the miniature routing picker, `crate::route_picker`): one undo step,
+/// the track named and coloured after the channel as Channel routing ▸ does (spec: ui/mixer-track-commands.md §2).
+pub fn route_channel(s: &mut State, row: usize, dst: u16) -> Option<String> {
+    if s.project.channels.get(row)?.mixer_track == dst {
+        return Some(format!("{} already goes to {}", crate::rack::channel_name(s, row), name(s, dst)));
+    }
+    crate::control::edit(s, ROUTING, Region::Channel(row), |s| {
+        if let Some(c) = s.project.channels.get_mut(row) {
+            c.mixer_track = dst;
+        }
+        name_after(s, dst, row);
+        changed(s);
+    });
+    s.selected_mixer = dst;
+    Some(format!("Routed {} to {}", crate::rack::channel_name(s, row), name(s, dst)))
 }
 
 /// Select ▸ Tracks this one is routed to / Tracks routed to this one (spec: ui/mixer-track-commands.md §3), for every
@@ -1661,7 +1689,22 @@ fn track_items(s: &State, n: u16) -> Vec<PItem> {
         PItem::sub("Insert from state", state_items(|p| mx(MCmd::InsertState(n, p)))),
         PItem::head("CPU"),
         PItem::new("Allow threaded processing", mx(MCmd::Threaded(n))).mark(Mark::Check(t.is_none_or(|m| m.threaded))),
+        PItem::sep(),
+        PItem::head("Analog Channel Strip"),
+        PItem::new("Analog strip", mx(MCmd::StripBypass(n))).mark(Mark::Check(t.is_some_and(|m| !m.strip_bypassed))),
+        PItem::sub(
+            "Input gain",
+            [0i8, 3, 6, 9, 12]
+                .into_iter()
+                .map(|db| PItem::new(format!("{db:+} dB"), mx(MCmd::StripInput(n, db))).mark(Mark::Radio(strip_input(t) == db)))
+                .collect(),
+        ),
     ]
+}
+
+/// A strip's input gain in dB from control word 0 (the Milestone 0 mapping: 0 at word 0, +12 dB at 65535).
+fn strip_input(t: Option<&os_model::MixerTrack>) -> i8 {
+    t.map_or(0, |m| (f32::from(m.strip[0]) / 65535.0 * 12.0).round() as i8)
 }
 
 /// The saved mixer track states, one entry each running `cmd` with its file; a greyed "(no saved states)" without any.
@@ -1927,6 +1970,15 @@ pub fn run(app: &mut App, c: MCmd) -> Option<String> {
         return crate::control::edit_app(app, name, Region::Project, |app| run_now(app, c));
     }
     // A slot's sidechain input is the track's own (its slot's saved state).
+    // Quick Sidechain changes the destination's chain and the source's routing in one undo step.
+    // The Analog Channel Strip is the track's own state: one undo step on that track (plan v3 Milestone 0).
+    if let MCmd::StripBypass(t) | MCmd::StripInput(t, _) = &c {
+        let t = *t;
+        return crate::control::edit_app(app, "Analog channel strip", Region::Track(t), |app| run_now(app, c));
+    }
+    if let MCmd::QuickSidechain(dst) = c {
+        return crate::quick_sidechain::run(app, dst);
+    }
     if let MCmd::SlotSidechain(..) = c {
         let t = app.state.selected_mixer;
         return crate::control::edit_app(app, "Sidechain input", Region::Track(t), |app| run_now(app, c));
@@ -1938,6 +1990,7 @@ fn run_now(app: &mut App, c: MCmd) -> Option<String> {
     let at = app.mouse;
     let s = &mut app.state;
     let msg = match c {
+        MCmd::QuickSidechain(dst) => crate::quick_sidechain::run(app, dst),
         MCmd::Rename(n) => {
             start_rename(s, n, at);
             None
@@ -2083,6 +2136,21 @@ fn run_now(app: &mut App, c: MCmd) -> Option<String> {
             let Some(g) = group(s, n) else { return Some("Not in a group".into()) };
             s.selected_mixer = n;
             s.mixer.sel = g.collect();
+            None
+        }
+        MCmd::StripBypass(n) => {
+            if let Some(t) = track_mut(s, n) {
+                t.strip_bypassed = !t.strip_bypassed;
+                changed(s);
+            }
+            None
+        }
+        MCmd::StripInput(n, db) => {
+            if let Some(t) = track_mut(s, n) {
+                t.strip[0] = (f32::from(db.max(0)) / 12.0 * 65535.0).round().clamp(0.0, 65535.0) as u16;
+                t.strip_bypassed = false;
+                changed(s);
+            }
             None
         }
         MCmd::Dock(n, d) => {
@@ -3715,6 +3783,39 @@ mod tests {
         assert_eq!(a.state.history.at(), steps + 1);
         crate::history::undo(&mut a.state);
         assert_eq!(col(&a, 4), None);
+    }
+
+    /// plan v3 Milestone 0: the Analog Channel Strip's switch and input gain are the track's own state, one undo step
+    /// each, through the same `Region::Track` snapshot the fader uses.
+    #[test]
+    fn the_analog_strip_is_one_undo_step() {
+        let mut a = app();
+        // Undo puts a track back by its identity (`track_place`): a loaded project's tracks have their own.
+        for m in &mut a.state.project.mixer {
+            m.id = os_model::Id(u32::from(m.index) + 1);
+        }
+        let t = |a: &App| track(&a.state, 2).unwrap().clone();
+        assert!(t(&a).strip_bypassed, "a track starts with the strip off");
+        assert_eq!(t(&a).strip, [0; 7]);
+        let steps = a.state.history.at();
+        run(&mut a, MCmd::StripBypass(2));
+        assert!(!t(&a).strip_bypassed);
+        assert_eq!(a.state.history.at(), steps + 1);
+        crate::history::undo(&mut a.state);
+        assert!(t(&a).strip_bypassed, "the switch is back off");
+        crate::history::redo(&mut a.state);
+        assert!(!t(&a).strip_bypassed);
+        // +6 dB is word 32768 (the Milestone 0 mapping: 0 at word 0, +12 dB at 65535).
+        run(&mut a, MCmd::StripInput(2, 6));
+        assert_eq!(t(&a).strip[0], 32768);
+        assert!(!t(&a).strip_bypassed);
+        assert_eq!(a.state.history.at(), steps + 2);
+        crate::history::undo(&mut a.state);
+        assert_eq!(t(&a).strip[0], 0);
+        // The track menu offers both, ticked from the track's state.
+        let items = track_items(&a.state, 2);
+        let on = items.iter().find(|i| i.label == "Analog strip").unwrap();
+        assert!(matches!(on.mark, Mark::Check(true)));
     }
 
     /// File ▸ Save mixer track state writes the track's state under its name; Open mixer track state ▸ puts it on another

@@ -912,6 +912,7 @@ pub fn load(file: &FlpFile) -> Result<Project, ProjectError> {
         }
     }
     p.mixer = load_mixer(events, &l, enc);
+    read_strip(file, &mut p.mixer);
     Ok(p)
 }
 
@@ -3607,6 +3608,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
             }
         }
     }
+    store_strip(project, file);
     Ok(())
 }
 
@@ -4126,13 +4128,15 @@ pub fn create(project: &Project) -> Result<FlpFile, ProjectError> {
     header.extend(0u16.to_le_bytes()); // format
     header.extend((project.channels.len() as u16).to_le_bytes());
     header.extend(project.ppq.max(1).to_le_bytes());
-    Ok(FlpFile {
+    let mut file = FlpFile {
         chunks: vec![
             Chunk { tag: Tag::HEADER, body: ChunkBody::Header(Header { raw: header }) },
             Chunk { tag: Tag::DATA, body: ChunkBody::Events(ev) },
         ],
         trailing: Vec::new(),
-    })
+    };
+    store_strip(project, &mut file);
+    Ok(file)
 }
 
 /// Number of playlist tracks an arrangement stores (spec: flp/events/playlist.md).
@@ -4316,6 +4320,83 @@ pub fn default_arrangement() -> Arrangement {
 
 /// What `apply` cannot store in `file` yet: the mixer and playlist of a project made by [`create`] (their file
 /// has none). Empty when nothing would be lost.
+/// The Analog Channel Strip's chunk: the seven control words of every track whose strip is not at its default, and
+/// the bypass switch (Lemon Studio's port of the Michael Lane Edition strip; plan v3 §6.4). Version 4 is the first one
+/// Lemon Studio writes: the fork's versions 5 and 6 add SnapTune's four words, which this port does not have.
+const STRIP_TAG: [u8; 4] = *b"LSCS";
+const STRIP_VERSION: u8 = 4;
+
+/// The strip chunk's payload, or `None` when no track has strip state: payload version, count, then per track its
+/// index, seven words and the bypass flag.
+fn strip_payload(project: &Project) -> Option<Vec<u8>> {
+    let tracks: Vec<&MixerTrack> = project.mixer.iter().filter(|m| m.strip != [0; 7] || !m.strip_bypassed).collect();
+    if tracks.is_empty() {
+        return None;
+    }
+    let mut out = vec![STRIP_VERSION];
+    out.extend_from_slice(&(tracks.len() as u16).to_le_bytes());
+    for m in tracks {
+        out.extend_from_slice(&m.index.to_le_bytes());
+        for w in m.strip {
+            out.extend_from_slice(&w.to_le_bytes());
+        }
+        out.push(u8::from(m.strip_bypassed));
+    }
+    Some(out)
+}
+
+/// Writes the project's strip state into `file`, or removes the chunk when no track has any. A chunk written by
+/// another build (a fork's version 5 or 6, with SnapTune's words) is left as it is: its state is not this build's.
+fn store_strip(project: &Project, file: &mut FlpFile) {
+    use crate::container::{Chunk, ChunkBody, Tag};
+    let at = file.chunks.iter().position(|c| c.tag.0 == STRIP_TAG);
+    if let Some(i) = at {
+        let ours = matches!(&file.chunks[i].body, ChunkBody::Raw(d) if d.first() == Some(&STRIP_VERSION));
+        if !ours {
+            return;
+        }
+    }
+    match (strip_payload(project), at) {
+        (Some(data), Some(i)) => file.chunks[i].body = ChunkBody::Raw(data),
+        (Some(data), None) => file.chunks.push(Chunk { tag: Tag(STRIP_TAG), body: ChunkBody::Raw(data) }),
+        (None, Some(i)) => {
+            file.chunks.remove(i);
+        }
+        (None, None) => {}
+    }
+}
+
+/// Puts a file's strip state on its mixer tracks; a track without a record keeps the defaults, and a payload of a
+/// version this build does not write leaves every track as it is.
+fn read_strip(file: &FlpFile, mixer: &mut [MixerTrack]) {
+    use crate::container::ChunkBody;
+    let Some(data) = file.chunks.iter().find(|c| c.tag.0 == STRIP_TAG).and_then(|c| match &c.body {
+        ChunkBody::Raw(d) => Some(d.as_slice()),
+        _ => None,
+    }) else {
+        return;
+    };
+    if data.len() < 3 || data[0] != STRIP_VERSION {
+        return;
+    }
+    let n = usize::from(u16::from_le_bytes([data[1], data[2]]));
+    let mut at = 3;
+    for _ in 0..n {
+        let Some(head) = data.get(at..at + 17) else { return };
+        let index = u16::from_le_bytes([head[0], head[1]]);
+        let mut words = [0u16; 7];
+        for (k, w) in words.iter_mut().enumerate() {
+            *w = u16::from_le_bytes([head[2 + 2 * k], head[3 + 2 * k]]);
+        }
+        let bypassed = head[16] & 1 != 0;
+        at += 17;
+        if let Some(m) = mixer.iter_mut().find(|m| m.index == index) {
+            m.strip = words;
+            m.strip_bypassed = bypassed;
+        }
+    }
+}
+
 pub fn unsaved_parts(project: &Project, file: &FlpFile) -> Vec<&'static str> {
     let Ok(current) = load(file) else { return Vec::new() };
     let mut parts = Vec::new();
@@ -6111,6 +6192,57 @@ mod tests {
         assert!(unsaved_parts(&p, &file).is_empty());
     }
 
+
+    /// plan v3 §6.4: the strip is stored in its own chunk, only for tracks that changed it, through both writers
+    /// (`create` for a new file, `apply` in place).
+    #[test]
+    fn the_strip_is_stored_only_for_tracks_that_set_it() {
+        use os_model::MixerTrack;
+        let mut p = new_project();
+        p.mixer = (0..3).map(MixerTrack::new).collect();
+        p.arrangements.push(default_arrangement());
+        let bare = create(&p).unwrap();
+        assert!(!bare.chunks.iter().any(|c| c.tag.0 == *b"LSCS"), "a default project stores no strip chunk");
+
+        p.mixer[1].strip = [1234, 2, 3, 4, 5, 6, 7];
+        p.mixer[1].strip_bypassed = false;
+        let file = create(&p).unwrap();
+        assert!(file.chunks.iter().any(|c| c.tag.0 == *b"LSCS"));
+        let back = load(&FlpFile::parse(&file.to_bytes().unwrap()).unwrap()).unwrap();
+        assert_eq!(back.mixer[1].strip, [1234, 2, 3, 4, 5, 6, 7]);
+        assert!(!back.mixer[1].strip_bypassed);
+        assert_eq!(back.mixer[2].strip, [0; 7]);
+        assert!(back.mixer[2].strip_bypassed);
+
+        // In place (`apply`): the chunk follows the state, and goes when no track has any.
+        let mut f = create(&p).unwrap();
+        p.mixer[1].strip = [9, 0, 0, 0, 0, 0, 0];
+        apply(&p, &mut f).unwrap();
+        let back = load(&FlpFile::parse(&f.to_bytes().unwrap()).unwrap()).unwrap();
+        assert_eq!(back.mixer[1].strip[0], 9);
+        p.mixer[1].strip = [0; 7];
+        p.mixer[1].strip_bypassed = true;
+        apply(&p, &mut f).unwrap();
+        assert!(!f.chunks.iter().any(|c| c.tag.0 == *b"LSCS"), "no strip state: the chunk goes");
+    }
+
+    /// plan v3 §6.4: a chunk this build does not know survives load and save, with the strip chunk beside it.
+    #[test]
+    fn an_unknown_chunk_survives_the_writers() {
+        use crate::container::{Chunk, ChunkBody, Tag};
+        use os_model::MixerTrack;
+        let mut p = new_project();
+        p.mixer = (0..3).map(MixerTrack::new).collect();
+        p.arrangements.push(default_arrangement());
+        p.mixer[1].strip = [1, 0, 0, 0, 0, 0, 0];
+        let mut f = create(&p).unwrap();
+        f.chunks.push(Chunk { tag: Tag(*b"ZZZZ"), body: ChunkBody::Raw(vec![1, 2, 3, 4]) });
+        apply(&p, &mut f).unwrap();
+        let back = FlpFile::parse(&f.to_bytes().unwrap()).unwrap();
+        let got = back.chunks.iter().find(|c| c.tag.0 == *b"ZZZZ").map(|c| c.body.clone());
+        assert_eq!(got, Some(ChunkBody::Raw(vec![1, 2, 3, 4])));
+        assert_eq!(load(&back).unwrap().mixer[1].strip[0], 1, "the strip came through too");
+    }
 
     /// Mute (byte 19 bit 0x20), colour group, slide flag and unknown bytes survive a note edit
     /// (spec: flp/events/patterns.md, note flags).
