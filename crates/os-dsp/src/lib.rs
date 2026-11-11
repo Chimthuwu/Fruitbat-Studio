@@ -26,6 +26,7 @@ pub mod articulator;
 pub mod channel_filter;
 pub mod curve;
 pub mod glide;
+pub mod glitch;
 pub mod level;
 pub mod mixer;
 pub mod num;
