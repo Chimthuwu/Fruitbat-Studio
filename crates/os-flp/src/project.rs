@@ -4369,7 +4369,7 @@ fn store_strip(project: &Project, file: &mut FlpFile) {
 }
 
 /// Puts a file's strip state on its mixer tracks; a track without a record keeps the defaults, and a payload of a
-/// version this build does not write leaves every track as it is.
+/// version this build does not read (a fork's 5 or 6) leaves every track as it is.
 fn read_strip(file: &FlpFile, mixer: &mut [MixerTrack]) {
     use crate::container::ChunkBody;
     let Some(data) = file.chunks.iter().find(|c| c.tag.0 == STRIP_TAG).and_then(|c| match &c.body {
@@ -6220,7 +6220,7 @@ mod tests {
         let back = load(&FlpFile::parse(&file.to_bytes().unwrap()).unwrap()).unwrap();
         assert_eq!(back.mixer[1].strip, [1234, 2, 3, 4, 5, 6, 7, 8]);
         assert!(!back.mixer[1].strip_bypassed);
-        assert_eq!(back.mixer[2].strip, [0; 7]);
+        assert_eq!(back.mixer[2].strip, [0; 8]);
         assert!(back.mixer[2].strip_bypassed);
 
         // In place (`apply`): the chunk follows the state, and goes when no track has any.
