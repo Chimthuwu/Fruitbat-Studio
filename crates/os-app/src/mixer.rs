@@ -635,8 +635,16 @@ pub fn hit(app: &mut App, h: MHit) -> Option<String> {
         }
         MHit::Led(n) => {
             select(s, n, ctrl);
-            let m = track_mut(s, n)?;
-            m.enabled = !m.enabled;
+            let on = {
+                let m = track_mut(s, n)?;
+                m.enabled = !m.enabled;
+                m.enabled
+            };
+            // The track that names this strip has its playlist lane muted with it (one hardwired mute, two windows).
+            let lane = s.project.tracks.iter().find(|t| t.mixer_strip == n && t.playlist_lane > 0).map(|t| t.playlist_lane as u16);
+            if let Some(lane) = lane {
+                crate::playlist::set_lane_enabled(s, lane - 1, on);
+            }
             changed(s);
             None
         }

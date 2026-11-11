@@ -1167,6 +1167,12 @@ pub fn set_track_color(s: &mut State, t: u16, color: Option<os_model::Rgb>) {
 /// Whether track `lane` is unmuted (its arrangement `enabled` flag is on). The launcher's header LED reads it so the
 /// two views share one mute state (§6).
 pub fn track_enabled(s: &State, lane: u16) -> bool {
+    // A lane whose track names a mixer strip reads the strip's mute: the strip is what plays the track (see
+    // [`set_lane_enabled`]), and the mixer can mute it from its own LED.
+    let strip = crate::track_links::lane_track(s, lane).map(|tr| tr.mixer_strip);
+    if let Some(m) = strip.and_then(|n| s.project.mixer.iter().find(|m| m.index == n)) {
+        return m.enabled;
+    }
     s.project.arrangement().map_or(true, |a| a.tracks.get(usize::from(lane)).map_or(true, |t| t.enabled))
 }
 
@@ -1294,7 +1300,8 @@ pub fn track_info(s: &State, t: u16) -> Option<&PlaylistTrack> {
 }
 
 pub fn track_on(s: &State, t: u16) -> bool {
-    track_info(s, t).is_none_or(|t| t.enabled)
+    // The same mute the header's LED shows (`track_enabled`), so clips dim and stay silent when the strip is muted.
+    track_enabled(s, t)
 }
 
 pub fn track_name(s: &State, t: u16) -> String {
@@ -2407,9 +2414,22 @@ pub fn ungroup_selected_tracks(s: &mut State) -> usize {
 /// mixer: unmuting a second track after a solo leaves both on.
 pub fn toggle_track(s: &mut State, t: u16) {
     s.playlist.solo = None;
-    let arr = arr_mut(s);
-    if let Some(tr) = arr.tracks.get_mut(usize::from(t)) {
-        tr.enabled = !tr.enabled;
+    let on = !track_enabled(s, t);
+    set_lane_enabled(s, t, on);
+}
+
+/// Mutes / unmutes playlist track `t`, and with it the mixer strip its track names: an audio or instrument track's
+/// lane is hardwired to the strip that plays it (a Bitwig-style workflow), so the lane's mute and the channel's mute
+/// are one state seen in two windows. A lane whose track names no strip (a plain pattern lane) keeps the arrangement's
+/// own flag.
+pub fn set_lane_enabled(s: &mut State, t: u16, on: bool) {
+    if let Some(tr) = arr_mut(s).tracks.get_mut(usize::from(t)) {
+        tr.enabled = on;
+    }
+    // Only a lane in Linear mode has a Track, and only a track with a mixer strip has a channel to mute.
+    let strip = crate::track_links::lane_track(s, t).map(|tr| tr.mixer_strip);
+    if let Some(m) = strip.and_then(|n| s.project.mixer.iter_mut().find(|m| m.index == n)) {
+        m.enabled = on;
     }
     s.piano.dirty = true;
 }
@@ -2423,13 +2443,12 @@ pub fn toggle_solo(s: &mut State, t: u16) {
             return;
         }
     }
-    let arr = arr_mut(s);
-    let states: Vec<bool> = arr.tracks.iter().map(|t| t.enabled).collect();
-    for (k, tr) in arr.tracks.iter_mut().enumerate() {
-        tr.enabled = k == usize::from(t);
+    let states: Vec<bool> = arr_mut(s).tracks.iter().map(|tr| tr.enabled).collect();
+    // Solo mutes every other lane, and with each lane its strip (hardwired), so the mixer follows the playlist.
+    for k in 0..states.len() {
+        set_lane_enabled(s, k as u16, k == usize::from(t));
     }
     s.playlist.solo = Some((t, states));
-    s.piano.dirty = true;
 }
 
 /// Unsolo: every track on, or, with "Restore previous state after solo" on, the states from before the solo (spec:
@@ -2437,11 +2456,10 @@ pub fn toggle_solo(s: &mut State, t: u16) {
 fn end_solo(s: &mut State) {
     if let Some((_, states)) = s.playlist.solo.take() {
         let back = crate::prefs::check(&crate::prefs::RESTORE_AFTER_SOLO);
-        let arr = arr_mut(s);
-        for (k, tr) in arr.tracks.iter_mut().enumerate() {
-            tr.enabled = !back || states.get(k).copied().unwrap_or(tr.enabled);
+        for k in 0..arr_mut(s).tracks.len() {
+            let now = track_enabled(s, k as u16);
+            set_lane_enabled(s, k as u16, !back || states.get(k).copied().unwrap_or(now));
         }
-        s.piano.dirty = true;
     }
 }
 
@@ -6100,6 +6118,28 @@ mod tests {
         assert!(!app.state.project.tracks.iter().any(|t| t.playlist_lane == 3), "the copy's track went");
         assert!(track_info(&app.state, 2).is_some_and(|t| t.name.is_none()), "the lane went too");
         assert!(app.state.project.tracks.iter().any(|t| t.playlist_lane == 2), "the source's track stayed");
+    }
+
+    /// A lane whose track names a mixer strip shares that strip's mute: the playlist's LED mutes the channel, and the
+    /// mixer's LED mutes the lane (one hardwired mute, a Bitwig-style workflow).
+    #[test]
+    fn a_linear_tracks_mute_is_its_mixer_strips() {
+        let mut app = app();
+        app.state.project.linear_mode = true;
+        // A MIDI track naming lane 1 (`playlist_lane` is 1-based), on mixer strip 5.
+        app.state.project.tracks.push(os_model::Track::new(os_model::TrackKind::Midi, 1, 5, Some(1)));
+        let strip = |app: &App| crate::mixer::track(&app.state, 5).map(|m| m.enabled);
+        assert_eq!(strip(&app), Some(true), "the strip starts on");
+        // The playlist's LED mutes the channel.
+        toggle_track(&mut app.state, 0);
+        assert!(!track_enabled(&app.state, 0), "the lane reads muted");
+        assert_eq!(strip(&app), Some(false), "and so does its mixer strip");
+        assert!(!track_on(&app.state, 0), "its clips dim and stay silent");
+        // The mixer's LED mutes the lane.
+        crate::mixer::hit(&mut app, crate::mixer::MHit::Led(5));
+        assert_eq!(strip(&app), Some(true), "the channel is back on");
+        assert!(track_enabled(&app.state, 0), "and the lane follows");
+        assert!(track_on(&app.state, 0));
     }
 
     /// Delete while a Shift+click range of lanes is open takes the selected tracks and their clips away, bottom up in
