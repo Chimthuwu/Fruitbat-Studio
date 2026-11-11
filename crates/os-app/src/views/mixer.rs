@@ -555,7 +555,7 @@ fn meter_bar(ui: &mut Ui, x: f32, w: f32, bottom: f32, db: f32, hold: f32, cfg: 
 /// own window when it holds one, the palette when it is empty (the Michael Lane Edition's column). The rows share the
 /// room they are given, so all ten slots stay legible down to the mute / pan row.
 fn plugin_list(ui: &mut Ui, s: &State, n: u16, r: Rect) {
-    let rh = (r.h / 10.0).clamp(19.0, 30.0);
+    let rh = (r.h / 10.0).clamp(19.0, 60.0);
     let rows = ((r.h / rh).round() as usize).clamp(1, 10);
     for i in 0..rows {
         let k = i as u8;
@@ -891,7 +891,7 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
         // the list used to be.
         if extra {
             if v2 {
-                let m = Rect::new(left + 58.0, ly.y(PANEL_Y0) + 4.0, 16.0, (ly.y(METER_Y1) - ly.y(PANEL_Y0) - 8.0).max(24.0));
+                let m = Rect::new(left + 57.0, ly.y(PANEL_Y0) + 4.0, 16.0, (ly.y(METER_Y1) - ly.y(PANEL_Y0) - 8.0).max(24.0));
                 meter_body(ui, s, n, m, lemon, Some(ly));
             } else {
                 let top = ly.y(TRACK_Y0);
@@ -929,13 +929,17 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
     // beside the console, down to the mute / pan row; V2 drops it into the room beside the fader, which frees the
     // console's side for the meter.
     if extra {
+        // Extra large fills the strip's right column from the top. V2 keeps the level beside the console's knobs and
+        // gives the plugin list the room beside it — its old slot, under the meter, left most of that column empty —
+        // while plain Extra large gives the list the whole column and the level a lane beside the fader.
         let (top, h) = if v2 {
-            (ly.y(TRACK_Y0), (track_y1 - ly.y(TRACK_Y0)).max(19.0))
+            (ly.y(PANEL_Y0) + 4.0, (track_y1 - ly.y(PANEL_Y0) - 4.0).max(19.0))
         } else {
             let top = ly.y(PANEL_Y0) + 4.0;
             (top, (ly.y(LED_Y) - 12.0 - top).max(19.0))
         };
-        plugin_list(ui, s, n, Rect::new(left + 57.0, top, (w - 61.0).max(20.0), h));
+        let (x, width) = if v2 { (left + 76.0, w - 80.0) } else { (left + 57.0, w - 61.0) };
+        plugin_list(ui, s, n, Rect::new(x, top, width.max(20.0), h));
     }
 
     let enabled = track.is_none_or(|m| m.enabled);
@@ -1407,24 +1411,29 @@ mod tests {
         }
     }
 
-    /// The two Extra large layouts share their columns, but V2 drops the plugin list down beside the fader, which frees
-    /// the console's side for the level meter; Extra large keeps the list up beside the console.
+    /// The two Extra large layouts share their columns and both keep the plugin list up beside the console. V2 puts the
+    /// level meter in the strip's right column with the list beside it, using that column's whole height; Extra large
+    /// gives the list the whole column and the meter a lane beside the fader.
     #[test]
-    fn extra_large_v2_puts_the_slots_beside_the_fader() {
+    fn extra_large_v2_uses_its_right_column_down_the_strip() {
         let mut app = app();
         let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
         let ws = &mut app.state.wins[crate::app::Win::Mixer.slot().unwrap()];
         (ws.maxed, ws.rect) = (false, os_ui::Rect::new(100.0, 83.0, 1400.0, 900.0));
         app.state.z = vec![crate::app::Win::Mixer];
-        let slot = |app: &App| app.hits.iter().find(|h| h.action == Action::Mix(MHit::TrackSlot(2, 0))).map(|h| h.rect);
+        let rect = |app: &App, a: Action| app.hits.iter().find(|h| h.action == a).map(|h| h.rect);
+        let slot = |app: &App| rect(app, Action::Mix(MHit::TrackSlot(2, 0)));
+        let meter = |app: &App| rect(app, Action::Mix(MHit::Meter(2)));
         app.state.mixer.layout = crate::mixer::EXTRA_LARGE;
         app.paint(&mut c, None);
-        let up = slot(&app).expect("Extra large's first slot");
+        let (up, up_meter) = (slot(&app).expect("Extra large's first slot"), meter(&app).expect("its meter"));
         app.state.mixer.layout = crate::mixer::EXTRA_LARGE_V2;
         app.paint(&mut c, None);
-        let down = slot(&app).expect("V2's first slot");
-        assert!(down.y > up.bottom() + 200.0, "V2 drops the list below the console: {up:?} {down:?}");
-        assert!(down.y > 400.0, "and down beside the fader: {down:?}");
+        let (down, down_meter) = (slot(&app).expect("V2's first slot"), meter(&app).expect("its meter"));
+        assert!(down.y < up.y + 20.0, "V2 keeps the list up beside the console: {up:?} {down:?}");
+        assert!(down_meter.x < down.x, "V2's list sits beside its meter: {down_meter:?} {down:?}");
+        assert!(down_meter.y < up_meter.y, "V2's meter is up beside the console's knobs: {down_meter:?} {up_meter:?}");
+        assert!(up_meter.y > 400.0, "Extra large keeps its meter down by the fader: {up_meter:?}");
     }
 
     /// Classic mode's strips: in index order, as always — the view ordering and the docks are unchanged.
