@@ -1137,6 +1137,9 @@ pub struct State {
     pub device_rack_float: std::collections::BTreeSet<usize>,
     pub device_rack_menu: Option<usize>,
     pub device_rack_split_click: Option<std::time::Instant>,
+    /// The last press on a tile header's channel knob (its row, which knob, and when): a second press on the same one
+    /// inside the double-click window resets it.
+    pub device_rack_knob_click: Option<(usize, ChannelControl, std::time::Instant)>,
     /// Live controls of the rack's devices, by plugin-window key (refreshed by `device_rack::sync_embed`): what a
     /// tile draws in its body — the plugin's own parameters, names, sections and value texts.
     pub device_rack_params: std::collections::BTreeMap<usize, Vec<crate::device_rack::RackParam>>,
@@ -1629,6 +1632,7 @@ impl App {
                 device_rack_float: Default::default(),
                 device_rack_menu: None,
                 device_rack_split_click: None,
+                device_rack_knob_click: None,
                 device_rack_params: Default::default(),
                 device_rack_tile_scroll: Default::default(),
                 device_rack_names: Default::default(),
@@ -6255,9 +6259,11 @@ impl App {
                     crate::device_rack::set_param_value(self, key, id, v);
                 }
                 Drag::RackStrip { row, which, y0, v0 } => {
-                    // The strip's knobs: the same 0.005 of the range per px as a tile's dials.
+                    // A header knob: the same 0.005 of the range per px as a tile's dials, and a redraw every move so
+                    // the knob turns under the pointer (the channel edit alone asks for no paint).
                     let v = (v0 - (y - y0) as f64 * 0.005).clamp(0.0, 1.0);
                     crate::device_rack::set_channel_knob(self, row, which, v);
+                    self.invalidate();
                 }
                 Drag::DeviceRackTile { .. } => {
                     // While the tile drags, the gap it would drop at follows the pointer (the highlight).

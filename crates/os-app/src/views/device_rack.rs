@@ -481,7 +481,7 @@ fn container_body(ui: &mut Ui, s: &State, body: Rect, t: u16, k: u8) {
 /// down sets it through the channel's undo-aware path. Each knob carries its own word (VOL, PAN) or its value (the
 /// pitch's semitones) in its own colour, so the row needs no caption. Those words and colours are a stopgap — user-set
 /// labels and colours are on `todo.md`.
-pub(crate) const KNOB_STEP: f32 = 24.0;
+pub(crate) const KNOB_STEP: f32 = 34.0;
 
 fn channel_knobs(ui: &mut Ui, s: &State, row: usize, left: f32, cy: f32) {
     let Some(ch) = s.project.channels.get(row) else { return };
@@ -490,9 +490,9 @@ fn channel_knobs(ui: &mut Ui, s: &State, row: usize, left: f32, cy: f32) {
     let semi = (ch.pitch_cents as f32 / 100.0).round() as i32;
     let pitch_text = if semi > 0 { format!("+{semi}") } else { semi.to_string() };
     let knobs = [
-        ("VOL", ChannelControl::Volume, ch.volume, false, 0x9ed44a, 7.0),
-        ("PAN", ChannelControl::Pan, (ch.pan + 1.0) * 0.5, true, 0x54a6e8, 7.0),
-        ("PITCH", ChannelControl::Pitch, pitch, true, 0xe0a040, 8.0),
+        ("VOL", ChannelControl::Volume, ch.volume, false, 0x9ed44a, 8.5),
+        ("PAN", ChannelControl::Pan, (ch.pan + 1.0) * 0.5, true, 0x54a6e8, 8.5),
+        ("PITCH", ChannelControl::Pitch, pitch, true, 0xe0a040, 9.5),
     ];
     for (i, (label, which, v, bipolar, accent, font)) in knobs.into_iter().enumerate() {
         // The pitch knob is a numbered dial: its face shows the semitones rather than a word that would not fit.
@@ -501,9 +501,9 @@ fn channel_knobs(ui: &mut Ui, s: &State, row: usize, left: f32, cy: f32) {
         let hov = ui.hit(
             cell,
             Action::DeviceRack(RackAct::ChannelKnob { row, which, v }),
-            format!("{label}: drag up / down to set it"),
+            format!("{label}: drag up / down to set it, double click to reset it"),
         );
-        header_knob(ui, cell.cx(), cy, 9.5, v.clamp(0.0, 1.0) as f32, bipolar, Color::rgb(accent), &text, font, hov);
+        header_knob(ui, cell.cx(), cy, 13.0, v.clamp(0.0, 1.0) as f32, bipolar, Color::rgb(accent), &text, font, hov);
     }
 }
 
@@ -523,14 +523,14 @@ fn header_knob(
 ) {
     let t = ui.t;
     let (start, sweep) = (0.75 * std::f32::consts::PI, 1.5 * std::f32::consts::PI);
-    ui.c.arc(cx, cy, r, start, sweep, 1.8, t.s(0x2a2f31));
+    ui.c.arc(cx, cy, r, start, sweep, 2.4, t.s(0x2a2f31));
     let a = start + sweep * v.clamp(0.0, 1.0);
     let a0 = if bipolar { start + sweep / 2.0 } else { start };
     if (a - a0).abs() > 0.01 {
-        ui.c.arc(cx, cy, r, a0.min(a), (a - a0).abs(), 1.8, accent);
+        ui.c.arc(cx, cy, r, a0.min(a), (a - a0).abs(), 2.4, accent);
     }
-    ui.c.fill_circle(cx, cy, r - 2.6, if hov { t.s(0x2b3134) } else { t.s(0x1b1f21) });
-    ui.c.text_center(fnt(font), Rect::new(cx - r, cy - 5.0, 2.0 * r, 10.0), accent, text);
+    ui.c.fill_circle(cx, cy, r - 3.2, if hov { t.s(0x2b3134) } else { t.s(0x1b1f21) });
+    ui.c.text_center(fnt(font), Rect::new(cx - r, cy - 6.0, 2.0 * r, 12.0), accent, text);
 }
 
 /// One control cell: the name above, the dial (or the switch), the value below.

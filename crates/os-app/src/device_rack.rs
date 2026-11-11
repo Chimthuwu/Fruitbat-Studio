@@ -38,7 +38,7 @@ pub const MAX_H: f32 = 360.0;
 /// editor (the tallest is 380 px, the commonest 302) to be drawn at nearly its own size.
 pub const DEFAULT_H: f32 = 336.0;
 /// Header row (title, pin, collapse), and the collapsed rack's whole height.
-pub const HEADER_H: f32 = 36.0;
+pub const HEADER_H: f32 = 42.0;
 /// Width of a device tile (rows stack name above bar, so it stays narrow): 4 tiles fit a 1229 px window.
 pub const TILE_W: f32 = 280.0;
 /// Padding between a tile's edge and the device controls drawn in it.
@@ -690,8 +690,26 @@ pub fn run(app: &mut App, act: RackAct) {    match act {
         }
         RackAct::EditorOpen { key } => pop_out(app, key),
         RackAct::ChannelKnob { row, which, v } => {
+            // A second press on the same knob inside the double-click window resets it (centre for pan and pitch, full
+            // for volume) — the plugin window's strip does the same.
+            let now = std::time::Instant::now();
+            let double = app.state.device_rack_knob_click.is_some_and(|(r, w, t)| {
+                r == row && w == which && now.duration_since(t).as_millis() < 400
+            });
+            app.state.device_rack_knob_click = if double { None } else { Some((row, which, now)) };
+            if double {
+                let reset = match which {
+                    ChannelControl::Pan | ChannelControl::Pitch => 0.5,
+                    ChannelControl::Volume | ChannelControl::Track => 1.0,
+                };
+                set_channel_knob(app, row, which, reset);
+                app.drag = None;
+                app.invalidate();
+                return;
+            }
             set_channel_knob(app, row, which, v);
             app.drag = Some(Drag::RackStrip { row, which, y0: app.mouse.1, v0: v });
+            app.invalidate();
         }
     }
 }
