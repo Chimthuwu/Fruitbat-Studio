@@ -462,6 +462,10 @@ pub enum RackAct {
     EditorSubTab { key: usize, n: u8 },
     EditorBank { key: usize, n: u8 },
     EditorPad { key: usize, n: u8 },
+    /// The drum machine tile's other half: swap its pads for its pad / layer cards (and back).
+    EditorFlip { key: usize },
+    /// The flipped cards' Load: the picker lives in the full editor, so pop its window out.
+    EditorOpen { key: usize },
     /// The device menu's Remove: delete the device from its chain.
     Remove(DeviceKind),
     /// The device menu's Replace (the instrument): the device browser, whose instrument pick replaces it.
@@ -672,6 +676,16 @@ pub fn run(app: &mut App, act: RackAct) {    match act {
             }
             app.invalidate();
         }
+        // The drum machine's tile shows one half at a time: its pads, or its cards.
+        RackAct::EditorFlip { key } => {
+            if let Some(e) = app.state.rack_ui_cache.borrow_mut().get_mut(&key) {
+                if let crate::rack_ui::TileView::Drum { flip, .. } = &mut e.view {
+                    *flip = !*flip;
+                }
+            }
+            app.invalidate();
+        }
+        RackAct::EditorOpen { key } => pop_out(app, key),
     }
 }
 

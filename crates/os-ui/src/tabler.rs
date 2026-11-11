@@ -56,6 +56,8 @@ pub const GRID_DOTS: TablerIcon = TablerIcon { filled: false, d: "M 5 5 M 4 5 C 
 pub const TRENDING_UP: TablerIcon = TablerIcon { filled: false, d: "M 3 17 L 9 11 L 13 15 L 21 7 M 14 7 L 21 7 L 21 14" };
 /// `link` (outline)
 pub const LINK: TablerIcon = TablerIcon { filled: false, d: "M 9 15 L 15 9 M 11 6 L 11.463 5.464 C 13.416 3.511 16.582 3.512 18.535 5.465 C 20.487 7.417 20.487 10.583 18.534 12.536 L 18 13 M 13 18 L 12.603 18.534 C 10.629 20.487 7.45 20.487 5.476 18.534 C 4.531 17.6 4 16.327 4 14.998 C 4 13.67 4.531 12.397 5.476 11.463 L 6 11" };
+/// An "out" arrow: a docked editor popped out to its own window (Tabler's `external-link`).
+pub const EXTERNAL_LINK: TablerIcon = TablerIcon { filled: false, d: "M 11 7 L 8 7 C 7.448 7 7 7.448 7 8 L 7 16 C 7 16.552 7.448 17 8 17 L 16 17 C 16.552 17 17 16.552 17 16 L 17 13 M 10 14 L 20 4 M 15 4 L 20 4 L 20 9" };
 /// `adjustments-horizontal` (outline)
 pub const ADJUSTMENTS_HORIZONTAL: TablerIcon = TablerIcon { filled: false, d: "M 14 6 M 12 6 C 12 7.105 12.895 8 14 8 C 15.105 8 16 7.105 16 6 C 16 4.895 15.105 4 14 4 C 12.895 4 12 4.895 12 6 M 4 6 L 12 6 M 16 6 L 20 6 M 8 12 M 6 12 C 6 13.105 6.895 14 8 14 C 9.105 14 10 13.105 10 12 C 10 10.895 9.105 10 8 10 C 6.895 10 6 10.895 6 12 M 4 12 L 6 12 M 10 12 L 20 12 M 17 18 M 15 18 C 15 19.105 15.895 20 17 20 C 18.105 20 19 19.105 19 18 C 19 16.895 18.105 16 17 16 C 15.895 16 15 16.895 15 18 M 4 18 L 15 18 M 19 18 L 20 18" };
 /// `magnet` (outline)

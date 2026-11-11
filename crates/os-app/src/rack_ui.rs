@@ -32,7 +32,7 @@ use crate::app::State;
 use crate::plugins::Plugins;
 use crate::device_rack::RackParam;
 use crate::osc3::LEMON_TRIO;
-use crate::plugins::LEMON_SAMPLER;
+use crate::plugins::LEMON_DRUM_SAMPLER;
 
 /// A native plugin's editor, as the rack draws it.
 #[derive(Clone, Copy)]
@@ -45,7 +45,8 @@ pub enum Ui {
     Reverb,
     /// Lemon Trio: the full editor (oscillators / envelopes / sample), drawn from the host's parameters.
     Trio,
-    /// Lemon Sampler: the 16-pad grid in the dock (its card editing stays in the pop-out window).
+    /// Lemon Drum Sampler (the drum machine): the 16-pad grid in the dock, or — flipped — its pad and
+    /// layer cards (the card editing stays in the pop-out window). Not the plain `Lemon Sampler`.
     Drum,
 }
 
@@ -55,6 +56,8 @@ pub const EDITOR_TAB: u32 = u32::MAX;
 pub const EDITOR_SUBTAB: u32 = u32::MAX - 1;
 pub const EDITOR_PAD: u32 = u32::MAX - 2;
 pub const EDITOR_BANK: u32 = u32::MAX - 3;
+/// The editor's own Load button (the drum's flipped cards): the full editor's window has the picker.
+pub const EDITOR_OPEN: u32 = u32::MAX - 4;
 
 /// The plugins whose editors the rack draws: the hosted plugin's name (its descriptor's) to the UI that paints it.
 ///
@@ -97,7 +100,9 @@ pub fn ui(name: &str) -> Option<Ui> {
         "Lemon Peak Controller" => Ui::Small(&lemon_small_fx::peak_controller::SPEC),
         "Lemon Reverb" => Ui::Reverb,
         "Lemon Trio" => Ui::Trio,
-        LEMON_SAMPLER => Ui::Drum,
+        // The drum machine — NOT the plain `Lemon Sampler` (a different plugin, which keeps the
+        // parameter grid): the pads and their cards come from its saved state, not its parameters.
+        LEMON_DRUM_SAMPLER => Ui::Drum,
         _ => return None,
     })
 }
@@ -110,7 +115,7 @@ impl Ui {
             Ui::Small(spec) => spec.name,
             Ui::Reverb => "Lemon Reverb",
             Ui::Trio => LEMON_TRIO,
-            Ui::Drum => LEMON_SAMPLER,
+            Ui::Drum => LEMON_DRUM_SAMPLER,
         }
     }
 
@@ -210,26 +215,42 @@ impl Ui {
                 // The editor names its controls by string id; the rack's `Values` bridge resolves each to the
                 // hosted parameter code. Snapshot the map before `paint` takes `vals` by value.
                 let ids = vals.ids.clone();
-                let hits = lemon_3x_osc::view::paint(c, &t, &vals, vst, "", true);
+                // `hosted: false`: the tile shows the whole editor, its own tab strip included (the tile
+                // IS its window — hosted mode crops the strip for a host that draws its own).
+                let hits = lemon_3x_osc::view::paint(c, &t, &vals, vst, "", false);
+                use lemon_3x_osc::view::Target;
                 let mut out = Vec::new();
                 for hit in hits {
-                    match hit.t {
-                        lemon_3x_osc::view::Target::Tab(n) => out.push((hit.r, EDITOR_TAB, Some(n as f64))),
-                        lemon_3x_osc::view::Target::SubTab(n) => out.push((hit.r, EDITOR_SUBTAB, Some(n as f64))),
-                        lemon_3x_osc::view::Target::Knob(s)
-                        | lemon_3x_osc::view::Target::Toggle(s)
-                        | lemon_3x_osc::view::Target::Set(s, _)
-                        | lemon_3x_osc::view::Target::List(s) => {
-                            if let Some(code) = ids.get(s.as_str()).copied() {
-                                let v = params.iter().find(|p| p.id == code).map(|p| p.value).unwrap_or(0.0);
-                                out.push((hit.r, code, Some(v)));
+                    let lemon_3x_osc::view::Hit { r, t } = hit;
+                    match t {
+                        Target::Tab(n) => out.push((r, EDITOR_TAB, Some(n as f64))),
+                        Target::SubTab(n) => out.push((r, EDITOR_SUBTAB, Some(n as f64))),
+                        // A dial keeps its drag: the press sets where it is and the drag follows the mouse
+                        // (`ParamSet`); a list drags too.
+                        Target::Knob(s) | Target::List(s) => {
+                            let Some(code) = ids.get(s.as_str()).copied() else { continue };
+                            if params.iter().any(|p| p.id == code) {
+                                out.push((r, code, None));
                             }
                         }
-                        lemon_3x_osc::view::Target::Flag(_) => {
-                            if let Some(code) = ids.get("flags").copied() {
-                                let v = params.iter().find(|p| p.id == code).map(|p| p.value).unwrap_or(0.0);
-                                out.push((hit.r, code, Some(v)));
-                            }
+                        // A switch flips: set once, no drag.
+                        Target::Toggle(s) => {
+                            let Some(code) = ids.get(s.as_str()).copied() else { continue };
+                            let Some(p) = params.iter().find(|p| p.id == code) else { continue };
+                            out.push((r, code, Some(1.0 - p.value)));
+                        }
+                        // A selector row picks its own position: set once, no drag.
+                        Target::Set(s, i) => {
+                            let Some(code) = ids.get(s.as_str()).copied() else { continue };
+                            let Some(p) = params.iter().find(|p| p.id == code) else { continue };
+                            out.push((r, code, leaned(p, f64::from(i))));
+                        }
+                        // The switches row (oscillator on/off and friends): one `flags` parameter, a bit
+                        // per switch — the press flips its own bit.
+                        Target::Flag(n) => {
+                            let Some(code) = ids.get("flags").copied() else { continue };
+                            let Some(p) = params.iter().find(|p| p.id == code) else { continue };
+                            out.push((r, code, leaned(p, f64::from((p.plain as i64 ^ (1 << n)) as i32))));
                         }
                         _ => {}
                     }
@@ -237,14 +258,19 @@ impl Ui {
                 out
             }
             Ui::Drum => {
-                let TileView::Drum { view: vst, state, loaded, lit } = view else { return Vec::new() };
+                let TileView::Drum { view: vst, state, loaded, lit, .. } = view else { return Vec::new() };
                 let look = lemon_drum_sampler::view::Look { state, loaded: &loaded[..], lit: &lit[..] };
                 let hits = lemon_drum_sampler::view::paint(c, &t, vst, &look, "");
                 let mut out = Vec::new();
                 for hit in hits {
-                    match hit.t {
-                        lemon_drum_sampler::view::Target::Pad(n) => out.push((hit.r, EDITOR_PAD, Some(n as f64))),
-                        lemon_drum_sampler::view::Target::Bank(n) => out.push((hit.r, EDITOR_BANK, Some(n as f64))),
+                    let lemon_drum_sampler::view::Hit { r, t } = hit;
+                    match t {
+                        // A pad picks (and plays); a bank picks its bank. Both only land in the pads
+                        // half — the flip crop below drops whatever is outside the shown half.
+                        lemon_drum_sampler::view::Target::Pad(n) => out.push((r, EDITOR_PAD, Some(n as f64))),
+                        lemon_drum_sampler::view::Target::Bank(n) => out.push((r, EDITOR_BANK, Some(n as f64))),
+                        // The flipped half's Load: the picker lives in the full editor's window.
+                        lemon_drum_sampler::view::Target::Load => out.push((r, EDITOR_OPEN, None)),
                         _ => {}
                     }
                 }
@@ -304,6 +330,7 @@ impl Entry {
                 Ui::Trio => TileView::Trio(lemon_3x_osc::view::ViewState::default()),
                 Ui::Drum => TileView::Drum {
                     view: lemon_drum_sampler::view::ViewState::default(),
+                    flip: false,
                     state: lemon_drum_sampler::state::State::default(),
                     loaded: vec![false; 32],
                     lit: vec![false; 32],
@@ -329,6 +356,11 @@ impl Cache {
     pub fn get_mut(&mut self, key: &usize) -> Option<&mut Entry> {
         self.entries.get_mut(key)
     }
+
+    /// The tile's cached view (its editor's own selection state), for the header's buttons.
+    pub fn view(&self, key: &usize) -> Option<&TileView> {
+        self.entries.get(key).map(|e| &e.view)
+    }
 }
 
 /// The image of the editor of the device hosted under `key`: `name` is the plugin's name, `factor` the device px per
@@ -349,10 +381,26 @@ pub fn image(s: &State, plugins: &Plugins, key: usize, name: &str, params: &[Rac
     if e.name == name && e.sig == sig && (e.factor - factor).abs() < 0.005 && !matches!(ui, Ui::Drum) {
         return Some(e.image.clone());
     }
-    let (dw, dh) = ui.pixels(factor);
+    // The drum machine's editor is painted whole (its cards sit right of its pad grid) and the tile
+    // shows one half of it: the pads, or — flipped — the cards. Everything else paints its whole self.
+    let drum = matches!(ui, Ui::Drum);
+    let flip = matches!(&view, TileView::Drum { flip: true, .. });
+    let (dw, dh) = if drum {
+        let f = factor.max(0.02);
+        (
+            (lemon_drum_sampler::view::W as f32 * f).round().max(1.0) as u32,
+            (lemon_drum_sampler::view::H as f32 * f).round().max(1.0) as u32,
+        )
+    } else {
+        ui.pixels(factor)
+    };
     // Painting in the editor's own logical px with the canvas's device pixels scaled: the glyphs and strokes are
     // rasterised at the tile's size, so a tile smaller than the editor stays sharp.
-    let scale = dw as f32 / ui.size().0.max(1.0);
+    let scale = if drum {
+        dw as f32 / lemon_drum_sampler::view::W as f32
+    } else {
+        dw as f32 / ui.size().0.max(1.0)
+    };
     match &mut e.canvas {
         Some(c) => c.resize(dw, dh, scale),
         None => e.canvas = Canvas::new(dw, dh, scale).ok(),
@@ -361,7 +409,13 @@ pub fn image(s: &State, plugins: &Plugins, key: usize, name: &str, params: &[Rac
     let hits = ui.paint_into(canvas, params, &view);
     e.buf.resize((dw * dh) as usize, 0);
     canvas.copy_to_xrgb(&mut e.buf);
-    e.image = Rc::new(Image { w: dw as usize, h: dh as usize, px: e.buf.clone(), hits });
+    // The drum's shown half, cropped out of the whole it painted.
+    let (px, w, h, hits) = if drum {
+        drum_half(&e.buf, dw, scale, flip, hits)
+    } else {
+        (e.buf.clone(), dw, dh, hits)
+    };
+    e.image = Rc::new(Image { w: w as usize, h: h as usize, px, hits });
     e.name = name.to_string();
     e.sig = sig;
     e.factor = factor;
@@ -483,9 +537,12 @@ pub enum TileView {
     Plain,
     /// Lemon Trio: the selected page and sub-page in its editor.
     Trio(lemon_3x_osc::view::ViewState),
-    /// Lemon Sampler: the chosen bank/pad, plus a snapshot of its saved state so the pads can render in the dock.
+    /// Lemon Drum Sampler: the chosen bank/pad, whether the tile shows its cards (the pads flip to
+    /// them), plus a snapshot of its saved state so the pads can render in the dock.
     Drum {
         view: lemon_drum_sampler::view::ViewState,
+        /// The tile's other half: `false` shows the 16 pads, `true` the pad and layer cards.
+        flip: bool,
         state: lemon_drum_sampler::state::State,
         loaded: Vec<bool>,
         lit: Vec<bool>,
@@ -498,12 +555,51 @@ impl Default for TileView {
     }
 }
 
+/// The drum machine's editor paints whole — its cards sit right of its pad grid — and its tile shows
+/// one half of it: `px` is the whole it painted (`dw` device px wide, `scale` device px per editor px),
+/// `flip` which half. The half comes back as its own image: its pixels, and its controls' hit regions
+/// moved with it (a hit outside the half belongs to the half that is not showing).
+fn drum_half(
+    px: &[u32],
+    dw: u32,
+    scale: f32,
+    flip: bool,
+    hits: Vec<(Rect, u32, Option<f64>)>,
+) -> (Vec<u32>, u32, u32, Vec<(Rect, u32, Option<f64>)>) {
+    // The half's bounds in the editor's logical px.
+    let (x0, x1) = if flip {
+        (lemon_drum_sampler::view::GRID.right(), lemon_drum_sampler::view::W as f32)
+    } else {
+        (0.0, lemon_drum_sampler::view::GRID.right() + lemon_drum_sampler::view::GRID.x)
+    };
+    let c0 = (x0 * scale) as u32;
+    let c1 = ((x1 * scale).round() as u32).min(dw);
+    let cw = c1.saturating_sub(c0).max(1);
+    let dh = px.len() / dw as usize;
+    let mut half = Vec::with_capacity((cw as usize) * dh);
+    for row in 0..dh {
+        let y = row * dw as usize;
+        half.extend_from_slice(&px[y + c0 as usize..y + (c0 + cw) as usize]);
+    }
+    let hits = hits
+        .into_iter()
+        .filter_map(|(mut r, id, v)| {
+            let inside = r.x >= x0 && r.x + r.w <= x1;
+            inside.then(|| {
+                r.x -= x0;
+                (r, id, v)
+            })
+        })
+        .collect();
+    (half, cw, dh as u32, hits)
+}
+
 /// A drum tile's per-paint view: a snapshot of the hosted sampler's state, carrying over the user's chosen
 /// bank/pad so a repaint doesn't reset the selection.
 fn drum_view(plugins: &Plugins, key: usize, prev: &TileView) -> TileView {
-    let view = match prev {
-        TileView::Drum { view, .. } => view.clone(),
-        _ => lemon_drum_sampler::view::ViewState::default(),
+    let (view, flip) = match prev {
+        TileView::Drum { view, flip, .. } => (view.clone(), *flip),
+        _ => (lemon_drum_sampler::view::ViewState::default(), false),
     };
     let state = plugins.state(key)
         .and_then(|blob| lemon_drum_sampler::params::fl_from_plugin_state(&blob))
@@ -511,6 +607,7 @@ fn drum_view(plugins: &Plugins, key: usize, prev: &TileView) -> TileView {
         .unwrap_or_default();
     TileView::Drum {
         view,
+        flip,
         state,
         loaded: vec![false; 32],
         lit: vec![false; 32],
@@ -569,7 +666,8 @@ mod tests {
             assert!(w >= 100.0 && h >= 60.0, "{name} is {w}x{h}");
             assert!(!ui.settings().is_empty(), "{name} names parameters");
         }
-        assert!(ui(LEMON_SAMPLER).is_some(), "the drum sampler shows its pad grid in the dock");
+        assert!(ui(LEMON_DRUM_SAMPLER).is_some(), "the drum machine shows its pad grid in the dock");
+        assert!(ui("Lemon Sampler").is_none(), "the plain sampler is a different plugin: it keeps the parameter grid");
     }
 
     /// An editor renders its own pixels and reports its controls, each on a hosted parameter: the canvas is the
@@ -698,29 +796,24 @@ mod tests {
         assert!(!hits.is_empty(), "the Trio paints its oscillators and tabs");
         let tabs = hits.iter().filter(|(_, id, _)| *id == EDITOR_TAB).count();
         assert!(tabs > 0, "the Trio's tab strip is hit-testable");
-        let subtabs = hits.iter().filter(|(_, id, _)| *id == EDITOR_SUBTAB).count();
-        eprintln!("trio editor: {} hits ({} tabs, {} sub-tabs)", hits.len(), tabs, subtabs);
-        // The Trio's editor is allowed to emit editor-only hits (tabs/sub-tabs, sentinels) and real hosted
-        // parameter hits. Surface anything else rather than guess.
-        let unknown: Vec<u32> = hits
+        // The whole editor, tabs and all: its parameter controls are drawn and hit-testable too.
+        let knobs = hits
             .iter()
-            .filter(|(_, id, _)| *id != EDITOR_TAB && *id != EDITOR_SUBTAB && !params.iter().any(|p| p.id == *id))
-            .map(|(_, id, _)| *id)
-            .collect();
-        if !unknown.is_empty() {
-            eprintln!("note: Trio editor emitted {} non-param/non-tab hit ids: {:?}", unknown.len(), unknown);
-        }
+            .filter(|(_, id, _)| *id != EDITOR_TAB && *id != EDITOR_SUBTAB && params.iter().any(|p| p.id == *id))
+            .count();
+        assert!(knobs > 0, "the Trio's knobs are hit-testable ({} hits)", hits.len());
     }
 
-    /// The drum machine shows just its 16 pads in the dock; the pad grid is hit-testable and the card editing
-    /// stays in the pop-out window.
+    /// The drum machine shows just its 16 pads in the dock; the pad grid is hit-testable and the card
+    /// editing stays in the pop-out window.
     #[test]
     fn the_drum_machine_pads_render_in_the_dock() {
-        let ui = ui(LEMON_SAMPLER).expect("Lemon Sampler");
+        let ui = ui(LEMON_DRUM_SAMPLER).expect("Lemon Drum Sampler");
         let (w, h) = ui.pixels(1.0);
         let mut c = Canvas::new(w, h, 1.0).expect("a canvas");
         let view = TileView::Drum {
             view: lemon_drum_sampler::view::ViewState::default(),
+            flip: false,
             state: lemon_drum_sampler::state::State::default(),
             loaded: vec![false; 32],
             lit: vec![false; 32],
@@ -729,5 +822,47 @@ mod tests {
         assert!(!hits.is_empty(), "the pads paint");
         let pads = hits.iter().filter(|(_, id, _)| *id == EDITOR_PAD).count();
         assert_eq!(pads, 16, "one hit per pad");
+    }
+
+    /// The drum machine's other half — its pad and layer cards — renders in the dock flipped to, with
+    /// its Load button hit-testable (the picker itself stays in the pop-out window).
+    #[test]
+    fn the_drum_machine_cards_flip_into_the_dock() {
+        let ui = ui(LEMON_DRUM_SAMPLER).expect("Lemon Drum Sampler");
+        let view = TileView::Drum {
+            view: lemon_drum_sampler::view::ViewState::default(),
+            flip: true,
+            state: lemon_drum_sampler::state::State::default(),
+            loaded: vec![false; 32],
+            lit: vec![false; 32],
+        };
+        let (w, h) = ui.pixels(1.0);
+        let mut c = Canvas::new(w, h, 1.0).expect("a canvas");
+        let hits = ui.paint_into(&mut c, &[], &view);
+        assert!(hits.iter().any(|(_, id, _)| *id == EDITOR_OPEN), "the Load button is hit-testable");
+    }
+
+    /// The drum machine's tile crops the whole it paints down to the half it shows: the pads' half keeps
+    /// the pad grid and drops the cards (and vice versa), and the kept hits move with the crop.
+    #[test]
+    fn the_drum_half_keeps_only_its_own_half() {
+        use lemon_drum_sampler::view as dv;
+        let pad = Rect::new(10.0, 10.0, 20.0, 20.0);
+        let bank = Rect::new(228.0, 10.0, 32.0, 20.0);
+        let load = Rect::new(540.0, 221.0, 64.0, 20.0);
+        let hit = |r: Rect, id: u32| (r, id, None);
+        let whole = (0..dv::W).map(|x| (x as u32 % 2) as u32).collect::<Vec<_>>();
+        // The pads' half: the pads and banks stay, the cards' Load drops.
+        let (_, w, _, hits) = drum_half(&whole, dv::W, 1.0, false, vec![hit(pad, EDITOR_PAD), hit(bank, EDITOR_BANK), hit(load, EDITOR_OPEN)]);
+        assert_eq!(w as usize, (dv::GRID.right() + dv::GRID.x) as usize);
+        assert_eq!(hits.len(), 2, "the Load belongs to the other half");
+        assert!(hits.iter().all(|(r, _, _)| r.x == pad.x || r.x == bank.x), "the kept hits do not move: nothing was cropped off the left");
+        // The cards' half: the Load stays (moved left by the crop), the pads drop.
+        let (_, w, _, hits) = drum_half(&whole, dv::W, 1.0, true, vec![hit(pad, EDITOR_PAD), hit(load, EDITOR_OPEN)]);
+        assert_eq!(w as usize, (dv::W as f32 - dv::GRID.right()) as usize);
+        assert_eq!(hits.len(), 1, "the pads belong to the other half");
+        let (r, id, _) = hits[0];
+        assert_eq!(id, EDITOR_OPEN);
+        assert_eq!(r.x, load.x - dv::GRID.right(), "the Load moves with the crop");
     }
 }

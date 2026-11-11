@@ -47,6 +47,9 @@ pub enum Icon {
     Plug,
     /// A wrench: a docked device's own editor as a floating window (Tabler's `tool`).
     Wrench,
+    /// An "out" arrow: the same, once it is out (Tabler's `external-link`) — the wrench stays the
+    /// device wrapper's own symbol, so the tile's pop-out says what it does instead.
+    PopOut,
     Kick,
     Lock,
     Touch,
@@ -127,6 +130,7 @@ fn shape(icon: Icon) -> &'static TablerIcon {
         Icon::Page => &tb::FILE_TEXT,
         Icon::Plug => &tb::PLUG,
         Icon::Wrench => &tb::TOOL,
+        Icon::PopOut => &tb::EXTERNAL_LINK,
         Icon::Kick => &KICK,
         Icon::Lock => &LOCK,
         Icon::Touch => &tb::HAND_FINGER,

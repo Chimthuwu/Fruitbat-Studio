@@ -1930,6 +1930,10 @@ pub fn retired_count() -> usize {
 
 /// Name of Lemon Studio's sampler plugin: it plays and edits every sampler channel (spec: plugins/lemon-sampler.md §7).
 pub const LEMON_SAMPLER: &str = "Lemon Sampler";
+
+/// The drum machine (`lemon-drum-sampler`): a different plugin from [`LEMON_SAMPLER`] (the plain
+/// sampler), whose 16-pad grid the rack docks (the cards stay in its pop-out window).
+pub const LEMON_DRUM_SAMPLER: &str = "Lemon Drum Sampler";
 /// Name of Lemon Studio's parametric EQ plugin.
 pub const LEMON_EQ: &str = "Lemon Parametric EQ";
 /// Lemon Studio's effects compiled in besides the EQ (`builtin_effects`, in this order). They have no file plugin of

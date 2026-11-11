@@ -11,7 +11,7 @@ use os_ui::{Color, Rect, kit};
 
 use crate::app::{Action, State};
 use crate::plugins::Plugins;
-use crate::rack_ui::{EDITOR_TAB, EDITOR_SUBTAB, EDITOR_BANK, EDITOR_PAD};
+use crate::rack_ui::{EDITOR_TAB, EDITOR_SUBTAB, EDITOR_BANK, EDITOR_PAD, EDITOR_OPEN};
 use crate::device_rack::{self, Device, DeviceKind, RackParam, HEADER_H, RackAct, TILE_W};
 use crate::icons::{self, Icon};
 use crate::views::{Ui, fnt};
@@ -231,13 +231,14 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, r: Rect) {
         },
     );
     bx += 66.0;
-    // The wrench: every device in the chain shows its editor in its own floating window (lit green while they are
-    // out), or the windows close and the tiles draw the editors again.
+    // The out-arrow: every device in the chain shows its editor in its own floating window (lit green
+    // while they are out), or the windows close and the tiles draw the editors again. An out-arrow,
+    // not a wrench — the wrench stays the device wrapper's own symbol (the plugin window's strip).
     let windows = !s.device_rack_float.is_empty();
     header_icon_button(
         ui,
         Rect::new(bx, head.y + 2.0, 24.0, 17.0),
-        Icon::Wrench,
+        Icon::PopOut,
         windows,
         Action::DeviceRack(RackAct::ToggleEditors),
         if windows {
@@ -318,24 +319,29 @@ fn tile_paint(ui: &mut Ui, s: &State, plugins: &Plugins, i: usize, d: Device, ti
             },
         );
     }
-    // The name, then the header's wrench and menu.
+    // The name, then the header's pop-out and menu.
+    let menu = Rect::new(tile.right() - 22.0, head.y + 4.0, 17.0, 15.0);
+    let popout = Rect::new(menu.x - 22.0, head.y + 2.0, 19.0, 19.0);
+    // The drum machine's tile flips between its pads and its cards: one more button, and the name
+    // gives up the room it takes.
+    let flip = Rect::new(popout.x - 22.0, head.y + 2.0, 19.0, 19.0);
+    let drum = d.key.is_some_and(|_| matches!(crate::rack_ui::ui(plugin_name(s, &d)), Some(crate::rack_ui::Ui::Drum)));
     ui.c.text_clip(
         fnt(14.0),
         tile.x + 24.0,
         head.y + 3.0,
-        tile.w - 24.0 - 64.0,
+        tile.w - 24.0 - if drum { 86.0 } else { 64.0 },
         t.text,
         &d.name,
     );
-    let menu = Rect::new(tile.right() - 22.0, head.y + 4.0, 17.0, 15.0);
-    let wrench = Rect::new(menu.x - 22.0, head.y + 2.0, 19.0, 19.0);
-    // The wrench: pop the device's editor out to its own floating window (or dock it back, lit while it is
-    // out); a container tile's wrench opens its container window (the docked Win::Container) instead.
+    // The pop-out arrow: pop the device's editor out to its own floating window (or dock it back, lit
+    // while it is out). An out-arrow, not a wrench — the wrench is the device wrapper's own symbol
+    // (the plugin window's Misc tab), so the tile's button says what it does instead.
     match d.kind {
         DeviceKind::Container { t: ct, k: ck } => {
             header_icon_button(
                 ui,
-                wrench,
+                popout,
                 Icon::Wrench,
                 false,
                 Action::DeviceRack(RackAct::OpenContainer { t: ct, k: ck }),
@@ -347,14 +353,30 @@ fn tile_paint(ui: &mut Ui, s: &State, plugins: &Plugins, i: usize, d: Device, ti
             let floated = s.device_rack_float.contains(&key);
             header_icon_button(
                 ui,
-                wrench,
-                Icon::Wrench,
+                popout,
+                Icon::PopOut,
                 floated,
                 Action::DeviceRack(if floated { RackAct::Dock(key) } else { RackAct::PopOut(key) }),
                 if floated { "Dock this device's editor in its tile" } else { "Pop this device's editor out to its own window" },
             );
         }
         _ => {}
+    }
+    // The drum machine's flip: its pads, or the other half of its UI (the cards), in place — no pop-out.
+    if drum {
+        let key = d.key.unwrap();
+        let flipped = matches!(
+            s.rack_ui_cache.borrow().view(&key),
+            Some(crate::rack_ui::TileView::Drum { flip: true, .. })
+        );
+        header_icon_button(
+            ui,
+            flip,
+            Icon::Slip,
+            flipped,
+            Action::DeviceRack(RackAct::EditorFlip { key }),
+            if flipped { "Show this machine's pads" } else { "Show this machine's pad and layer cards" },
+        );
     }
     if d.key.is_some()
         && ui.hit(
@@ -549,7 +571,7 @@ fn editor_body(ui: &mut Ui, s: &State, plugins: &Plugins, key: usize, editor: cr
         return;
     }
     // The editor fills the body: the container keeps its size, only the plugin's UI inside it grows to fill it (a
-    // 2 px inset keeps the tile's frame visible). No aspect fit, so no bars are left beside or under it.
+    // 2 px inset keeps the tile's frame visible).
     let r = Rect::new(body.x + 2.0, body.y + 2.0, (body.w - 4.0).max(1.0), (body.h - 4.0).max(1.0));
     // Rendered at the larger of the two stretches, so no glyph is drawn from fewer pixels than it covers; the blit
     // takes it to the body's exact width and height.
@@ -560,12 +582,21 @@ fn editor_body(ui: &mut Ui, s: &State, plugins: &Plugins, key: usize, editor: cr
         ui.c.text_clip(fnt(13.0), body.x + 10.0, body.y + 9.0, body.w - 20.0, t.text_dim, "This device's editor could not be drawn");
         return;
     };
-    ui.c.image(r, img.w, img.h, &img.px);
+    // The editor keeps its own shape in the body (its half, for the drum machine): it fits whole and is
+    // centred, so its layout is never squashed.
+    let (bw, bh) = (img.w as f32 / scale, img.h as f32 / scale);
+    let fit_k = (r.w / bw).min(r.h / bh).max(0.01);
+    let fit = Rect::new(
+        r.x + (r.w - bw * fit_k) * 0.5,
+        r.y + (r.h - bh * fit_k) * 0.5,
+        (bw * fit_k).max(1.0),
+        (bh * fit_k).max(1.0),
+    );
+    ui.c.image(fit, img.w, img.h, &img.px);
     // The editor's controls, in the tile: a dial or fader drags its parameter, a switch or a selector row sets it.
-    let kx = r.w / ew;
-    let ky = r.h / eh;
+    let (kx, ky) = (fit_k, fit_k);
     for (hr, id, v) in &img.hits {
-        let cell = Rect::new(r.x + hr.x * kx, r.y + hr.y * ky, (hr.w * kx).max(2.0), (hr.h * ky).max(2.0));
+        let cell = Rect::new(fit.x + hr.x * kx, fit.y + hr.y * ky, (hr.w * kx).max(2.0), (hr.h * ky).max(2.0));
         let n = (*v).unwrap_or(0.0) as u8;
         let act = if *id == EDITOR_TAB {
             RackAct::EditorTab { key, n }
@@ -575,6 +606,8 @@ fn editor_body(ui: &mut Ui, s: &State, plugins: &Plugins, key: usize, editor: cr
             RackAct::EditorBank { key, n }
         } else if *id == EDITOR_PAD {
             RackAct::EditorPad { key, n }
+        } else if *id == EDITOR_OPEN {
+            RackAct::EditorOpen { key }
         } else {
             let p = params.iter().find(|p| p.id == *id);
             match v {
@@ -582,7 +615,7 @@ fn editor_body(ui: &mut Ui, s: &State, plugins: &Plugins, key: usize, editor: cr
                 None => RackAct::ParamSet { key, id: *id, v: p.map_or(0.0, |p| p.value) },
             }
         };
-        let hint = if matches!(*id, EDITOR_TAB | EDITOR_SUBTAB | EDITOR_BANK | EDITOR_PAD) {
+        let hint = if matches!(*id, EDITOR_TAB | EDITOR_SUBTAB | EDITOR_BANK | EDITOR_PAD | EDITOR_OPEN) {
             String::new()
         } else {
             let p = params.iter().find(|p| p.id == *id);

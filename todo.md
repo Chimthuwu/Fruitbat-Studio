@@ -23,9 +23,19 @@ views/launcher.rs + launcher.rs) before executing — the F1 drop fix from wave 
 - [ ] **Pan fader on ALL tracks** (playlist and launcher tracks alike) — new control; audit the track model/mixer
       for where pan lives (os-model Track + mixer path) and both header layouts.
 
-## 🎯 ACTIVE — Dock UI fitting + rename (Trio + Lemon Drum Sampler in progress; Slicer deferred)
+## 🎯 ACTIVE — Dock UI fitting + rename (Trio + Lemon Drum Sampler ported; Slicer deferred)
 All in the docked device-rack tile UI (rack_ui.rs) and the kit editors. Needs a short audit pass first to pin
 exact file:line refs (rack_ui.rs size/fit logic, kit/eq.rs, kit/lemon.rs, kit/inst.rs).
+- [x] **Trio + Lemon Drum Sampler docked (2026-11-12, 9a8fb7f9).** Trio = full editor via host-parameter bridge;
+      Drum = 16 pads + flip button for its cards. Follow-up fixes (this commit): Lemon Sampler vs Lemon Drum
+      Sampler name un-map (plain sampler keeps the parameter grid), Trio `hosted: false` (own tab strip, no squash)
+      + aspect-fit blit + draggable knobs (`ParamSet`), drum flip button + crop helper (`drum_half`) + pop-out
+      arrow icon (wrench stays the device wrapper's).
+- [ ] **Device wrapper strip in the tile top bar.** ON/PAN/VOL/PITCH/RANGE/TRACK controls (as the plugin
+      window's strip, plugin_window/mod.rs + `FrameEvent::*`) need a taller tile top bar (HEADER_H=23 won't
+      fit knobs): new strip row between tile header and editor body, wired to the device's channel via the
+      `open_editor` lookup + `channel_control` setters, with a `Drag::WrapKnob`-style drag. Design decided;
+      not yet built.
 - [ ] **Device rename missing.** The tile context menu has no Rename — add it (same UX as the arranger's
       audio-clip rename: inline edit on the device name, written back to the device/plugin state).
 - [ ] **Lemon Delay still shows generic UI in the dock** — likely its editor fails the fit check (too big for the

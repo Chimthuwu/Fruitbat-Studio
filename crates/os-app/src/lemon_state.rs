@@ -633,6 +633,8 @@ mod tests {
         #[cfg(any(windows, target_os = "macos"))]
         want.push(lemon::KEY_FOCUS);
         want.extend([lemon::TRACK_LOCKS, lemon::NOTE_LOCKS, lemon::TRACKS, lemon::LINEAR_MODE]);
+        // The modulation identity registry (M0): a state with devices in it has owners, and they persist.
+        want.push(lemon::OWNER_IDS);
         assert_eq!(ids, want);
         let mut back = App::new(None);
         back.open(path.clone());
