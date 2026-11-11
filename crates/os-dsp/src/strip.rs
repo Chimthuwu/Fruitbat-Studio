@@ -3,7 +3,7 @@
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! The Analog Channel Strip: Lemon Studio's port of the Michael Lane Edition fork's console strip (plan v3 Appendix C).
-//! Milestone 1 brings the low cut; the gate, drive, TAME, compressor and de-esser follow one at a time.
+//! The low cut and the gate are here; drive, TAME, the compressor and the de-esser follow one at a time.
 //!
 //! A strip is bypassed, faded out, and only then does the engine stop calling it: a bypassed strip passes the track
 //! through sample for sample (plan v3 §6.3). The sections are stereo-linked in their settings with one filter state per
@@ -114,7 +114,102 @@ fn coefficients(cut: f32, rate: u32) -> [f64; 5] {
     [b0, b1, b0, -2.0 * cos / a0, (1.0 - alpha) / a0]
 }
 
-/// A track's Analog Channel Strip: the low cut today, the rest as it is ported. Bypassed, it fades the processed
+/// The gate's control word as a threshold: `-72 + 54v` dB, so -72 dB at word 0 (the section off) to -18 dB at 65535.
+pub fn gate_threshold_db(word: u16) -> f32 {
+    -72.0 + 54.0 * f32::from(word) / 65535.0
+}
+
+/// The word for a threshold in dB, clamped to the section's -72..=-18 dB.
+pub fn gate_word(db: f32) -> u16 {
+    (((db + 72.0) / 54.0).clamp(0.0, 1.0) * 65535.0).round() as u16
+}
+
+/// The gate: an envelope follower on the louder channel (1 ms attack, 80 ms release) opens the gate 40 ms past the
+/// last sample above a threshold that follows the amount, and the amount doubles as the depth, so a small setting
+/// only dips the level. Word 0 is the section off, and the amount glides over 20 ms both ways, so it does not click.
+pub struct Gate {
+    /// The amount as it glides (0..1): the threshold and the depth both follow it.
+    amount: Glide,
+    /// The level the gate watches, the louder of the two channels (the settings are stereo-linked).
+    env: f32,
+    /// The gain the gate is applying, 1 open to near 0 shut.
+    gain: f32,
+    /// Samples of hold left since the level was last above the threshold.
+    hold: u32,
+    /// The section's control word (0 = off).
+    word: u16,
+}
+
+/// One block's gate settings: the rates are fixed per block, and the amount glides through it.
+struct GateBlock {
+    attack: f32,
+    release: f32,
+    hold: u32,
+    amount: Ramp,
+}
+
+impl Gate {
+    pub fn new(word: u16) -> Gate {
+        Gate { amount: Glide::new(f32::from(word) / 65535.0), env: 0.0, gain: 1.0, hold: 0, word }
+    }
+
+    /// The section's control word (0 = off).
+    pub fn set(&mut self, word: u16) {
+        self.word = word;
+    }
+
+    /// True when the section is off and its amount has reached zero: nothing is left to do.
+    pub fn idle(&self) -> bool {
+        self.word == 0 && self.amount.current == 0.0
+    }
+
+    /// Back to open: a section switched in again does not start shut on what it heard before.
+    pub fn reset(&mut self) {
+        self.env = 0.0;
+        self.gain = 1.0;
+        self.hold = 0;
+    }
+
+    /// Plans a block; `None` when the section is off and has glided out (its state is cleared).
+    fn block(&mut self, frames: usize, rate: u32) -> Option<GateBlock> {
+        let rate = rate.max(1);
+        let target = if self.word == 0 { 0.0 } else { f32::from(self.word) / 65535.0 };
+        if target == 0.0 && self.amount.current == 0.0 {
+            self.reset();
+            return None;
+        }
+        let amount = self.amount.block(target, frames, 1.0 / (0.020 * f64::from(rate)) as f32);
+        Some(GateBlock {
+            attack: 1.0 - (-1.0 / (rate as f32 * 0.001)).exp(),
+            release: 1.0 - (-1.0 / (rate as f32 * 0.080)).exp(),
+            hold: (rate as f32 * 0.040) as u32,
+            amount,
+        })
+    }
+
+    /// The gain for one frame pair, the amount gliding and the follower moving with it.
+    fn gain(&mut self, b: &mut GateBlock, l: f32, r: f32) -> f32 {
+        let amount = b.amount.next();
+        let level = l.abs().max(r.abs());
+        self.env += (level - self.env) * if level > self.env { b.attack } else { b.release };
+        let threshold = 10f32.powf((-72.0 + 54.0 * amount) / 20.0);
+        if self.env >= threshold {
+            self.hold = b.hold;
+        } else {
+            self.hold = self.hold.saturating_sub(1);
+        }
+        let goal = if self.hold > 0 {
+            1.0
+        } else {
+            (self.env / (threshold * 0.5).max(1e-8)).powi(3).clamp(0.001, 1.0)
+        };
+        self.gain += (goal - self.gain) * if goal > self.gain { b.attack } else { b.release };
+        // Below an amount of 1/50 the depth fades in with the amount, so switching the gate in does not step.
+        1.0 + (self.gain - 1.0) * (amount * 50.0).min(1.0)
+    }
+}
+
+/// A track's Analog Channel Strip: the low cut and the gate today, the rest as it is ported. Bypassed, it fades the processed
 /// signal out to the dry one and then stops touching the buffer (`idle`), so a bypassed strip passes a track through
 /// sample for sample (plan v3 §6.3).
 pub struct Strip {
@@ -125,11 +220,12 @@ pub struct Strip {
     /// How much of the processed signal is heard: 0 fully dry, 1 fully processed.
     wet: Glide,
     low: LowCut,
+    gate: Gate,
 }
 
 impl Strip {
     pub fn new(words: [u16; 7], bypassed: bool) -> Strip {
-        Strip { words, bypassed, wet: Glide::new(if bypassed { 0.0 } else { 1.0 }), low: LowCut::new(words[0]) }
+        Strip { words, bypassed, wet: Glide::new(if bypassed { 0.0 } else { 1.0 }), low: LowCut::new(words[0]), gate: Gate::new(words[3]) }
     }
 
     /// The project's settings for the strip (a track rebuilt from a changed project).
@@ -137,6 +233,7 @@ impl Strip {
         self.words = words;
         self.bypassed = bypassed;
         self.low.set(words[0]);
+        self.gate.set(words[3]);
     }
 
     /// True when bypassed and faded out: the engine skips the strip and passes the track through.
@@ -153,25 +250,37 @@ impl Strip {
         let mut wet = self.wet.block(target, frames, fade);
         if wet.is_flat() && wet.first() == 0.0 {
             self.low.reset();
+            self.gate.reset();
             return;
         }
         let mut low = self.low.block(frames, rate);
+        let mut gate = self.gate.block(frames, rate);
         for f in buf.chunks_exact_mut(2) {
             let w = wet.next();
             // Fully dry: nothing is written, so the samples stay as they arrived.
             if w == 0.0 {
                 continue;
             }
-            for (ch, s) in f.iter_mut().enumerate() {
-                let dry = *s;
-                let y = match &mut low {
+            let dry = [f[0], f[1]];
+            let mut y = [0.0; 2];
+            // The low cut first, then the gate on what it left (the fork's order).
+            for (ch, x) in dry.iter().enumerate() {
+                y[ch] = match &mut low {
                     Some(b) => {
                         let lw = b.wet.next();
-                        self.low.step(b, lw, ch, dry)
+                        self.low.step(b, lw, ch, *x)
                     }
-                    None => dry,
+                    None => *x,
                 };
-                *s = if w == 1.0 { y } else { dry * (1.0 - w) + y * w };
+            }
+            if let Some(b) = &mut gate {
+                let g = self.gate.gain(b, y[0], y[1]);
+                y[0] *= g;
+                y[1] *= g;
+            }
+            for (ch, s) in f.iter_mut().enumerate() {
+                let a = y[ch];
+                *s = if w == 1.0 { a } else { dry[ch] * (1.0 - w) + a * w };
             }
         }
     }
@@ -317,6 +426,66 @@ mod tests {
             s.process(&mut b, RATE);
         }
         assert_eq!(b, dry);
+    }
+
+    /// A gate strip with threshold `db` and nothing else set.
+    fn gate_strip(db: f32) -> Strip {
+        Strip::new([0, 0, 0, gate_word(db), 0, 0, 0], false)
+    }
+
+    /// A quiet tone under the gate's threshold is shut.
+    #[test]
+    fn the_gate_shuts_a_signal_below_its_threshold() {
+        let mut s = gate_strip(-18.0);
+        let mut buf: Vec<f32> = sine(1_000.0, BLOCK * 2 * 40).iter().map(|x| x * 0.01).collect();
+        let dry = rms(&buf);
+        run(&mut s, &mut buf);
+        let tail = rms(&buf[buf.len() - BLOCK * 2..]);
+        assert!(tail < dry * 0.02, "shut: {tail} of {dry}");
+    }
+
+    /// A tone above the threshold comes through as it is.
+    #[test]
+    fn the_gate_leaves_a_signal_above_its_threshold() {
+        let dry = sine(1_000.0, BLOCK * 2 * 40);
+        let mut s = gate_strip(-18.0);
+        let mut buf = dry.clone();
+        run(&mut s, &mut buf);
+        let (a, b) = (rms(&dry[dry.len() - BLOCK * 2..]), rms(&buf[buf.len() - BLOCK * 2..]));
+        assert!((b / a - 1.0).abs() < 0.01, "open: {b} / {a}");
+    }
+
+    /// The hold keeps the gate open 40 ms past the last sample above the threshold, then it shuts.
+    #[test]
+    fn the_gate_holds_open_after_a_burst() {
+        let frames = BLOCK * 120;
+        let burst = (BLOCK * 20)..(BLOCK * 22);
+        let mut buf: Vec<f32> = (0..frames)
+            .flat_map(|i| {
+                let a = if burst.contains(&i) { 0.5 } else { 0.01 };
+                let x = (std::f32::consts::TAU * 1_000.0 * i as f32 / RATE as f32).sin() * a;
+                [x, x]
+            })
+            .collect();
+        let dry = rms(&buf[BLOCK * 2 * 30..BLOCK * 2 * 40]);
+        let mut s = gate_strip(-18.0);
+        run(&mut s, &mut buf);
+        let held = rms(&buf[BLOCK * 2 * 22..BLOCK * 2 * 30]);
+        let shut = rms(&buf[BLOCK * 2 * 112..BLOCK * 2 * 120]);
+        assert!(held > dry * 0.6, "held open after the burst: {held} of {dry}");
+        assert!(shut < dry * 0.05, "shut after the hold: {shut} of {dry}");
+    }
+
+    /// One gain for both channels: the settings are stereo-linked, as the fork's are.
+    #[test]
+    fn the_gate_scales_both_channels_alike() {
+        let mut s = gate_strip(-18.0);
+        let mut buf = sine(1_000.0, BLOCK * 2 * 40);
+        for f in buf.chunks_exact_mut(2) {
+            f[1] = f[0] * 0.2;
+        }
+        run(&mut s, &mut buf);
+        assert!(buf.chunks_exact(2).all(|f| (f[1] - f[0] * 0.2).abs() < 1e-6));
     }
 
     /// The word and the cutoff are each other's inverse across the range.
