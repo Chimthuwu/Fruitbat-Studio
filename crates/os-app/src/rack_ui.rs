@@ -317,13 +317,15 @@ impl Entry {
     }
 
     /// Make sure `view` matches the UI about to be painted: if the UI changed (or was never set), reset it to that
-    /// UI's default interactive state so we don't hand the wrong editor the wrong state.
+    /// UI's default interactive state so we don't hand the wrong editor the wrong state. `Plain` satisfies only
+    /// the plain editors (`Simple`/`Reverb`): a Trio or Drum entry starting `Plain` (the `Entry::new` default)
+    /// must be upgraded, or its paint arm bails and the tile stays black.
     fn ensure_view(&mut self, ui: Ui) {
         let matches = matches!(
             (&self.view, ui),
             (TileView::Trio(_), Ui::Trio)
                 | (TileView::Drum { .. }, Ui::Drum)
-                | (TileView::Plain, _)
+                | (TileView::Plain, Ui::Simple(_) | Ui::Reverb)
         );
         if !matches {
             self.view = match ui {
@@ -836,6 +838,91 @@ mod tests {
             .filter(|(_, id, _)| *id != EDITOR_TAB && *id != EDITOR_SUBTAB && params.iter().any(|p| p.id == *id))
             .count();
         assert!(knobs > 0, "the Trio's knobs are hit-testable ({} hits)", hits.len());
+    }
+
+    /// The editor paints real pixels into a body-sized canvas (cover mode): the glyphs and knobs land on the
+    /// canvas, not just their hit regions — a blank tile with live hits would otherwise pass the suites above.
+    #[test]
+    fn the_trio_editor_paints_pixels_into_a_body_sized_canvas() {
+        let ui = ui(LEMON_TRIO).expect("Lemon Trio");
+        let params: Vec<RackParam> = ui
+            .settings()
+            .iter()
+            .enumerate()
+            .map(|(i, (_, name))| RackParam {
+                id: i as u32,
+                name: (*name).to_string(),
+                group: String::new(),
+                value: 0.25,
+                text: String::new(),
+                plain: 512.0,
+                min: 0.0,
+                max: 2048.0,
+                toggle: false,
+            })
+            .collect();
+        // The production shape: a 280x300 logical tile body at app scale 2 is a 560x600 device-px canvas,
+        // and the cover scale is the smaller stretch (here 1.0: the width matches the editor exactly).
+        let (ew, eh) = ui.size();
+        let (cw, ch) = (560u32, 600u32);
+        let scale = ((cw as f32 / ew).min(ch as f32 / eh)).max(0.02);
+        let mut c = Canvas::new(cw, ch, scale).expect("a canvas");
+        let hits = ui.paint_into(&mut c, &params, &TileView::Trio(Default::default()));
+        assert!(!hits.is_empty(), "its knobs and tabs");
+        let mut px = vec![0u32; (cw * ch) as usize];
+        c.copy_to_xrgb(&mut px);
+        let unique = {
+            let mut v = px.clone();
+            v.sort_unstable();
+            v.dedup();
+            v.len()
+        };
+        assert!(unique > 8, "the editor paints more than a flat colour: {unique} shades");
+        // The realistic small tile: 236x180 logical body at app scale 2 -> 472x360 device px, and the
+        // cover scale is fractional (0.82). A flat canvas here is the blank-tile bug.
+        let (cw, ch) = (472u32, 360u32);
+        let scale = ((cw as f32 / ew).min(ch as f32 / eh)).max(0.02);
+        let mut c = Canvas::new(cw, ch, scale).expect("a canvas");
+        ui.paint_into(&mut c, &params, &TileView::Trio(Default::default()));
+        let mut px = vec![0u32; (cw * ch) as usize];
+        c.copy_to_xrgb(&mut px);
+        let unique = {
+            let mut v = px.clone();
+            v.sort_unstable();
+            v.dedup();
+            v.len()
+        };
+        assert!(unique > 8, "the small fractional-scale tile paints too: {unique} shades");
+    }
+
+    /// The docked Trio renders end to end through `image` with a real hosted instance (a real plugin, its
+    /// real parameters, the tile's cache): a blank tile with passing paint probes would hide in the suites
+    /// above, so this one follows the app's own path. A 236x180 logical body at app scale 2.
+    #[test]
+    fn the_trio_renders_end_to_end_through_image() {
+        let mut app = crate::app::App::new(None);
+        // The bundled Lemon instruments (the app fills `available` from the installed plugin DB at
+        // startup; a test builds the same list straight from the builtin table).
+        app.plugins.available = crate::plugins::builtin();
+        let idx = app
+            .plugins
+            .available
+            .iter()
+            .position(|a| a.desc.name == LEMON_TRIO)
+            .expect("Lemon Trio bundled");
+        app.plugins.create_with(0, idx, None).expect("the Trio hosted");
+        let params = app.plugins.rack_controls(0, &[]);
+        assert!(!params.is_empty(), "the Trio names its parameters");
+        let s = &app.state;
+        let img = image(s, &app.plugins, 0, LEMON_TRIO, &params, 0.84, 472, 360).expect("the Trio's image");
+        assert!(!img.hits.is_empty(), "its controls are hit-testable");
+        let unique = {
+            let mut v = img.px.clone();
+            v.sort_unstable();
+            v.dedup();
+            v.len()
+        };
+        assert!(unique > 8, "the tile paints the editor, not a flat colour: {unique} shades");
     }
 
     /// The drum machine shows just its 16 pads in the dock; the pad grid is hit-testable and the card
