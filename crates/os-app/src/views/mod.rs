@@ -46,6 +46,7 @@ use std::borrow::Cow;
 use os_ui::{kit, Color, Rect};
 
 use crate::app::{Action, Bar, Scroll, Seg, State, Ui, Win};
+use crate::plugins::Plugins;
 use crate::icons::{self, Icon};
 
 /// Per-frame values that don't live in `State`.
@@ -170,7 +171,7 @@ pub fn browser_w(s: &State) -> f32 {
 
 /// Paints the frame; returns the number of hits registered before the overlays (menus, popups, picker...), which cover
 /// docked plugin windows.
-pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo) -> usize {
+pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, f: &FrameInfo) -> usize {
     let (w, h) = ui.c.size();
     // A maximized Playlist or Piano roll paints all of its rect (`framed`): the workspace under it needs no clear.
     let cover = s.docked().filter(|w| matches!(w, Win::Playlist | Win::PianoRoll)).map(|w| s.win_rect(w));
@@ -212,7 +213,7 @@ pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo) -> usize {
             if clip_editor {
                 launcher::paint_panel(ui, s, r);
             } else {
-                device_rack::paint(ui, s, r);
+                device_rack::paint(ui, s, plugins, r);
             }
         });
     }

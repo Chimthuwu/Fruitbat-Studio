@@ -15,6 +15,7 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
+use std::sync::OnceLock;
 
 use nih_plug::prelude::*;
 use os_plugkit::live::LiveEdits;
@@ -183,6 +184,20 @@ pub fn defs() -> Vec<Def> {
     v.push(d("filter".into(), "Filter type".into(), 0, 7, 0, Text::Filter));
     debug_assert_eq!(v.len(), COUNT);
     v
+}
+
+/// The editor's parameters as its painting names them (view id → the hosted parameter's name), for the rack tile:
+/// the tile reads each control's value through the view id and sets the hosted parameter the name resolves to.
+pub fn ui_settings() -> Vec<(&'static str, &'static str)> {
+    static OWNED: OnceLock<Vec<(String, String)>> = OnceLock::new();
+    static REFS: OnceLock<Vec<(&'static str, &'static str)>> = OnceLock::new();
+    REFS.get_or_init(|| {
+        OWNED
+            .get_or_init(|| defs().into_iter().map(|d| (d.id, d.name)).collect())
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect()
+    }).clone()
 }
 
 fn plural(v: i32, one: &str, many: &str) -> String {

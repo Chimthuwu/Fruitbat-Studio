@@ -1,5 +1,10 @@
 # Lemon Studio — todo.md (roadmap reference)
 
+## 🔝 TOP OF LIST — Modulation system (PAUSED, resume next)
+- [ ] **M0 persistent parameter identity is DONE & shipped** on `origin/modulation-m0` (milestones 1+2, 16 tests green:
+      7 os-model + 9 os-app). Resume at **M1**: the actual modulation graph + the app→engine update path (Section K K.4 /
+      K.5 §7 scoped this as an M1 decision). Do **not** start M1 until explicitly un-paused.
+
 This file tracks the open/executed state of the todo items. The canonical priority plan is in `docs/roadmap-2026-11-10.md` — reference that doc for the full rationale, audit findings, and ordering.
 
 ## 🎯 NEW — Clip Launcher polish (2026-11-09 23:12, plan only — DO NOT EXECUTE yet)
@@ -18,7 +23,7 @@ views/launcher.rs + launcher.rs) before executing — the F1 drop fix from wave 
 - [ ] **Pan fader on ALL tracks** (playlist and launcher tracks alike) — new control; audit the track model/mixer
       for where pan lives (os-model Track + mixer path) and both header layouts.
 
-## 🎯 NEW — Dock UI fitting + rename (2026-11-09 22:46, plan only — DO NOT EXECUTE yet)
+## 🎯 ACTIVE — Dock UI fitting + rename (Trio + Lemon Drum Sampler in progress; Slicer deferred)
 All in the docked device-rack tile UI (rack_ui.rs) and the kit editors. Needs a short audit pass first to pin
 exact file:line refs (rack_ui.rs size/fit logic, kit/eq.rs, kit/lemon.rs, kit/inst.rs).
 - [ ] **Device rename missing.** The tile context menu has no Rename — add it (same UX as the arranger's

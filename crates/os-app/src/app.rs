@@ -4697,7 +4697,7 @@ impl App {
             live: &mut self.live,
             flat: self.state.toolbar.flat,
         };
-        let overlays = views::paint(&mut ui, &self.state, &info);
+        let overlays = views::paint(&mut ui, &self.state, &self.plugins, &info);
         if self.state.cables.get_mut().take_slowed() {
             self.state.message = Some("Mixer cables hang still: the mixer is too slow to redraw them swinging (they try again with a new route or another current track)".into());
             self.damage_win(Win::Mixer);

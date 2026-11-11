@@ -29,7 +29,10 @@ use std::rc::Rc;
 use os_ui::{Canvas, Rect};
 
 use crate::app::State;
+use crate::plugins::Plugins;
 use crate::device_rack::RackParam;
+use crate::osc3::LEMON_TRIO;
+use crate::plugins::LEMON_SAMPLER;
 
 /// A native plugin's editor, as the rack draws it.
 #[derive(Clone, Copy)]
@@ -40,7 +43,18 @@ pub enum Ui {
     Small(&'static lemon_small_fx::Spec),
     /// Lemon Reverb, room visual included.
     Reverb,
+    /// Lemon Trio: the full editor (oscillators / envelopes / sample), drawn from the host's parameters.
+    Trio,
+    /// Lemon Sampler: the 16-pad grid in the dock (its card editing stays in the pop-out window).
+    Drum,
 }
+
+/// Reserved `id` values in an editor hit that name an editor-only action rather than a hosted parameter: a tile
+/// switches its page, chooses a drum pad, etc. No hosted parameter may legitimately carry these ids.
+pub const EDITOR_TAB: u32 = u32::MAX;
+pub const EDITOR_SUBTAB: u32 = u32::MAX - 1;
+pub const EDITOR_PAD: u32 = u32::MAX - 2;
+pub const EDITOR_BANK: u32 = u32::MAX - 3;
 
 /// The plugins whose editors the rack draws: the hosted plugin's name (its descriptor's) to the UI that paints it.
 ///
@@ -82,6 +96,8 @@ pub fn ui(name: &str) -> Option<Ui> {
         "Lemon Formula Controller" => Ui::Small(&lemon_small_fx::formula_controller::SPEC),
         "Lemon Peak Controller" => Ui::Small(&lemon_small_fx::peak_controller::SPEC),
         "Lemon Reverb" => Ui::Reverb,
+        "Lemon Trio" => Ui::Trio,
+        LEMON_SAMPLER => Ui::Drum,
         _ => return None,
     })
 }
@@ -93,6 +109,8 @@ impl Ui {
             Ui::Simple(info) => info.name,
             Ui::Small(spec) => spec.name,
             Ui::Reverb => "Lemon Reverb",
+            Ui::Trio => LEMON_TRIO,
+            Ui::Drum => LEMON_SAMPLER,
         }
     }
 
@@ -102,6 +120,9 @@ impl Ui {
             Ui::Simple(info) => (info.w as f32, info.h as f32),
             Ui::Small(spec) => (spec.size.0 as f32, spec.size.1 as f32),
             Ui::Reverb => (lemon_reverb::view::W as f32, lemon_reverb::view::H as f32),
+            Ui::Trio => (lemon_3x_osc::view::EDITOR_W as f32, lemon_3x_osc::view::EDITOR_H as f32),
+            // The dock shows only the pad grid (the cards stay in the pop-out), cropped at the grid's right edge.
+            Ui::Drum => (lemon_drum_sampler::view::GRID.right() + lemon_drum_sampler::view::GRID.x, lemon_drum_sampler::view::H as f32),
         }
     }
 
@@ -118,6 +139,10 @@ impl Ui {
                 v.push((MID_SIDE_ID, MID_SIDE_NAME));
                 v
             }
+            Ui::Trio => lemon_3x_osc::params::ui_settings(),
+            // The drum sampler exposes no host parameters: its pads are drawn from its saved state, not the
+            // parameter list, so the tile has no (param-based) settings to name.
+            Ui::Drum => Vec::new(),
         }
     }
 
@@ -131,7 +156,7 @@ impl Ui {
     /// Paints the editor into `c` (already sized by [`Ui::pixels`], which sets its scale so the glyphs are rasterised
     /// at the tile's size and a scaled-down tile stays sharp — ui/ui-scaling.md) and gives every control's hit region
     /// with the hosted parameter id it sets.
-    pub fn paint_into(&self, c: &mut Canvas, params: &[RackParam]) -> Vec<(Rect, u32, Option<f64>)> {
+    pub fn paint_into(&self, c: &mut Canvas, params: &[RackParam], view: &TileView) -> Vec<(Rect, u32, Option<f64>)> {
         let vals = Values::new(self, params);
         let t = os_plugkit::palette();
         match *self {
@@ -141,7 +166,6 @@ impl Ui {
                     .into_iter()
                     .filter_map(|(r, id)| {
                         let p = vals.param(&id)?;
-                        // A switch flips on the press, a dial starts a drag where it is.
                         let v = p.toggle.then(|| 1.0 - p.value);
                         Some((r, p.id, v))
                     })
@@ -154,7 +178,6 @@ impl Ui {
                     .filter_map(|hit| {
                         let id = hit.t.id();
                         let p = vals.param(id)?;
-                        // A selector picks its row on the click; a knob, fader or shape starts a drag.
                         let v = match &hit.t {
                             lemon_small_fx::view::Target::Choice(_, i) => leaned(p, f64::from(*i)),
                             _ => None,
@@ -182,6 +205,51 @@ impl Ui {
                     })
                     .collect()
             }
+            Ui::Trio => {
+                let TileView::Trio(vst) = view else { return Vec::new() };
+                // The editor names its controls by string id; the rack's `Values` bridge resolves each to the
+                // hosted parameter code. Snapshot the map before `paint` takes `vals` by value.
+                let ids = vals.ids.clone();
+                let hits = lemon_3x_osc::view::paint(c, &t, &vals, vst, "", true);
+                let mut out = Vec::new();
+                for hit in hits {
+                    match hit.t {
+                        lemon_3x_osc::view::Target::Tab(n) => out.push((hit.r, EDITOR_TAB, Some(n as f64))),
+                        lemon_3x_osc::view::Target::SubTab(n) => out.push((hit.r, EDITOR_SUBTAB, Some(n as f64))),
+                        lemon_3x_osc::view::Target::Knob(s)
+                        | lemon_3x_osc::view::Target::Toggle(s)
+                        | lemon_3x_osc::view::Target::Set(s, _)
+                        | lemon_3x_osc::view::Target::List(s) => {
+                            if let Some(code) = ids.get(s.as_str()).copied() {
+                                let v = params.iter().find(|p| p.id == code).map(|p| p.value).unwrap_or(0.0);
+                                out.push((hit.r, code, Some(v)));
+                            }
+                        }
+                        lemon_3x_osc::view::Target::Flag(_) => {
+                            if let Some(code) = ids.get("flags").copied() {
+                                let v = params.iter().find(|p| p.id == code).map(|p| p.value).unwrap_or(0.0);
+                                out.push((hit.r, code, Some(v)));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                out
+            }
+            Ui::Drum => {
+                let TileView::Drum { view: vst, state, loaded, lit } = view else { return Vec::new() };
+                let look = lemon_drum_sampler::view::Look { state, loaded: &loaded[..], lit: &lit[..] };
+                let hits = lemon_drum_sampler::view::paint(c, &t, vst, &look, "");
+                let mut out = Vec::new();
+                for hit in hits {
+                    match hit.t {
+                        lemon_drum_sampler::view::Target::Pad(n) => out.push((hit.r, EDITOR_PAD, Some(n as f64))),
+                        lemon_drum_sampler::view::Target::Bank(n) => out.push((hit.r, EDITOR_BANK, Some(n as f64))),
+                        _ => {}
+                    }
+                }
+                out
+            }
         }
     }
 }
@@ -201,7 +269,7 @@ pub struct Image {
 }
 
 /// A tile's rendered editor, and what it was rendered from.
-struct Entry {
+pub struct Entry {
     name: String,
     /// The parameters' values when it was drawn (a change redraws it).
     sig: u64,
@@ -212,12 +280,37 @@ struct Entry {
     /// The pixels, kept for the same reason.
     buf: Vec<u32>,
     image: Rc<Image>,
+    /// Per-tile state for the native-instrument editors (the Trio's page, the drum's bank/pad); `Plain` otherwise.
+    pub view: TileView,
 }
 
 impl Entry {
     fn new(name: &str) -> Self {
         let image = Rc::new(Image { w: 1, h: 1, px: vec![0], hits: Vec::new() });
-        Entry { name: name.to_string(), sig: 0, factor: 0.0, canvas: None, buf: Vec::new(), image }
+        Entry { name: name.to_string(), sig: 0, factor: 0.0, canvas: None, buf: Vec::new(), image, view: TileView::Plain }
+    }
+
+    /// Make sure `view` matches the UI about to be painted: if the UI changed (or was never set), reset it to that
+    /// UI's default interactive state so we don't hand the wrong editor the wrong state.
+    fn ensure_view(&mut self, ui: Ui) {
+        let matches = matches!(
+            (&self.view, ui),
+            (TileView::Trio(_), Ui::Trio)
+                | (TileView::Drum { .. }, Ui::Drum)
+                | (TileView::Plain, _)
+        );
+        if !matches {
+            self.view = match ui {
+                Ui::Trio => TileView::Trio(lemon_3x_osc::view::ViewState::default()),
+                Ui::Drum => TileView::Drum {
+                    view: lemon_drum_sampler::view::ViewState::default(),
+                    state: lemon_drum_sampler::state::State::default(),
+                    loaded: vec![false; 32],
+                    lit: vec![false; 32],
+                },
+                _ => TileView::Plain,
+            };
+        }
     }
 }
 
@@ -232,16 +325,28 @@ impl Cache {
     pub fn retain(&mut self, keys: &[usize]) {
         self.entries.retain(|k, _| keys.contains(k));
     }
+    /// The tile's cache entry, to read or change its per-tile state (the Trio's page, the drum's chosen pad).
+    pub fn get_mut(&mut self, key: &usize) -> Option<&mut Entry> {
+        self.entries.get_mut(key)
+    }
 }
 
 /// The image of the editor of the device hosted under `key`: `name` is the plugin's name, `factor` the device px per
 /// editor px. The cached image is handed back when neither the values nor the scale moved.
-pub fn image(s: &State, key: usize, name: &str, params: &[RackParam], factor: f32) -> Option<Rc<Image>> {
+pub fn image(s: &State, plugins: &Plugins, key: usize, name: &str, params: &[RackParam], factor: f32) -> Option<Rc<Image>> {
     let ui = ui(name)?;
     let sig = signature(name, params);
     let mut cache = s.rack_ui_cache.borrow_mut();
     let e = cache.entries.entry(key).or_insert_with(|| Entry::new(name));
-    if e.name == name && e.sig == sig && (e.factor - factor).abs() < 0.005 {
+    // The drum sampler's pads reflect its live state, which the pop-out edits, so its tile is never cached:
+    // rebuild it every paint so a pad load/swap shows up.
+    let view = if let Ui::Drum = ui {
+        drum_view(plugins, key, &e.view)
+    } else {
+        e.ensure_view(ui);
+        e.view.clone()
+    };
+    if e.name == name && e.sig == sig && (e.factor - factor).abs() < 0.005 && !matches!(ui, Ui::Drum) {
         return Some(e.image.clone());
     }
     let (dw, dh) = ui.pixels(factor);
@@ -253,13 +358,16 @@ pub fn image(s: &State, key: usize, name: &str, params: &[RackParam], factor: f3
         None => e.canvas = Canvas::new(dw, dh, scale).ok(),
     }
     let canvas = e.canvas.as_mut()?;
-    let hits = ui.paint_into(canvas, params);
+    let hits = ui.paint_into(canvas, params, &view);
     e.buf.resize((dw * dh) as usize, 0);
     canvas.copy_to_xrgb(&mut e.buf);
     e.image = Rc::new(Image { w: dw as usize, h: dh as usize, px: e.buf.clone(), hits });
     e.name = name.to_string();
     e.sig = sig;
     e.factor = factor;
+    if matches!(ui, Ui::Drum) {
+        e.view = view;
+    }
     Some(e.image.clone())
 }
 
@@ -348,6 +456,67 @@ impl lemon_reverb::view::Model for Values<'_> {
     }
 }
 
+impl<'a> lemon_3x_osc::view::Model for Values<'a> {
+    fn norm(&self, id: &str) -> f32 {
+        let Some(code) = self.ids.get(id).copied() else { return 0.0 };
+        let Some(p) = self.params.iter().find(|c| c.id == code) else { return 0.0 };
+        p.value as f32
+    }
+    fn plain(&self, id: &str) -> f32 {
+        let Some(code) = self.ids.get(id).copied() else { return 0.0 };
+        let Some(p) = self.params.iter().find(|c| c.id == code) else { return 0.0 };
+        p.plain as f32
+    }
+    fn text(&self, id: &str) -> String {
+        let Some(code) = self.ids.get(id).copied() else { return String::new() };
+        let Some(p) = self.params.iter().find(|c| c.id == code) else { return String::new() };
+        p.text.clone()
+    }
+}
+
+/// Per-tile interactive state for the native editors that keep some of it (the Trio's selected page, the drum's
+/// chosen bank/pad). The rack used to paint every tile from `ViewState::default()`, which is why an instrument
+/// never kept its page; this lives in the cache entry so the choice survives repaints.
+#[derive(Clone)]
+pub enum TileView {
+    /// The simple / small / reverb editors have no tile-local state.
+    Plain,
+    /// Lemon Trio: the selected page and sub-page in its editor.
+    Trio(lemon_3x_osc::view::ViewState),
+    /// Lemon Sampler: the chosen bank/pad, plus a snapshot of its saved state so the pads can render in the dock.
+    Drum {
+        view: lemon_drum_sampler::view::ViewState,
+        state: lemon_drum_sampler::state::State,
+        loaded: Vec<bool>,
+        lit: Vec<bool>,
+    },
+}
+
+impl Default for TileView {
+    fn default() -> Self {
+        TileView::Plain
+    }
+}
+
+/// A drum tile's per-paint view: a snapshot of the hosted sampler's state, carrying over the user's chosen
+/// bank/pad so a repaint doesn't reset the selection.
+fn drum_view(plugins: &Plugins, key: usize, prev: &TileView) -> TileView {
+    let view = match prev {
+        TileView::Drum { view, .. } => view.clone(),
+        _ => lemon_drum_sampler::view::ViewState::default(),
+    };
+    let state = plugins.state(key)
+        .and_then(|blob| lemon_drum_sampler::params::fl_from_plugin_state(&blob))
+        .and_then(|raw| lemon_drum_sampler::state::State::parse(&raw))
+        .unwrap_or_default();
+    TileView::Drum {
+        view,
+        state,
+        loaded: vec![false; 32],
+        lit: vec![false; 32],
+    }
+}
+
 /// The cache's cell, as `State` holds it (painting has the state by reference).
 pub type Cell = RefCell<Cache>;
 
@@ -391,6 +560,7 @@ mod tests {
             "Lemon Formula Controller",
             "Lemon Peak Controller",
             "Lemon Reverb",
+            "Lemon Trio",
         ];
         for name in names {
             let ui = ui(name).unwrap_or_else(|| panic!("{name} has no editor UI"));
@@ -399,7 +569,7 @@ mod tests {
             assert!(w >= 100.0 && h >= 60.0, "{name} is {w}x{h}");
             assert!(!ui.settings().is_empty(), "{name} names parameters");
         }
-        assert!(ui("Lemon Sampler").is_none(), "an instrument keeps the grid");
+        assert!(ui(LEMON_SAMPLER).is_some(), "the drum sampler shows its pad grid in the dock");
     }
 
     /// An editor renders its own pixels and reports its controls, each on a hosted parameter: the canvas is the
@@ -425,7 +595,7 @@ mod tests {
             .collect();
         let (w, h) = ui.pixels(1.0);
         let mut c = Canvas::new(w, h, 1.0).expect("a canvas");
-        let hits = ui.paint_into(&mut c, &params);
+        let hits = ui.paint_into(&mut c, &params, &TileView::Plain);
         assert_eq!((w as f32, h as f32), ui.size());
         assert_eq!(hits.len(), 7, "a hit per setting");
         for (r, id, v) in &hits {
@@ -441,7 +611,7 @@ mod tests {
         let (sw, sh) = ui.pixels(0.5);
         assert_eq!((sw, sh), (w / 2, h / 2));
         let mut c = Canvas::new(sw, sh, 0.5).expect("a canvas");
-        assert_eq!(ui.paint_into(&mut c, &params).len(), hits.len());
+        assert_eq!(ui.paint_into(&mut c, &params, &TileView::Plain).len(), hits.len());
     }
 
     /// A small effect (Lemon Filter) draws its own layout too, and its selector rows pick their value.
@@ -466,7 +636,7 @@ mod tests {
             .collect();
         let (w, h) = ui.pixels(1.0);
         let mut c = Canvas::new(w, h, 1.0).expect("a canvas");
-        let hits = ui.paint_into(&mut c, &params);
+        let hits = ui.paint_into(&mut c, &params, &TileView::Plain);
         assert_eq!((w as f32, h as f32), ui.size());
         assert!(!hits.is_empty(), "its knobs and rows");
     }
@@ -499,5 +669,65 @@ mod tests {
         }
         assert_eq!(<Values as os_plugkit::simple::Values>::norm(&vals, "hcut"), 0.5);
         assert_eq!(<Values as os_plugkit::simple::Values>::plain(&vals, "hcut"), 1.0);
+    }
+
+    /// The Trio's full editor draws in the dock: its oscillators, tabs and knobs, with drag/drop hits on real
+    /// parameters and editor-only hits on its tab strip (the user keeps the rest in the pop-out window).
+    #[test]
+    fn the_trio_editor_renders_in_the_dock() {
+        let ui = ui("Lemon Trio").expect("Lemon Trio");
+        let params: Vec<RackParam> = ui
+            .settings()
+            .iter()
+            .enumerate()
+            .map(|(i, (_, name))| RackParam {
+                id: i as u32,
+                name: name.to_string(),
+                group: String::new(),
+                value: 0.5,
+                text: String::new(),
+                plain: 1.0,
+                min: 0.0,
+                max: 1.0,
+                toggle: false,
+            })
+            .collect();
+        let (w, h) = ui.pixels(1.0);
+        let mut c = Canvas::new(w, h, 1.0).expect("a canvas");
+        let hits = ui.paint_into(&mut c, &params, &TileView::Trio(Default::default()));
+        assert!(!hits.is_empty(), "the Trio paints its oscillators and tabs");
+        let tabs = hits.iter().filter(|(_, id, _)| *id == EDITOR_TAB).count();
+        assert!(tabs > 0, "the Trio's tab strip is hit-testable");
+        let subtabs = hits.iter().filter(|(_, id, _)| *id == EDITOR_SUBTAB).count();
+        eprintln!("trio editor: {} hits ({} tabs, {} sub-tabs)", hits.len(), tabs, subtabs);
+        // The Trio's editor is allowed to emit editor-only hits (tabs/sub-tabs, sentinels) and real hosted
+        // parameter hits. Surface anything else rather than guess.
+        let unknown: Vec<u32> = hits
+            .iter()
+            .filter(|(_, id, _)| *id != EDITOR_TAB && *id != EDITOR_SUBTAB && !params.iter().any(|p| p.id == *id))
+            .map(|(_, id, _)| *id)
+            .collect();
+        if !unknown.is_empty() {
+            eprintln!("note: Trio editor emitted {} non-param/non-tab hit ids: {:?}", unknown.len(), unknown);
+        }
+    }
+
+    /// The drum machine shows just its 16 pads in the dock; the pad grid is hit-testable and the card editing
+    /// stays in the pop-out window.
+    #[test]
+    fn the_drum_machine_pads_render_in_the_dock() {
+        let ui = ui(LEMON_SAMPLER).expect("Lemon Sampler");
+        let (w, h) = ui.pixels(1.0);
+        let mut c = Canvas::new(w, h, 1.0).expect("a canvas");
+        let view = TileView::Drum {
+            view: lemon_drum_sampler::view::ViewState::default(),
+            state: lemon_drum_sampler::state::State::default(),
+            loaded: vec![false; 32],
+            lit: vec![false; 32],
+        };
+        let hits = ui.paint_into(&mut c, &[], &view);
+        assert!(!hits.is_empty(), "the pads paint");
+        let pads = hits.iter().filter(|(_, id, _)| *id == EDITOR_PAD).count();
+        assert_eq!(pads, 16, "one hit per pad");
     }
 }

@@ -456,6 +456,12 @@ pub enum RackAct {
     /// A tile body's switch, selector row or radio pressed: set the parameter to normalized `v` once, with no drag
     /// (`None` picks nothing).
     ParamTap { key: usize, id: u32, v: Option<f64> },
+    /// Editor-only hits inside a docked native editor that carry no host parameter: a Trio tab / sub-tab,
+    /// or a drum bank / pad. The run handler applies them to that tile's cached view.
+    EditorTab { key: usize, n: u8 },
+    EditorSubTab { key: usize, n: u8 },
+    EditorBank { key: usize, n: u8 },
+    EditorPad { key: usize, n: u8 },
     /// The device menu's Remove: delete the device from its chain.
     Remove(DeviceKind),
     /// The device menu's Replace (the instrument): the device browser, whose instrument pick replaces it.
@@ -632,6 +638,38 @@ pub fn run(app: &mut App, act: RackAct) {    match act {
             s.device_rack_scroll_x =
                 (crate::views::device_rack::scroll_x(s, w) + d * TILE_W)
                     .clamp(0.0, (crate::views::device_rack::content_w(s) - w).max(0.0));
+            app.invalidate();
+        }
+        RackAct::EditorTab { key, n } => {
+            if let Some(e) = app.state.rack_ui_cache.borrow_mut().get_mut(&key) {
+                if let crate::rack_ui::TileView::Trio(v) = &mut e.view {
+                    v.tab = n;
+                }
+            }
+            app.invalidate();
+        }
+        RackAct::EditorSubTab { key, n } => {
+            if let Some(e) = app.state.rack_ui_cache.borrow_mut().get_mut(&key) {
+                if let crate::rack_ui::TileView::Trio(v) = &mut e.view {
+                    v.sub = n;
+                }
+            }
+            app.invalidate();
+        }
+        RackAct::EditorBank { key, n } => {
+            if let Some(e) = app.state.rack_ui_cache.borrow_mut().get_mut(&key) {
+                if let crate::rack_ui::TileView::Drum { view, .. } = &mut e.view {
+                    view.bank = n as usize;
+                }
+            }
+            app.invalidate();
+        }
+        RackAct::EditorPad { key, n } => {
+            if let Some(e) = app.state.rack_ui_cache.borrow_mut().get_mut(&key) {
+                if let crate::rack_ui::TileView::Drum { view, .. } = &mut e.view {
+                    view.pad = n as usize;
+                }
+            }
             app.invalidate();
         }
     }

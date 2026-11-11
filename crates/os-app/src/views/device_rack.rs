@@ -10,6 +10,8 @@
 use os_ui::{Color, Rect, kit};
 
 use crate::app::{Action, State};
+use crate::plugins::Plugins;
+use crate::rack_ui::{EDITOR_TAB, EDITOR_SUBTAB, EDITOR_BANK, EDITOR_PAD};
 use crate::device_rack::{self, Device, DeviceKind, RackParam, HEADER_H, RackAct, TILE_W};
 use crate::icons::{self, Icon};
 use crate::views::{Ui, fnt};
@@ -137,7 +139,7 @@ fn body(tile: Rect) -> Rect {
 }
 
 /// Paints the rack panel over `r` (its splitter, header and device tiles).
-pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
+pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, r: Rect) {
     let t = ui.t;
     ui.c.fill_rect(r, t.s(0x1a1d1f));
     // The splitter: a drag on it resizes the rack, a double click gives back the default height.
@@ -261,7 +263,7 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
     let mut gx = r.x;
     for (i, (d, tile)) in tiles.iter().enumerate() {
         gap_button(ui, gx, tile.y, slot_after(i), tile.h);
-        tile_paint(ui, s, i, d.clone(), *tile);
+        tile_paint(ui, s, plugins, i, d.clone(), *tile);
         gx = tile.right();
     }
     gap_button(ui, gx, r.y + HEADER_H, None, tiles.first().map_or(r.h - HEADER_H, |(_, t)| t.h));
@@ -279,7 +281,7 @@ fn gap_button(ui: &mut Ui, x: f32, y: f32, slot: Option<u8>, h: f32) {
 
 /// A device tile: a header (name, enable light, wrench, menu) over a body of the device's own controls. A
 /// selected tile's header is brighter: the header bar is clickable and selects (§7).
-fn tile_paint(ui: &mut Ui, s: &State, i: usize, d: Device, tile: Rect) {
+fn tile_paint(ui: &mut Ui, s: &State, plugins: &Plugins, i: usize, d: Device, tile: Rect) {
     let t = ui.t;
     let selected = device_rack::tile_selected(s, i);
     // The tile: a raised surface with a hairline between header and body.
@@ -380,7 +382,7 @@ fn tile_paint(ui: &mut Ui, s: &State, i: usize, d: Device, tile: Rect) {
     }
     // The device's own controls, drawn here rather than by an embedded native window (see
     // `device_rack::sync_embed`): the same names, sections and value texts its editor shows.
-    controls(ui, s, &d, body);
+    controls(ui, s, plugins, &d, body);
 }
 
 /// A container tile's body: the members in chain order ("1. Lemon Limiter"), and the empty container's hint.
@@ -486,7 +488,7 @@ pub(crate) fn param_dial(s: &State, key: usize, id: u32) -> Option<Rect> {
 /// A tile's body: the device's own controls, as its editor shows them — a section header per parameter group, then
 /// a cell per parameter (its name, a dial or a switch, and the plugin's own value text). More controls than the
 /// body fits scroll with the wheel (the wheel's `scroll_max` clamp); a bar on the right edge says so.
-fn controls(ui: &mut Ui, s: &State, d: &Device, body: Rect) {
+fn controls(ui: &mut Ui, s: &State, plugins: &Plugins, d: &Device, body: Rect) {
     let t = ui.t;
     ui.c.fill_rect(body, t.s(0x131718));
     ui.c.stroke_rrect(body.inset(1.0), 2.0, 1.0, t.splitter_dark);
@@ -497,7 +499,7 @@ fn controls(ui: &mut Ui, s: &State, d: &Device, body: Rect) {
     // The plugin's own editor, drawn by the app: the same panels, dials, switches and wordmark its window shows
     // (`crate::rack_ui`). A plugin without a shared editor (an instrument, a third-party plugin) keeps the grid.
     if let Some(editor) = crate::rack_ui::ui(plugin_name(s, d)) {
-        editor_body(ui, s, key, editor, body);
+        editor_body(ui, s, plugins, key, editor, body);
         return;
     }
     let params: &[RackParam] = s.device_rack_params.get(&key).map_or(&[], |v| v.as_slice());
@@ -539,7 +541,7 @@ fn controls(ui: &mut Ui, s: &State, d: &Device, body: Rect) {
 /// A tile body showing the device's own editor: the plugin's UI (`crate::rack_ui`) filling the body — stretched to
 /// the space the tile has, so no bars sit beside it — with every dial, switch and selector of it live on the hosted
 /// parameter it names.
-fn editor_body(ui: &mut Ui, s: &State, key: usize, editor: crate::rack_ui::Ui, body: Rect) {
+fn editor_body(ui: &mut Ui, s: &State, plugins: &Plugins, key: usize, editor: crate::rack_ui::Ui, body: Rect) {
     let t = ui.t;
     let params: &[crate::device_rack::RackParam] = s.device_rack_params.get(&key).map_or(&[], |v| v.as_slice());
     let (ew, eh) = editor.size();
@@ -554,7 +556,7 @@ fn editor_body(ui: &mut Ui, s: &State, key: usize, editor: crate::rack_ui::Ui, b
     let k = (r.w / ew).max(r.h / eh).clamp(0.12, 3.0);
     // Rendered at the app's scale times that: the editor's glyphs are rasterised at the size the tile shows them.
     let scale = ui.c.scale();
-    let Some(img) = crate::rack_ui::image(s, key, editor.name(), params, k * scale) else {
+    let Some(img) = crate::rack_ui::image(s, plugins, key, editor.name(), params, k * scale) else {
         ui.c.text_clip(fnt(13.0), body.x + 10.0, body.y + 9.0, body.w - 20.0, t.text_dim, "This device's editor could not be drawn");
         return;
     };
@@ -564,12 +566,28 @@ fn editor_body(ui: &mut Ui, s: &State, key: usize, editor: crate::rack_ui::Ui, b
     let ky = r.h / eh;
     for (hr, id, v) in &img.hits {
         let cell = Rect::new(r.x + hr.x * kx, r.y + hr.y * ky, (hr.w * kx).max(2.0), (hr.h * ky).max(2.0));
-        let p = params.iter().find(|p| p.id == *id);
-        let act = match v {
-            Some(v) => RackAct::ParamTap { key, id: *id, v: Some(*v) },
-            None => RackAct::ParamSet { key, id: *id, v: p.map_or(0.0, |p| p.value) },
+        let n = (*v).unwrap_or(0.0) as u8;
+        let act = if *id == EDITOR_TAB {
+            RackAct::EditorTab { key, n }
+        } else if *id == EDITOR_SUBTAB {
+            RackAct::EditorSubTab { key, n }
+        } else if *id == EDITOR_BANK {
+            RackAct::EditorBank { key, n }
+        } else if *id == EDITOR_PAD {
+            RackAct::EditorPad { key, n }
+        } else {
+            let p = params.iter().find(|p| p.id == *id);
+            match v {
+                Some(v) => RackAct::ParamTap { key, id: *id, v: Some(*v) },
+                None => RackAct::ParamSet { key, id: *id, v: p.map_or(0.0, |p| p.value) },
+            }
         };
-        let hint = p.map_or_else(|| "Set this parameter".to_string(), |p| format!("{}: {}", p.name, p.text));
+        let hint = if matches!(*id, EDITOR_TAB | EDITOR_SUBTAB | EDITOR_BANK | EDITOR_PAD) {
+            String::new()
+        } else {
+            let p = params.iter().find(|p| p.id == *id);
+            p.map_or(String::new(), |p| p.text.clone())
+        };
         ui.hit(cell, Action::DeviceRack(act), hint);
     }
 }
