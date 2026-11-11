@@ -58,6 +58,8 @@ pub enum Icon {
     ArrowUp,
     Back,
     Wave,
+    /// An envelope's breakpoints (Tabler's `timeline`): the Trio's envelopes page, where its strip row has it.
+    Timeline,
     Page,
     Star,
     Folder,
@@ -139,6 +141,7 @@ fn shape(icon: Icon) -> &'static TablerIcon {
         Icon::ArrowUp => &tb::CARET_UP,
         Icon::Back => &tb::ARROW_LEFT,
         Icon::Wave => &tb::WAVE_SINE,
+        Icon::Timeline => &tb::TIMELINE,
         Icon::Star => &tb::STAR,
         Icon::Folder => &tb::FOLDER,
         Icon::Search => &tb::SEARCH,

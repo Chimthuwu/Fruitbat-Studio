@@ -326,14 +326,18 @@ fn tile_paint(ui: &mut Ui, s: &State, plugins: &Plugins, i: usize, d: Device, ti
     // gives up the room it takes.
     let flip = Rect::new(popout.x - 22.0, head.y + 2.0, 19.0, 19.0);
     let drum = d.key.is_some_and(|_| matches!(crate::rack_ui::ui(plugin_name(s, &d)), Some(crate::rack_ui::Ui::Drum)));
-    ui.c.text_clip(
-        fnt(14.0),
-        tile.x + 24.0,
-        head.y + 3.0,
-        tile.w - 24.0 - if drum { 86.0 } else { 64.0 },
-        t.text,
-        &d.name,
-    );
+    // The Trio's pages are the tile's to show, its editor being hosted here: three buttons beside the pop-out, where
+    // the editor's own strip row keeps them in its window.
+    let trio = d.key.is_some_and(|_| matches!(crate::rack_ui::ui(plugin_name(s, &d)), Some(crate::rack_ui::Ui::Trio)));
+    let room = tile.w - 24.0
+        - if drum {
+            86.0
+        } else if trio {
+            130.0
+        } else {
+            64.0
+        };
+    ui.c.text_clip(fnt(14.0), tile.x + 24.0, head.y + 3.0, room, t.text, &d.name);
     // The pop-out arrow: pop the device's editor out to its own floating window (or dock it back, lit
     // while it is out). An out-arrow, not a wrench — the wrench is the device wrapper's own symbol
     // (the plugin window's Misc tab), so the tile's button says what it does instead.
@@ -363,6 +367,29 @@ fn tile_paint(ui: &mut Ui, s: &State, plugins: &Plugins, i: usize, d: Device, ti
         _ => {}
     }
     // The drum machine's flip: its pads, or the other half of its UI (the cards), in place — no pop-out.
+    if trio {
+        let key = d.key.unwrap();
+        let tab = match s.rack_ui_cache.borrow().view(&key) {
+            Some(crate::rack_ui::TileView::Trio(v)) => v.tab,
+            _ => 0,
+        };
+        // The same three pages, in the editor's order: oscillators, envelopes, the custom shape's sample.
+        for (n, icon, hint) in [
+            (0u8, Icon::Plug, "Oscillators"),
+            (1, Icon::Timeline, "Envelopes, LFOs and filter"),
+            (2, Icon::Wave, "Custom shape sample"),
+        ] {
+            let r = Rect::new(popout.x - 22.0 * f32::from(3 - n), head.y + 2.0, 19.0, 19.0);
+            header_icon_button(
+                ui,
+                r,
+                icon,
+                tab == n,
+                Action::DeviceRack(RackAct::EditorTab { key, n }),
+                hint,
+            );
+        }
+    }
     if drum {
         let key = d.key.unwrap();
         let flipped = matches!(

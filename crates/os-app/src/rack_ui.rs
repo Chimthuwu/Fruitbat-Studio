@@ -125,7 +125,9 @@ impl Ui {
             Ui::Simple(info) => (info.w as f32, info.h as f32),
             Ui::Small(spec) => (spec.size.0 as f32, spec.size.1 as f32),
             Ui::Reverb => (lemon_reverb::view::W as f32, lemon_reverb::view::H as f32),
-            Ui::Trio => (lemon_3x_osc::view::EDITOR_W as f32, lemon_3x_osc::view::EDITOR_H as f32),
+            // Hosted: the strip row is the host's (the tile's header draws its three page buttons), so the editor is
+            // what its window shows under that row.
+            Ui::Trio => (lemon_3x_osc::view::EDITOR_W as f32, lemon_3x_osc::view::HOSTED_EDITOR_H as f32),
             // The dock shows only the pad grid (the cards stay in the pop-out), cropped at the grid's right edge.
             Ui::Drum => (lemon_drum_sampler::view::GRID.right() + lemon_drum_sampler::view::GRID.x, lemon_drum_sampler::view::H as f32),
         }
@@ -215,9 +217,9 @@ impl Ui {
                 // The editor names its controls by string id; the rack's `Values` bridge resolves each to the
                 // hosted parameter code. Snapshot the map before `paint` takes `vals` by value.
                 let ids = vals.ids.clone();
-                // `hosted: false`: the tile shows the whole editor, its own tab strip included (the tile
-                // IS its window — hosted mode crops the strip for a host that draws its own).
-                let hits = lemon_3x_osc::view::paint(c, &t, &vals, vst, "", false);
+                // `hosted: true`: the tile's header draws the editor's page buttons in its own strip row, as a host
+                // does. The painting keeps that row's place (blank) and `image` crops it off.
+                let hits = lemon_3x_osc::view::paint(c, &t, &vals, vst, "", true);
                 use lemon_3x_osc::view::Target;
                 let mut out = Vec::new();
                 for hit in hits {
@@ -421,17 +423,27 @@ pub fn image(
             .min(dh as f32 / ui.size().1.max(1.0))
             .max(0.02)
     };
+    // The Trio's hosted frame keeps the strip row above its pages (the tile's header carries those buttons now): the
+    // canvas is that row taller than the body and the crop below takes the row off again.
+    let band = if matches!(ui, Ui::Trio) {
+        (lemon_3x_osc::view::STRIP_ROWS as f32 * scale).round().max(0.0) as u32
+    } else {
+        0
+    };
+    let chb = dh + band;
     match &mut e.canvas {
-        Some(c) => c.resize(dw, dh, scale),
-        None => e.canvas = Canvas::new(dw, dh, scale).ok(),
+        Some(c) => c.resize(dw, chb, scale),
+        None => e.canvas = Canvas::new(dw, chb, scale).ok(),
     }
     let canvas = e.canvas.as_mut()?;
     let hits = ui.paint_into(canvas, params, &view);
-    e.buf.resize((dw * dh) as usize, 0);
+    e.buf.resize((dw * chb) as usize, 0);
     canvas.copy_to_xrgb(&mut e.buf);
     // The drum's shown half, cropped out of the whole it painted.
     let (px, w, h, hits) = if drum {
         drum_half(&e.buf, dw, scale, flip, hits)
+    } else if band > 0 {
+        strip_off(&e.buf, dw, chb, band, hits)
     } else {
         // The hits, in the canvas's device px: the editor drew in logical px.
         let hits = hits
@@ -628,6 +640,33 @@ fn drum_half(
         })
         .collect();
     (half, cw, dh as u32, hits)
+}
+
+/// The Trio's tile image: the frame it painted minus its strip row, which the tile's own header draws now. `px` is
+/// `h` rows tall with `band` rows of strip above the body; the image is the rows under it, and its controls' hits move
+/// up with them.
+fn strip_off(
+    px: &[u32],
+    w: u32,
+    h: u32,
+    band: u32,
+    hits: Vec<(Rect, u32, Option<f64>)>,
+) -> (Vec<u32>, u32, u32, Vec<(Rect, u32, Option<f64>)>) {
+    let rows = h.saturating_sub(band).max(1);
+    let band = band.min(h.saturating_sub(1).max(1));
+    let mut body = Vec::with_capacity(rows as usize * w as usize);
+    for row in band..band + rows {
+        let y = row as usize * w as usize;
+        body.extend_from_slice(&px[y..y + w as usize]);
+    }
+    let hits = hits
+        .into_iter()
+        .map(|(mut r, id, v)| {
+            r.y -= band as f32;
+            (r, id, v)
+        })
+        .collect();
+    (body, w, rows, hits)
 }
 
 /// A drum tile's per-paint view: a snapshot of the hosted sampler's state, carrying over the user's chosen
@@ -829,13 +868,16 @@ mod tests {
         let (w, h) = ui.pixels(1.0);
         let mut c = Canvas::new(w, h, 1.0).expect("a canvas");
         let hits = ui.paint_into(&mut c, &params, &TileView::Trio(Default::default()));
-        assert!(!hits.is_empty(), "the Trio paints its oscillators and tabs");
-        let tabs = hits.iter().filter(|(_, id, _)| *id == EDITOR_TAB).count();
-        assert!(tabs > 0, "the Trio's tab strip is hit-testable");
-        // The whole editor, tabs and all: its parameter controls are drawn and hit-testable too.
+        assert!(!hits.is_empty(), "the Trio paints its oscillators");
+        // Hosted: the page buttons are the tile header's now, not the editor's own strip row.
+        assert!(
+            hits.iter().all(|(_, id, _)| *id != EDITOR_TAB),
+            "the tile's header carries the page buttons, not the editor"
+        );
+        // Its parameter controls are drawn and hit-testable too.
         let knobs = hits
             .iter()
-            .filter(|(_, id, _)| *id != EDITOR_TAB && *id != EDITOR_SUBTAB && params.iter().any(|p| p.id == *id))
+            .filter(|(_, id, _)| *id != EDITOR_SUBTAB && params.iter().any(|p| p.id == *id))
             .count();
         assert!(knobs > 0, "the Trio's knobs are hit-testable ({} hits)", hits.len());
     }
@@ -916,6 +958,11 @@ mod tests {
         let s = &app.state;
         let img = image(s, &app.plugins, 0, LEMON_TRIO, &params, 0.84, 472, 360).expect("the Trio's image");
         assert!(!img.hits.is_empty(), "its controls are hit-testable");
+        assert_eq!((img.w, img.h), (472, 360), "the image is the body, its strip row cropped off");
+        assert!(
+            img.hits.iter().all(|(r, _, _)| r.y >= 0.0),
+            "no control is left up in the cropped strip row"
+        );
         let unique = {
             let mut v = img.px.clone();
             v.sort_unstable();
