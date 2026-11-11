@@ -1133,6 +1133,15 @@ pub struct State {
     pub launcher: crate::launcher::Launcher,
     /// Whether the Playlist window shows the clip launcher instead of the arrangement (Tab).
     pub launcher_open: bool,
+    /// Whether the arrangement layer is audible while the launcher drives the engine (the master transport's Play/Stop):
+    /// the launcher's clips are unchained from the main transport, but the master Play re-launches any clip that has
+    /// not been stopped and keeps the arrangement audible (Bitwig).
+    pub arr_playing: bool,
+    /// The arrangement's own playback position (ticks), tracked separately from the engine tick while the launcher drives
+    /// it, so the arrangement layers at its own phase. Equals `engine_tick` when the launcher is not driving playback.
+    pub arr_tick: f64,
+    /// The engine's transport tick as of the last frame, so the arrangement's phase can advance with the engine.
+    pub engine_tick: f64,
     /// The device tile being dragged (its kind), and the gap it would drop at (a chain index).
     pub device_rack_drag: Option<crate::device_rack::DeviceKind>,
     pub device_rack_drop: Option<usize>,
@@ -1606,6 +1615,9 @@ impl App {
                 device_rack_scroll_x: 0.0,
                 launcher: Default::default(),
                 launcher_open: false,
+                arr_playing: false,
+                arr_tick: 0.0,
+                engine_tick: 0.0,
                 device_rack_drag: None,
                 device_rack_drop: None,
                 device_rack_sels: Default::default(),
@@ -8237,6 +8249,23 @@ impl App {
         self.transport.play_counted(&p, self.play_mode(), start, bars);
     }
 
+    /// Start the engine for the clip launcher without touching the arrangement's play state (Bitwig): launching a clip
+    /// drives the engine on its own, and the master transport's Play re-launches any clip that has not been stopped.
+    pub(crate) fn start_launcher(&mut self) {
+        let p = crate::rack::play_project(&self.state);
+        let start = if self.state.arr_playing { self.state.arr_tick } else { 0.0 };
+        self.sync_loop_range();
+        self.transport.play(&p, self.play_mode(), start);
+    }
+
+    /// Resume the arrangement on its own phase after the launcher stops driving the engine.
+    pub(crate) fn start_arrangement(&mut self) {
+        let p = crate::rack::play_project(&self.state);
+        let start = self.state.arr_tick;
+        self.sync_loop_range();
+        self.transport.play(&p, self.play_mode(), start.max(0.0));
+    }
+
     /// TOOLS > Stop sound (Ctrl+H): stops playback and every voice, and the effects' tails.
     fn stop_sound(&mut self) {
         self.transport.silence();
@@ -8831,32 +8860,64 @@ impl App {
             Action::Bar(h) => self.bar_hit(h),
             Action::Play => {
                 self.perf_transport();
-                match self.transport.state() {
-                    // Play toggles pause (the position is held in place); Stop rewinds.
-                    TransportState::Playing => self.transport.pause(),
-                    TransportState::Paused => self.transport.resume(),
-                    TransportState::Stopped => self.play_from_stop(),
+                if crate::launcher::live(&self.state) {
+                    // The launcher drives the engine; the master Play toggles the arrangement layer (Bitwig): it
+                    // re-enables the arrangement, and resumes a paused engine. It never stops the launcher's clips.
+                    match self.transport.state() {
+                        TransportState::Playing => {
+                            self.state.arr_playing = true;
+                            let p = crate::rack::play_project(&self.state);
+                            self.transport.update(&p);
+                            self.invalidate();
+                        }
+                        TransportState::Paused => {
+                            self.transport.resume();
+                            self.state.arr_playing = true;
+                            self.invalidate();
+                        }
+                        TransportState::Stopped => {
+                            self.state.arr_playing = true;
+                            let p = crate::rack::play_project(&self.state);
+                            self.transport.update(&p);
+                            self.invalidate();
+                        }
+                    }
+                } else {
+                    match self.transport.state() {
+                        // Play toggles pause (the position is held in place); Stop rewinds.
+                        TransportState::Playing => self.transport.pause(),
+                        TransportState::Paused => self.transport.resume(),
+                        TransportState::Stopped => self.play_from_stop(),
+                    }
                 }
             }
             Action::Stop => {
                 self.perf_transport();
-                self.transport.stop();
-                self.record_stopped();
-                // Stop rewinds to where playback started: the song position (or the piano roll's play-start marker)
-                // stays where it was put, so the next start plays from there again; with a time selection, its start.
-                let s = &mut self.state;
-                if s.song_mode {
-                    if let Some((a, _)) = s.playlist.range {
-                        s.playlist.pos = a;
+                if crate::launcher::live(&self.state) {
+                    // The master Stop cuts only the arrangement layer; the launcher's clips keep playing (Bitwig).
+                    self.state.arr_playing = false;
+                    let p = crate::rack::play_project(&self.state);
+                    self.transport.update(&p); // launcher-only (the arrangement is dropped)
+                    self.invalidate();
+                } else {
+                    self.transport.stop();
+                    self.record_stopped();
+                    // Stop rewinds to where playback started: the song position (or the piano roll's play-start marker)
+                    // stays where it was put, so the next start plays from there again; with a time selection, its start.
+                    let s = &mut self.state;
+                    if s.song_mode {
+                        if let Some((a, _)) = s.playlist.range {
+                            s.playlist.pos = a;
+                        }
+                        // A song position move: the initial values (spec: ui/settings-choices.md "Advanced: Initialize
+                        // controls automatically").
+                        crate::init::apply(s);
+                    } else if let Some((a, _)) = s.piano.range.filter(|_| s.shown(Win::PianoRoll)) {
+                        // spec: ui/recording.md §5: the piano roll's time selection, as in SONG mode.
+                        s.piano.marker = a;
                     }
-                    // A song position move: the initial values (spec: ui/settings-choices.md "Advanced: Initialize
-                    // controls automatically").
-                    crate::init::apply(s);
-                } else if let Some((a, _)) = s.piano.range.filter(|_| s.shown(Win::PianoRoll)) {
-                    // spec: ui/recording.md §5: the piano roll's time selection, as in SONG mode.
-                    s.piano.marker = a;
+                    self.invalidate();
                 }
-                self.invalidate();
             }
             Action::ToggleLauncher => {
                 s.launcher_open = !s.launcher_open;
@@ -8865,9 +8926,14 @@ impl App {
             Action::PatSong(song) => {
                 let changed = s.song_mode != song;
                 s.song_mode = song;
-                // The running playback follows the switch: it restarts in the new mode (a paused one is stopped),
-                // so the playheads always show what is heard.
-                if changed && self.transport.playing() {
+                if crate::launcher::live(&self.state) {
+                    // The launcher keeps driving the engine; the switch only swaps which arrangement the layer uses.
+                    let p = crate::rack::play_project(&self.state);
+                    self.transport.update(&p);
+                    self.invalidate();
+                } else if changed && self.transport.playing() {
+                    // The running playback follows the switch: it restarts in the new mode (a paused one is stopped),
+                    // so the playheads always show what is heard.
                     let was_playing = !self.transport.paused();
                     self.transport.stop();
                     if was_playing {

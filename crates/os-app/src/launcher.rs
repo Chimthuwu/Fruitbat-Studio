@@ -784,7 +784,9 @@ fn play_cell(app: &mut App, slot: &Slot) {
         app.state.project.current_pattern = Some(slot.pattern);
     }
     if !app.transport.playing() {
-        app.act(Action::Play);
+        // Start the engine for the launcher without forcing the arrangement on (Bitwig: launching a clip does not start
+        // the song). The master transport's Play re-launches any clip that has not been stopped.
+        app.start_launcher();
     } else {
         // Clips already run: the playing project's tracks change, so the engine is given the new one.
         let p = crate::rack::play_project(&app.state);
@@ -987,16 +989,40 @@ pub fn stop_all(app: &mut App) {
 pub fn advance(app: &mut App) -> bool {
     let running = waiting(app);
     let now = app.transport.tick();
+    app.state.engine_tick = now;
+    let prev_tick = app.state.launcher.last_tick;
     let before = app.state.launcher.playing.clone();
     let launched = advance_at(app, now, running);
     let fired = next_actions(app, now);
+    let changed = app.state.launcher.playing != before;
     // A launch that changed what plays needs the engine's project rebuilt (the window's tracks changed).
-    if app.state.launcher.playing != before {
+    if changed {
         // The window (and so the transport's loop) follows what is on the air.
         app.sync_loop_range();
         if live(&app.state) {
             let p = crate::rack::play_project(&app.state);
             app.transport.update(&p);
+        }
+    }
+    // The launcher drives the engine: the arrangement keeps its own phase while it layers with the launcher, and tracks
+    // the engine when it does not (so it resumes where it left off).
+    if live(&app.state) && app.state.arr_playing {
+        let delta = now - prev_tick;
+        if delta > 0.0 {
+            app.state.arr_tick += delta;
+        }
+    } else if !live(&app.state) {
+        app.state.arr_tick = now;
+    }
+    app.state.launcher.last_tick = now;
+    // The last launcher clip stopped: hand the engine back to the arrangement (or stop), keeping the master transport's
+    // arrangement state (Bitwig: the arrangement keeps playing unless the master Stop was pressed).
+    if changed && !live(&app.state) {
+        if app.state.arr_playing {
+            app.start_arrangement();
+        } else {
+            app.transport.stop();
+            app.record_stopped();
         }
     }
     launched || fired
@@ -1258,6 +1284,10 @@ pub fn window(s: &State) -> u64 {
 /// only that track's channel's notes — repeated at the clip's own length from the tick it was launched at, over the
 /// window [`window`]. So the tracks play together, each looping at its own length, and the shadows stay out of the
 /// project's own patterns (the piano roll, the channel rack and a save see the real ones).
+/// The project the transport plays while launcher clips run: `base` with the playing tracks' arrangement clips
+/// replaced by their clips' loops, and — when the master transport has the arrangement playing — the arrangement's own
+/// clips layered back in at their own phase. Each playing track loops on its own; the arrangement keeps its own
+/// position, so the two are audible together, Bitwig-style. `None` when no clip plays.
 pub fn shadow(s: &State, base: &Project) -> Option<Project> {
     if !live(s) {
         return None;
@@ -1266,16 +1296,23 @@ pub fn shadow(s: &State, base: &Project) -> Option<Project> {
     if w == 0 {
         return None;
     }
+    let mut p = launcher_shadow(s, base, w);
+    if s.arr_playing {
+        // The master transport re-launches any clip that has not been stopped; the arrangement layers on top of the
+        // launcher (Bitwig), at its own phase, while the launcher drives the engine.
+        add_arrangement(&mut p, s, w);
+    }
+    Some(p)
+}
+
+/// The launcher clips alone: every lane's arrangement clip cleared, each playing track's clip looped at its own length
+/// from the tick it was launched at, over the window. The arrangement layer is layered back in by `add_arrangement`.
+fn launcher_shadow(s: &State, base: &Project, w: u64) -> Project {
     let mut p = base.clone();
-    // A project without an arrangement (a new one) gets one: the launcher's clips need somewhere to run.
     if p.arrangements.is_empty() {
         p.arrangements.push(os_model::Arrangement { number: 1, ..Default::default() });
     }
-    // Number the shadow patterns past every pattern the project has (they must not collide), and build them off the
-    // project's own patterns before the arrangement is touched.
     let mut next_no = p.patterns.iter().map(|q| q.number).max().unwrap_or(0).saturating_add(1).max(1);
-    // What a playing track puts on its lane: a shadow pattern (with the number it was given) or the sample the cell
-    // plays itself.
     enum Lane {
         Pattern(u16, os_model::Pattern),
         Audio(u16),
@@ -1285,7 +1322,6 @@ pub fn shadow(s: &State, base: &Project) -> Option<Project> {
         let Some(sl) = clip(s, track, now.scene) else { continue };
         let Some(lane) = lane_of(s, track) else { continue };
         let len = slot_len(s, &sl);
-        // An audio clip is the sample itself: its channel's clip, as the arranger holds it (`ClipSource::Channel`).
         if let Some(ch) = sl.audio {
             shadows.push((lane, now.since, len, Lane::Audio(ch)));
             continue;
@@ -1309,12 +1345,11 @@ pub fn shadow(s: &State, base: &Project) -> Option<Project> {
         pat.length = Some(len as u32);
         shadows.push((lane, now.since, len, Lane::Pattern(no, pat)));
     }
-    if shadows.is_empty() {
-        return None;
-    }
     let idx = p.arrangement_index();
-    let arr = p.arrangements.get_mut(idx)?;
-    // A lane per playing track (an arrangement may be shorter than the playlist).
+    let arr = p.arrangements.get_mut(idx).unwrap();
+    // Launcher-only: the whole arrangement is cleared here. When the master transport has the arrangement playing,
+    // `add_arrangement` lays it back in at its own phase (Bitwig), so the launcher and the arrangement play together.
+    arr.clips.clear();
     for &(lane, ..) in &shadows {
         while arr.tracks.len() <= usize::from(lane) {
             let n = arr.tracks.len() as u32 + 1;
@@ -1322,8 +1357,6 @@ pub fn shadow(s: &State, base: &Project) -> Option<Project> {
         }
     }
     for (lane, since, len, what) in shadows {
-        // The arrangement's own clips leave this lane: the launcher owns it while its clip plays.
-        arr.clips.retain(|c| c.track != lane);
         let source = match what {
             Lane::Pattern(no, pat) => {
                 p.patterns.push(pat);
@@ -1346,7 +1379,30 @@ pub fn shadow(s: &State, base: &Project) -> Option<Project> {
         }
     }
     arr.clips.sort_by_key(|c| c.position);
-    Some(p)
+    p
+}
+
+/// Layer the project's arrangement clips back in at their own phase, so the arrangement and the launcher are audible
+/// together while the launcher drives the engine (Bitwig). `engine_tick - arr_tick` is the constant offset between the
+/// engine's position and the arrangement's, so an arrangement clip at `pos` sounds when the engine reaches `pos + offset`.
+fn add_arrangement(p: &mut Project, s: &State, w: u64) {
+    let idx = p.arrangement_index();
+    let Some(arr) = p.arrangements.get_mut(idx) else { return };
+    let Some(real) = s.project.arrangements.get(s.project.arrangement_index()) else { return };
+    if real.clips.is_empty() {
+        return;
+    }
+    let offset = s.engine_tick - s.arr_tick;
+    let wf = w as f64;
+    for c in &real.clips {
+        let pos = f64::from(c.position) + offset;
+        let at = pos.rem_euclid(wf); // wrap into [0, w)
+        let mut clip = Clip::new(at as u32, c.length, c.track, c.source);
+        clip.id = os_model::Id::NONE;
+        clip.raw = c.raw; // keep the original clip's stored gain and flags
+        arr.clips.push(clip);
+    }
+    arr.clips.sort_by_key(|c| c.position);
 }
 
 /// The project a launcher clip's notes start relative to (`PlayFrom::LegatoProject`): the transport's position.
@@ -1732,6 +1788,55 @@ mod tests {
         assert_eq!(app.state.project.current_pattern, Some(3));
         assert!(!app.state.song_mode, "the launcher plays the clips");
         assert!(app.transport.playing(), "the transport started");
+    }
+
+    /// The master Stop cuts only the arrangement layer: the launcher's clips keep playing (Bitwig). Launching a clip
+    /// drives the engine on its own; the main transport does not stop it.
+    #[test]
+    fn master_stop_keeps_launcher_clips_playing() {
+        let mut app = app();
+        let col = columns(&app.state).first().cloned().expect("a track");
+        set(&mut app, col.id, 1, Some(3));
+        launch(&mut app, col.id, 1);
+        assert!(app.transport.playing(), "the launcher started the engine");
+        assert_eq!(playing(&app.state, col.id), Some(1));
+        // The master Stop leaves the launcher on the air: it only cuts the arrangement layer (none here yet).
+        app.act(Action::Stop);
+        assert!(app.transport.playing(), "the launcher's clips keep playing after Stop");
+        assert_eq!(playing(&app.state, col.id), Some(1), "the clip is still on the air");
+        assert!(!app.state.arr_playing, "the arrangement layer is off");
+    }
+
+    /// The master Play re-launches the arrangement over the running launcher (Bitwig): the two layers are audible
+    /// together, the arrangement at its own phase.
+    #[test]
+    fn master_play_layers_the_arrangement_over_the_launcher() {
+        let mut app = app();
+        let col = columns(&app.state).first().cloned().expect("a track");
+        let lane = lane_of(&app.state, col.id).expect("a lane");
+        if app.state.project.arrangements.is_empty() {
+            app.state.project.arrangements.push(os_model::Arrangement { number: 1, ..Default::default() });
+        }
+        // An arrangement clip on the launcher track's lane, referencing its own pattern.
+        app.state.project.patterns.push(os_model::Pattern { number: 99, ..Default::default() });
+        let ai = app.state.project.arrangement_index();
+        app.state.project.arrangements[ai].clips.push(os_model::Clip::new(0, 96, lane, os_model::ClipSource::Pattern(99)));
+        set(&mut app, col.id, 1, Some(3));
+        launch(&mut app, col.id, 1);
+        assert!(app.transport.playing());
+        // Before the master Play: launcher-only (the arrangement clip is silent).
+        let base = app.state.project.clone();
+        let before = shadow(&app.state, &base).expect("the launcher project");
+        let n_before = before.arrangement().unwrap().clips.len();
+        assert!(before.arrangement().unwrap().clips.iter().all(|c| c.track == lane), "only the launcher clip plays");
+        // The master Play re-launches the arrangement layer (Bitwig).
+        app.act(Action::Play);
+        assert!(app.state.arr_playing, "the arrangement layer is on");
+        let after = shadow(&app.state, &base).expect("the launcher project");
+        let n_after = after.arrangement().unwrap().clips.len();
+        assert_eq!(n_after, n_before + 1, "the arrangement clip layers on top of the launcher");
+        assert!(after.arrangement().unwrap().clips.iter().any(|c| c.source == os_model::ClipSource::Pattern(99) && c.track == lane),
+            "the arrangement clip is now audible");
     }
 
     /// An empty slot stops its track, and Stop / Stop all clear the columns.
