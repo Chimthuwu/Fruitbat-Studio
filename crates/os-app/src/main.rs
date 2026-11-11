@@ -43,6 +43,8 @@ mod cpu;
 mod data_folder;
 mod device;
 mod device_rack;
+mod route_picker;
+mod quick_sidechain;
 mod rack_ui;
 mod launcher;
 mod midi_fx;

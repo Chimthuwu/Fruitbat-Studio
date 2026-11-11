@@ -766,6 +766,8 @@ pub fn page(tab: usize, s: &State) -> Vec<Group> {
                 Check2("Open new plugin windows floating", false, "Open detached plugins with the main window", false),
                 Check("Disable computer keyboard priority by default", false),
                 Check("Alternate meter scale", false),
+                Check("Miniature mixer routing picker", false),
+                Check("Quick Sidechain in the mixer", false),
                 Check("Show startup splash screen", true),
                 Check("Restore previous state after solo", false),
                 Check("Hide plugin window strip by default", true),

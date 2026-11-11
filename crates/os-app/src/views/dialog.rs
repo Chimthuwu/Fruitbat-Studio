@@ -57,6 +57,7 @@ pub fn paint(ui: &mut Ui, s: &State) {
             Body::Markers(f) => markers_box(ui, s, m, f),
             Body::Project(f) => super::project_forms::paint(ui, s, m, f),
             Body::NoteProperties(f) => note_props_box(ui, s, m, f),
+            Body::RoutePicker(f) => route_picker_box(ui, s, m, f),
         }
     }
 }
@@ -369,6 +370,65 @@ fn note_props_box(ui: &mut Ui, s: &State, m: &Modal, f: &crate::note_properties:
 
 /// Prepare for performance mode's Marker settings (spec: ui/performance-mode.md §1): Marker count and Spacing (in
 /// bars), each a value box with a list, and Accept; laid out as the time signature dialog.
+/// The miniature mixer destination picker (`crate::route_picker`): the channel's name, a search field and up to
+/// 48 small strips (12 x 4), the current route highlighted.
+fn route_picker_box(ui: &mut Ui, s: &State, m: &Modal, f: &crate::route_picker::Form) {
+    use crate::route_picker::{COLS, ROWS};
+    let r = place(s, m, 840f32.min(s.screen.0 - 12.0), 462f32.min(s.screen.1 - 12.0));
+    frame(ui, r, "Send to mixer track");
+    let t = ui.t;
+    ui.c.text_clip(Font::new(12).bold(), r.x + 14.0, r.y + 36.0, r.w - 28.0, t.text, &format!("Choose a destination for {}", f.channel));
+    ui.c.text_clip(Font::new(10), r.x + 14.0, r.y + 55.0, r.w - 28.0, t.text_dim, "Shared sample clips use the same routing. Use Make Unique first for independent routing.");
+    let search = Rect::new(r.x + 14.0, r.y + 75.0, r.w - 28.0, 26.0);
+    field(ui, search, &f.search, true, DHit::RouteSearch, "Filter by track name or number");
+    if f.search.text.is_empty() {
+        ui.c.text_clip(Font::new(11), r.x + 23.0, r.y + 81.0, r.w - 46.0, t.text_dim, "Find a track by name or number...");
+    }
+    let grid = Rect::new(r.x + 14.0, r.y + 110.0, r.w - 28.0, r.h - 151.0);
+    let (cw, ch) = (grid.w / COLS as f32, grid.h / ROWS as f32);
+    let font = Font::new(10);
+    for (pos, &i) in f.shown.iter().skip(f.first).take(COLS * ROWS).enumerate() {
+        let tr = &f.tracks[i];
+        let cell = Rect::new(grid.x + (pos % COLS) as f32 * cw + 2.0, grid.y + (pos / COLS) as f32 * ch + 2.0, cw - 4.0, ch - 4.0);
+        let current = tr.index == f.current;
+        let color = tr.color.map(super::rgb).unwrap_or(t.accent);
+        let hov = hit(ui, cell, DHit::RoutePick(tr.index), "");
+        ui.c.fill_rrect(cell, 4.0, if hov { t.button_hi } else { t.s(0x252d30) });
+        ui.c.stroke_rrect(cell, 4.0, 1.0, if current || hov { t.accent } else { t.s(0x3b464b) });
+        ui.c.text_clip(Font::new(11).bold(), cell.x + 4.0, cell.y + 2.0, cell.w - 8.0, if current { t.accent } else { t.text }, &tr.index.to_string());
+        let strip = Rect::new(cell.cx() - 11.0, cell.y + 18.0, 22.0, (ch - 50.0).clamp(12.0, 28.0));
+        ui.c.fill_rrect(strip, 2.0, t.s(0x101719));
+        ui.c.fill_rect(Rect::new(strip.x, strip.y, strip.w, 2.0), color);
+        ui.c.line(strip.cx(), strip.y + 5.0, strip.cx(), strip.bottom() - 3.0, 1.0, t.s(0x718087));
+        let y = strip.bottom() - 4.0 - tr.level.clamp(0.0, 1.0) as f32 * (strip.h - 10.0);
+        ui.c.fill_rrect(Rect::new(strip.cx() - 5.0, y - 2.0, 10.0, 4.0), 1.0, color);
+        let mut lines: Vec<String> = vec![String::new()];
+        for word in tr.name.split_whitespace() {
+            let last = lines.last().cloned().unwrap_or_default();
+            let next = if last.is_empty() { word.to_string() } else { format!("{last} {word}") };
+            if !last.is_empty() && ui.c.text_width(font, &next) > cell.w - 6.0 && lines.len() < 2 {
+                lines.push(word.to_string());
+            } else if let Some(l) = lines.last_mut() {
+                *l = next;
+            }
+        }
+        for (n, line) in lines.iter().take(2).enumerate() {
+            ui.c.text_clip(font, cell.x + 3.0, strip.bottom() + 4.0 + n as f32 * 11.0, cell.w - 6.0, t.text, line);
+        }
+    }
+    if f.shown.is_empty() {
+        ui.c.text_clip(Font::new(12), grid.x + 10.0, grid.y + 20.0, grid.w - 20.0, t.text_dim, "No tracks match. Try another name or number.");
+    }
+    let footer = Rect::new(r.x + 14.0, r.bottom() - 30.0, r.w - 28.0, 22.0);
+    ui.c.text_clip(Font::new(10), footer.x, footer.y + 5.0, footer.w - 156.0, t.text_dim, &format!("{} tracks | Current: {} | Scroll to browse", f.shown.len(), f.current));
+    for (next, x, label) in [(false, r.right() - 153.0, "Previous"), (true, r.right() - 82.0, "Next")] {
+        let b = Rect::new(x, footer.y, 66.0, 22.0);
+        let hov = hit(ui, b, DHit::RoutePage(next), "Browse mixer tracks");
+        ui.c.fill_rrect(b, 3.0, if hov { t.button_hi } else { t.s(0x303b40) });
+        ui.c.text_clip(font, b.x + 8.0, b.y + 5.0, b.w - 16.0, t.text, label);
+    }
+}
+
 fn markers_box(ui: &mut Ui, s: &State, m: &Modal, f: &crate::perform::MarkerForm) {
     let t = ui.t;
     let font = Font::new(13);

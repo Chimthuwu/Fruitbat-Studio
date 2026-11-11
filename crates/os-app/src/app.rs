@@ -9100,7 +9100,8 @@ impl App {
                 s.raise(Win::PianoRoll);
                 piano::center_keys(s, self.piano_grid.map_or(700.0, |g| g.h));
             }
-            Action::RackMixer(_) => {}
+            // The rack's mixer box: the miniature destination picker, when it is on (Settings ▸ Miscellaneous).
+            Action::RackMixer(i) => crate::route_picker::open(self, i),
             Action::RackAdd => {
                 let at = self.mouse;
                 self.open_plugin_palette(crate::plugin_menu::Target::Gen(None), at, None);
@@ -13486,6 +13487,7 @@ mod tests {
             crate::dialog::Body::Markers(_) => panic!("Marker settings is on top"),
             crate::dialog::Body::NoteProperties(_) => panic!("Note properties is on top"),
             crate::dialog::Body::Project(_) => panic!("a project form is on top"),
+            crate::dialog::Body::RoutePicker(_) => panic!("the routing picker is on top"),
         }
     }
 

@@ -210,6 +210,14 @@ pub const RESET_PLUGINS_ON_TRANSPORT: Check =
 /// ui/settings-choices.md "Miscellaneous: seven more checks, Default template and Startup project".
 pub const ALTERNATE_METER_SCALE: Check = Check { key: "alternate_meter_scale", label: "Alternate meter scale", default: false };
 
+/// General ▸ Miscellaneous: the miniature mixer destination sheet from a channel's TRACK box and the playlist's Send to
+/// mixer track... (ported from the Michael Lane Edition; off leaves routing as it was).
+pub const MIXER_ROUTING_PICKER: Check = Check { key: "mixer_routing_picker", label: "Miniature mixer routing picker", default: false };
+
+/// General ▸ Miscellaneous: the mixer routing arrow's Quick Sidechain command, which loads a keyed Lemon Limiter into
+/// the destination (ported from the Michael Lane Edition; off leaves the routing menu as it was).
+pub const QUICK_SIDECHAIN: Check = Check { key: "quick_sidechain", label: "Quick Sidechain in the mixer", default: false };
+
 /// General ▸ Miscellaneous: without a time selection, "Create automation clip" starts the clip at the song position;
 /// off, at bar 1 (`playlist::automation_span`). Spec: ui/settings-choices.md "Miscellaneous: seven more checks,
 /// Default template and Startup project".
@@ -586,6 +594,8 @@ pub const CHECKS: &[&Check] = &[
     &PLAY_TRUNCATED_ON_TRANSPORT,
     &RESET_PLUGINS_ON_TRANSPORT,
     &ALTERNATE_METER_SCALE,
+    &MIXER_ROUTING_PICKER,
+    &QUICK_SIDECHAIN,
     &AUTOMATION_AT_PLAYBACK_POSITION,
     &AUTO_SELECT_LINKED,
     &HIDE_PLUGIN_TOOLBAR,

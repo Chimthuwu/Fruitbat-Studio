@@ -234,6 +234,8 @@ pub enum Body {
     Markers(crate::perform::MarkerForm),
     /// A note's properties, opened by double-clicking it (`crate::note_properties`).
     NoteProperties(crate::note_properties::Form),
+    /// The miniature mixer destination picker (`crate::route_picker`).
+    RoutePicker(crate::route_picker::Form),
 }
 
 /// A dialog on the stack (`State::dialogs`, bottom to top; only the top one takes input).
@@ -291,6 +293,10 @@ pub enum DHit {
     Form(crate::project_forms::FHit),
     /// Note properties: a field (index), the slide / portamento switches, Apply and Cancel.
     NoteProperties(crate::note_properties::Command),
+    /// Routing picker: the search field, a destination tile, and the footer's Previous / Next.
+    RouteSearch,
+    RoutePick(u16),
+    RoutePage(bool),
 }
 
 /// A one-line text field: the text, the caret (in characters) and whether all of it is selected (typing replaces it).
@@ -521,6 +527,8 @@ impl App {
             }
             // Note properties applies itself (`crate::note_properties`); a plain close does nothing.
             Body::NoteProperties(_) => Then::Nothing,
+            // The routing picker routes on a tile's click; a plain close only cancels.
+            Body::RoutePicker(_) => Then::Nothing,
         };
         // The replace question answers the Save dialog under it.
         if let Then::Replace(p) = then {
@@ -540,14 +548,14 @@ impl App {
             Body::Shortcuts(_) => Reply::Button(Answer::Cancel),
             Body::TimeSig(_) | Body::Markers(_) => Reply::Button(Answer::Cancel),
             Body::Project(_) => Reply::Button(Answer::Cancel),
-            Body::NoteProperties(_) => Reply::Button(Answer::Cancel),
+            Body::NoteProperties(_) | Body::RoutePicker(_) => Reply::Button(Answer::Cancel),
         })
     }
 
     fn top_file(&mut self) -> Option<&mut FileDlg> {
         match &mut self.state.dialogs.last_mut()?.body {
             Body::File(f) => Some(f),
-            Body::Msg(_) | Body::Shortcuts(_) | Body::TimeSig(_) | Body::Markers(_) | Body::Project(_) | Body::NoteProperties(_) => None,
+            Body::Msg(_) | Body::Shortcuts(_) | Body::TimeSig(_) | Body::Markers(_) | Body::Project(_) | Body::NoteProperties(_) | Body::RoutePicker(_) => None,
         }
     }
 
@@ -601,7 +609,7 @@ impl App {
             DHit::Button(i) => {
                 let a = match &m.body {
                     Body::Msg(msg) => msg.buttons.get(i).copied(),
-                    Body::File(_) | Body::Shortcuts(_) | Body::TimeSig(_) | Body::Markers(_) | Body::Project(_) | Body::NoteProperties(_) => None,
+                    Body::File(_) | Body::Shortcuts(_) | Body::TimeSig(_) | Body::Markers(_) | Body::Project(_) | Body::NoteProperties(_) | Body::RoutePicker(_) => None,
                 };
                 if let Some(a) = a {
                     self.answer(Reply::Button(a));
@@ -632,6 +640,24 @@ impl App {
                 if let Some(reply) = self.form_click(h) {
                     self.answer(reply);
                 }
+            }
+            // The routing picker: a tile routes and closes, the search field takes typing, Previous / Next page.
+            DHit::RouteSearch => {
+                if let Body::RoutePicker(f) = &mut m.body {
+                    f.search.select_all();
+                }
+            }
+            DHit::RoutePage(next) => {
+                if let Body::RoutePicker(f) = &mut m.body {
+                    f.scroll(if next { 1 } else { -1 });
+                }
+            }
+            DHit::RoutePick(dst) => {
+                let Body::RoutePicker(f) = &m.body else { return };
+                let row = f.row;
+                self.state.dialogs.pop();
+                self.modal_changed();
+                self.state.message = crate::mixer::route_channel(&mut self.state, row, dst);
             }
             _ => {
                 let Some(f) = self.top_file() else { return };
@@ -769,11 +795,34 @@ impl App {
             }
             // Note properties is handled above, before this match borrows the form (`crate::note_properties::key`).
             Body::NoteProperties(_) => {}
+            // The routing picker's search takes typing; Enter routes to the current track, Esc closes.
+            Body::RoutePicker(f) => match key {
+                Key::Named(NamedKey::Escape) => self.answer(Reply::Button(Answer::Cancel)),
+                Key::Named(NamedKey::Enter) => {
+                    let dst = f.current;
+                    if let Some(i) = f.tracks.iter().position(|t| t.index == dst) {
+                        let _ = i;
+                    }
+                    self.answer(Reply::Button(Answer::Ok));
+                }
+                _ => {
+                    if f.search.key(key, ctrl, alt) {
+                        f.filter();
+                    }
+                }
+            },
         }
     }
 
-    /// The wheel over a dialog: scrolls the file list.
+    /// The wheel over a dialog: scrolls the file list, or the routing picker's sheet.
     pub(crate) fn dialog_wheel(&mut self, dy: f32) {
+        if let Some(m) = self.state.dialogs.last_mut() {
+            if let Body::RoutePicker(f) = &mut m.body {
+                f.scroll(if dy > 0.0 { -1 } else { 1 });
+                self.invalidate();
+                return;
+            }
+        }
         if let Some(f) = self.top_file() {
             f.scroll -= dy * 3.0 * ROW_H;
             f.clamp_scroll();
@@ -813,7 +862,7 @@ impl App {
     pub fn top_message(&self) -> Option<(String, String)> {
         match &self.state.dialogs.last()?.body {
             Body::Msg(m) => Some((m.title.clone(), m.plain())),
-            Body::File(_) | Body::Shortcuts(_) |            Body::TimeSig(_) | Body::Markers(_) | Body::Project(_) | Body::NoteProperties(_) => None,
+            Body::File(_) | Body::Shortcuts(_) |            Body::TimeSig(_) | Body::Markers(_) | Body::Project(_) | Body::NoteProperties(_) | Body::RoutePicker(_) => None,
         }
     }
 }
