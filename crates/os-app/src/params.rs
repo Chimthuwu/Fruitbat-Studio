@@ -360,8 +360,11 @@ fn parameter_items(s: &State, param: Option<(usize, usize)>, create: Option<(u32
 
 /// The menu of a parameter row (browser right-click, spec §6).
 pub fn param_menu(s: &State, key: usize, index: usize, x: f32, y: f32) -> Option<Popup> {
-    let create = automation(s, key, index)?;
-    Some(Popup { x, y, items: parameter_items(s, Some((key, index)), Some(create), Some(link_target(s, key, index))), sub: None, scroll: [0; 2] })
+    // A parameter whose target `automation` cannot name (a MIDI FX, say) still gets a menu — Reset, remote
+    // control, value — without a "Create automation clip" entry (Lemon Studio has no automation target code for it
+    // yet). Used by the detached plugin window and the docked device rack's right-click (user, 2026-11-11).
+    let create = automation(s, key, index);
+    Some(Popup { x, y, items: parameter_items(s, Some((key, index)), create, Some(link_target(s, key, index))), sub: None, scroll: [0; 2] })
 }
 
 /// The browser node key of instance `key` (spec §6): Generators ▸ channel, Effects ▸ "<track> - <slot>".

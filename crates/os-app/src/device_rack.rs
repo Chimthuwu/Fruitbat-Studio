@@ -2108,6 +2108,32 @@ mod tests {
         );
     }
 
+    /// Right-click on a docked device's knob / parameter control opens its parameter menu
+    /// (Reset, automation, link — the same menu the detached editor shows), so automation is
+    /// reachable without popping the device out (user, 2026-11-11).
+    #[test]
+    fn right_click_a_docked_device_knob_opens_its_param_menu() {
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = full_chain_app();
+        app.paint(&mut c, None);
+        // An automatable control hit in the docked device rack.
+        let hit = app
+            .hits
+            .iter()
+            .find(|h| {
+                if let Action::DeviceRack(crate::device_rack::RackAct::ParamSet { key, id, .. }) = &h.action {
+                    crate::params::param_menu(&app.state, *key, *id as usize, 0.0, 0.0).is_some()
+                } else {
+                    false
+                }
+            })
+            .expect("an automatable docked device control");
+        app.mouse = (hit.rect.cx(), hit.rect.cy());
+        app.mouse_down_right();
+        let popup = app.state.playlist.popup.as_ref().expect("right-click opens the device param menu");
+        assert!(!popup.items.is_empty(), "the param menu has entries");
+    }
+
     /// The chain fits ~4 tiles with their ＋ gaps in the default panel width without scrolling.
     #[test]
     fn four_devices_fit_the_default_panel_width() {

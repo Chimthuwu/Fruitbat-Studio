@@ -6877,10 +6877,22 @@ impl App {
                     Act::Launch(track, scene) => Act::Menu(MenuTarget::Clip(track, scene), (x, y)),
                     Act::LaunchScene(scene) => Act::Menu(MenuTarget::Scene(scene), (x, y)),
                     Act::SelectTrack(track) => Act::Menu(MenuTarget::Track(track), (x, y)),
+                    Act::Mute(track) => Act::Menu(MenuTarget::Track(track), (x, y)),
+                    Act::Solo(track) => Act::Menu(MenuTarget::Track(track), (x, y)),
                     other => other,
                 };
                 crate::launcher::run(self, act);
                 return;
+            }
+            // Right-click on a device rack knob / parameter control: its parameter menu (Reset,
+            // automation, link — the same menu the detached plugin editor shows). The docked devices
+            // could not reach automation before; now they can without popping the editor out (user, 2026-11-11).
+            Some(Action::DeviceRack(crate::device_rack::RackAct::ParamSet { key, id, .. }))
+            | Some(Action::DeviceRack(crate::device_rack::RackAct::ParamTap { key, id, .. })) => {
+                if let Some(p) = crate::params::param_menu(&self.state, *key, *id as usize, x, y) {
+                    self.state.playlist.popup = Some(p);
+                }
+                return self.invalidate();
             }
             // Right-click on a device tile (header, body or a row): its device menu (Pop out / Remove / ...).
             // The launcher's clip editor takes the rack's panel while it is out (`launcher::Panel`), so the
