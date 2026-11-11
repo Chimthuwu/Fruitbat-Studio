@@ -232,6 +232,19 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
             let sel = crate::playlist::track_selected(s, c.lane);
             ui.c.fill_rrect(row.inset(1.0), 2.0, rgb(col).with_alpha(if sel { 95 } else { 55 }));
         }
+        // Mute / solo LEDs in the track header, matching the playlist's track LED (§6): a click mutes, a
+        // Ctrl/right-click solos. They read the same track state, so the launcher and the playlist stay in step.
+        let led_y = row.y + (g.row_h - 14.0) / 2.0;
+        let mute_led = Rect::new(row.x + 6.0, led_y, 14.0, 14.0);
+        let solo_led = Rect::new(row.x + 23.0, led_y, 14.0, 14.0);
+        let muted = !crate::playlist::track_enabled(s, c.lane);
+        let soloed = crate::playlist::track_soloed(s, c.lane);
+        let mhov = hit_in(ui, mute_led, label, Action::Launcher(Act::Mute(c.id)), "Mute this track (Ctrl/right-click: solo)");
+        ui.c.fill_rrect(mute_led, 2.0, if muted { t.accent } else if mhov { t.s(0x2b3134) } else { t.s(0x222629) });
+        ui.c.text(fnt(10.0), mute_led.x + 3.5, led_y + 1.5, if muted { t.text } else { t.text_dim }, "M");
+        let shov = hit_in(ui, solo_led, label, Action::Launcher(Act::Solo(c.id)), "Solo this track (Ctrl/right-click also solos)");
+        ui.c.fill_rrect(solo_led, 2.0, if soloed { t.accent } else if shov { t.s(0x2b3134) } else { t.s(0x222629) });
+        ui.c.text(fnt(10.0), solo_led.x + 3.5, led_y + 1.5, if soloed { t.text } else { t.text_dim }, "S");
         let hov = hit_in(
             ui,
             row,
@@ -241,7 +254,7 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
         );
         // A MIDI track with no instrument plays nothing: a mark after its name says why (the rack has the same hint).
         let mark_w = if c.no_instrument { ui.c.text_width(fnt(12.0), "!") + 4.0 } else { 0.0 };
-        let name = Rect::new(row.x + 8.0, row.y + (g.row_h - 15.0) / 2.0, (row.w - 38.0 - mark_w).max(1.0), 15.0);
+        let name = Rect::new(row.x + 42.0, row.y + (g.row_h - 15.0) / 2.0, (row.w - 62.0 - mark_w).max(1.0), 15.0);
         ui.c.text_clip(fnt(13.0), name.x, name.y, name.w, if hov { t.text } else { t.tx(0xdce8f0) }, &c.name);
         if c.no_instrument {
             ui.c.text(fnt(12.0), name.right() + 3.0, name.y + 1.0, t.accent, "!");

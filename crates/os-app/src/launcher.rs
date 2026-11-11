@@ -468,6 +468,10 @@ pub enum Act {
     Record(u32, usize),
     /// A click on a track's row header: its lane is selected in the arrangement (so the device rack follows it).
     SelectTrack(u32),
+    /// Mute / unmute this track: its header LED, as in the playlist (§6).
+    Mute(u32),
+    /// Solo / unsolo this track: Ctrl/right-click on the header LED, as in the playlist (§6).
+    Solo(u32),
     /// A right-click: open the context menu of a clip, a scene or a track.
     Menu(MenuTarget, (f32, f32)),
     /// Close the open context menu.
@@ -1419,6 +1423,21 @@ pub fn run(app: &mut App, act: Act) {
             }
             app.invalidate();
         }
+        Act::Mute(track) => {
+            // The same track mute the playlist's LED does (§6): one snapshot, then flip `enabled`.
+            if let Some(lane) = lane_of(&app.state, track) {
+                crate::playlist::snapshot(&mut app.state);
+                crate::playlist::toggle_track(&mut app.state, lane);
+            }
+            app.invalidate();
+        }
+        Act::Solo(track) => {
+            if let Some(lane) = lane_of(&app.state, track) {
+                crate::playlist::snapshot(&mut app.state);
+                crate::playlist::toggle_solo(&mut app.state, lane);
+            }
+            app.invalidate();
+        }
         Act::Menu(target, at) => {
             app.state.launcher.menu = Some(Menu { target, at });
             app.invalidate();
@@ -2163,6 +2182,34 @@ mod tests {
 
         app.key(&Key::Named(NamedKey::Tab), false, false);
         assert!(!app.state.launcher_open);
+    }
+
+    /// The launcher's track headers carry Bitwig-style mute and solo LEDs, and clicking them flips the same track
+    /// state the playlist's LED does (§6), so the two views never disagree.
+    #[test]
+    fn a_track_header_has_mute_and_solo_leds() {
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = app();
+        app.state.z = vec![crate::app::Win::Playlist];
+        app.key(&Key::Named(NamedKey::Tab), false, false);
+        assert!(app.state.launcher_open, "Tab shows the launcher");
+        app.paint(&mut c, None);
+        let col = &columns(&app.state)[0];
+        let id = col.id;
+        let lane = col.lane;
+        assert!(app.hits.iter().any(|h| h.action == Action::Launcher(Act::Mute(id))), "a mute LED");
+        assert!(app.hits.iter().any(|h| h.action == Action::Launcher(Act::Solo(id))), "a solo LED");
+        // A click mutes; the playlist's track state flips with it (the snapshot makes it undoable).
+        let before = crate::playlist::track_enabled(&app.state, lane);
+        run(&mut app, Act::Mute(id));
+        assert_ne!(crate::playlist::track_enabled(&app.state, lane), before, "mute toggled the track");
+        run(&mut app, Act::Mute(id));
+        assert_eq!(crate::playlist::track_enabled(&app.state, lane), before, "mute toggled back");
+        // And solo: the track becomes the lone enabled one, then releases.
+        run(&mut app, Act::Solo(id));
+        assert!(crate::playlist::track_soloed(&app.state, lane), "the track is soloed");
+        run(&mut app, Act::Solo(id));
+        assert!(!crate::playlist::track_soloed(&app.state, lane), "solo released");
     }
 
     /// A double click on a filled slot opens its clip in the piano roll (the first click launched it).

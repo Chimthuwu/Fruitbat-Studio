@@ -1164,6 +1164,17 @@ pub fn set_track_color(s: &mut State, t: u16, color: Option<os_model::Rgb>) {
     }
 }
 
+/// Whether track `lane` is unmuted (its arrangement `enabled` flag is on). The launcher's header LED reads it so the
+/// two views share one mute state (§6).
+pub fn track_enabled(s: &State, lane: u16) -> bool {
+    s.project.arrangement().map_or(true, |a| a.tracks.get(usize::from(lane)).map_or(true, |t| t.enabled))
+}
+
+/// Whether track `lane` is the soloed one (the playlist's `solo` state).
+pub fn track_soloed(s: &State, lane: u16) -> bool {
+    s.playlist.solo.as_ref().is_some_and(|(t, _)| *t == lane)
+}
+
 pub fn clips(s: &State) -> &[Clip] {
     s.project.arrangement().map(|a| a.clips.as_slice()).unwrap_or(&[])
 }
