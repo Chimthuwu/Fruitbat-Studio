@@ -502,6 +502,7 @@ impl Engine {
                         strip: os_dsp::strip::Strip::new(m.strip, m.strip_bypassed),
                         glitch: os_dsp::glitch::Glitch::new(os_dsp::glitch::Pattern { steps: m.glitch, amount: m.glitch_amount }),
                         glitch_style: m.glitch_style,
+                        chain: m.chain,
                         effects,
                         slot_on: m.slot_on,
                         slot_mix: m.slot_mix.map(mix_level),
@@ -909,7 +910,7 @@ impl Engine {
     pub fn glitch_steps(&self, out: &mut Vec<Option<u8>>) {
         out.clear();
         out.extend(self.tracks.iter().map(|t| {
-            (t.glitch_style && !t.glitch.idle()).then(|| t.glitch.step(self.rate).min(os_dsp::glitch::STEPS - 1) as u8)
+            (t.chain.contains(&7) && !t.glitch.idle()).then(|| t.glitch.step(self.rate).min(os_dsp::glitch::STEPS - 1) as u8)
         }));
     }
 

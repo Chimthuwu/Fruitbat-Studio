@@ -1554,6 +1554,51 @@ impl Note {
     }
 }
 
+/// A track's chain of modules (`MixerTrack::chain`) on the Analog Channel Strip: its six sections in the edition's
+/// order, which is what every track that never touched a chain runs.
+pub const CHAIN_ANALOG: [u8; 8] = [1, 2, 3, 4, 5, 6, 0, 0];
+
+/// The chain of a track on the Glitch strip: the grid alone.
+pub const CHAIN_GLITCH: [u8; 8] = [7, 0, 0, 0, 0, 0, 0, 0];
+
+/// Whether a chain holds module `m`.
+pub fn chain_has(chain: [u8; 8], m: u8) -> bool {
+    chain.contains(&m)
+}
+
+/// `chain` with module `m` at its last free place, or unchanged when it is already in or there is no free place.
+pub fn chain_add(chain: [u8; 8], m: u8) -> [u8; 8] {
+    let mut c = chain;
+    if m == 0 || c.contains(&m) {
+        return c;
+    }
+    if let Some(i) = c.iter().position(|&x| x == 0) {
+        c[i] = m;
+    }
+    c
+}
+
+/// `chain` without module `m`: the rest keep their order and the empty places move to the end.
+pub fn chain_remove(chain: [u8; 8], m: u8) -> [u8; 8] {
+    let mut c = [0u8; 8];
+    let mut n = 0;
+    for &x in chain.iter().filter(|&&x| x != 0 && x != m) {
+        c[n] = x;
+        n += 1;
+    }
+    c
+}
+
+/// `chain` with module `m` one place earlier (`up`) or later; one already at its end of the chain stays.
+pub fn chain_move(chain: [u8; 8], m: u8, up: bool) -> [u8; 8] {
+    let mut c = chain;
+    let Some(i) = c.iter().position(|&x| x == m) else { return c };
+    let next = if up { i.checked_sub(1) } else { (i + 1 < c.len()).then_some(i + 1) };
+    let Some(j) = next.filter(|&j| c[j] != 0) else { return c };
+    c.swap(i, j);
+    c
+}
+
 #[derive(Debug, Clone)]
 pub struct MixerTrack {
     /// The track's stable identity ([`Id`]).
@@ -1608,6 +1653,11 @@ pub struct MixerTrack {
     pub glitch: [u8; 16],
     pub glitch_amount: u16,
     pub glitch_style: bool,
+    /// The modules the track runs, in signal order: ids as `os_dsp::strip::CHAIN` numbers them, 1..=6 the Analog
+    /// Channel Strip's sections and 7 the Glitch grid, 0 an empty place (`CHAIN_ANALOG` / `CHAIN_GLITCH` are the two
+    /// whole strips, and what `glitch_style` implies). A chain that is neither is a mixed strip (plan:
+    /// `docs/mixed-strips-plan.md`).
+    pub chain: [u8; 8],
     /// The three-band equaliser as stored, per band `[gain, frequency, width]`: gain -1800..=1800 in 0.01 dB,
     /// frequency and width 0..=65536 (spec: audio/mixer.md "Equaliser"). Band 1 low shelf, 2 peaking, 3 high shelf.
     pub eq: [[i32; 3]; 3],
@@ -1667,6 +1717,7 @@ impl PartialEq for MixerTrack {
             glitch,
             glitch_amount,
             glitch_style,
+            chain,
             eq,
             latency_out,
             latency_in,
@@ -1702,6 +1753,7 @@ impl PartialEq for MixerTrack {
             && *glitch == o.glitch
             && *glitch_amount == o.glitch_amount
             && *glitch_style == o.glitch_style
+            && *chain == o.chain
             && *eq == o.eq
             && *latency_out == o.latency_out
             && *latency_in == o.latency_in
@@ -1750,6 +1802,7 @@ impl MixerTrack {
             glitch: [0; 16],
             glitch_amount: 0,
             glitch_style: false,
+            chain: CHAIN_ANALOG,
             swap: false,
             slots_enabled: true,
             separator: false,

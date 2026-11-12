@@ -124,6 +124,11 @@ pub enum MCmd {
     SaveGlitchPattern(u16),
     /// A saved glitch pattern put on the grid (its file already has the new capture's path).
     GlitchPattern(u16, std::path::PathBuf),
+    /// The track's chain of modules (`MixerTrack::chain`): the two whole strips, or the analog sections and the grid
+    /// mixed in signal order (plan: `docs/mixed-strips-plan.md`).
+    Chain(u16, [u8; 8]),
+    /// Module `.1` in the chain (`true`) or out of it: coming in, a word that is still zero takes a musical default.
+    ChainModule(u16, u8, bool),
     Solo(u16),
     /// Solo with the tracks routed into it too (spec: ui/mixer-track-commands.md §5).
     AltSolo(u16),
@@ -1938,6 +1943,31 @@ fn track_items(s: &State, n: u16) -> Vec<PItem> {
             ],
         ),
         PItem::sub(
+            "Modules",
+            {
+                // The chain a track runs, in signal order: the two whole strips are presets (they set the console), and
+                // every module can join, leave or move, which is what a mixed strip is made of.
+                let chain = t.map_or(os_model::CHAIN_ANALOG, |m| m.chain);
+                let mut v = vec![
+                    PItem::new("Analog channel strip", mx(MCmd::Chain(n, os_model::CHAIN_ANALOG))).mark(Mark::Radio(chain == os_model::CHAIN_ANALOG)),
+                    PItem::new("Glitch strip", mx(MCmd::Chain(n, os_model::CHAIN_GLITCH))).mark(Mark::Radio(chain == os_model::CHAIN_GLITCH)),
+                    PItem::sep(),
+                ];
+                for module in 1..=7u8 {
+                    let on = os_model::chain_has(chain, module);
+                    let (up, down) = (os_model::chain_move(chain, module, true), os_model::chain_move(chain, module, false));
+                    let mut items = vec![PItem::new(if on { "Take out of the chain" } else { "Add to the chain" }, mx(MCmd::ChainModule(n, module, !on))).mark(Mark::Check(on))];
+                    if on {
+                        items.push(PItem::sep());
+                        items.push(if up == chain { PItem::new("Move earlier", Cmd::Nothing).off() } else { PItem::new("Move earlier", mx(MCmd::Chain(n, up))) });
+                        items.push(if down == chain { PItem::new("Move later", Cmd::Nothing).off() } else { PItem::new("Move later", mx(MCmd::Chain(n, down))) });
+                    }
+                    v.push(PItem::sub(os_dsp::strip::CHAIN[usize::from(module)], items));
+                }
+                v
+            },
+        ),
+        PItem::sub(
             "Amount",
             [0u16, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
                 .into_iter()
@@ -2004,6 +2034,75 @@ fn strip_comp_profile(t: Option<&os_model::MixerTrack>) -> usize {
 /// A strip's table amount in percent from control word 7 (`os_dsp::strip::table_amount`), 0 for the section off.
 fn strip_table(t: Option<&os_model::MixerTrack>) -> u16 {
     t.map_or(0, |m| (os_dsp::strip::table_amount(m.strip[7]) * 100.0).round() as u16)
+}
+
+/// Puts a chain on track `n`, the console's style following the two whole strips (a mixed chain keeps whichever console
+/// the track had, and runs: a chain behind a bypassed strip would do nothing).
+fn set_chain(s: &mut State, n: u16, chain: [u8; 8]) {
+    if let Some(t) = track_mut(s, n) {
+        t.chain = chain;
+        if chain == os_model::CHAIN_GLITCH {
+            t.glitch_style = true;
+        } else if chain == os_model::CHAIN_ANALOG {
+            t.glitch_style = false;
+        }
+        if chain != os_model::CHAIN_ANALOG {
+            t.strip_bypassed = false;
+        }
+        changed(s);
+    }
+}
+
+/// Module `module` in track `n`'s chain, or out of it. Taking it out keeps its word, so re-adding restores it; coming in,
+/// a word that is still zero takes a musical default, since a module added silently would do nothing at all.
+fn chain_module(s: &mut State, n: u16, module: u8, on: bool) {
+    let Some(t) = track_mut(s, n) else { return };
+    if !on {
+        t.chain = os_model::chain_remove(t.chain, module);
+        changed(s);
+        return;
+    }
+    t.chain = os_model::chain_add(t.chain, module);
+    match module {
+        1 => {
+            if t.strip[0] == 0 {
+                t.strip[0] = os_dsp::strip::cut_word(80.0);
+            }
+        }
+        2 => {
+            if t.strip[3] == 0 {
+                t.strip[3] = os_dsp::strip::ott_word(0.4);
+            }
+        }
+        3 => {
+            if t.strip[2] == 0 {
+                t.strip[2] = os_dsp::strip::drive_word(0.4);
+            }
+        }
+        4 => {
+            if t.strip[4] == 0 {
+                t.strip[4] = os_dsp::strip::tame_word(0.4);
+            }
+        }
+        5 => {
+            if t.strip[1] == 0 {
+                t.strip[1] = os_dsp::strip::comp_word(0.5);
+            }
+        }
+        6 => {
+            if t.strip[7] == 0 {
+                t.strip[7] = os_dsp::strip::table_word(0.4);
+            }
+        }
+        7 => {
+            if t.glitch_amount == 0 {
+                t.glitch_amount = os_dsp::glitch::glitch_word(0.7);
+            }
+        }
+        _ => {}
+    }
+    t.strip_bypassed = false;
+    changed(s);
 }
 
 /// The saved mixer track states, one entry each running `cmd` with its file; a greyed "(no saved states)" without any.
@@ -2312,6 +2411,11 @@ pub fn run(app: &mut App, c: MCmd) -> Option<String> {
         let t = *t;
         return crate::control::edit_app(app, "Analog channel strip", Region::Track(t), |app| run_now(app, c));
     }
+    // The modules a track runs are its own state: one undo step ("Module chain") each time the chain changes.
+    if let MCmd::Chain(t, _) | MCmd::ChainModule(t, _, _) = &c {
+        let t = *t;
+        return crate::control::edit_app(app, "Module chain", Region::Track(t), |app| run_now(app, c));
+    }
     // A saved glitch pattern is the track's own state, one undo step ("Load glitch pattern").
     if let MCmd::GlitchPattern(t, p) = &c {
         let (t, p) = (*t, p.clone());
@@ -2584,6 +2688,14 @@ fn run_now(app: &mut App, c: MCmd) -> Option<String> {
             None
         }
         MCmd::GlitchPattern(n, p) => crate::glitch_patterns::apply(s, n, &p),
+        MCmd::Chain(n, chain) => {
+            set_chain(s, n, chain);
+            None
+        }
+        MCmd::ChainModule(n, module, on) => {
+            chain_module(s, n, module, on);
+            None
+        }
         MCmd::Dock(n, d) => {
             for t in targets(s, n).into_iter().filter(|&t| t > 0) {
                 if let Some(m) = track_mut(s, t) {
@@ -4440,6 +4552,40 @@ mod tests {
         crate::history::undo(&mut a.state);
         assert!(!track(&a.state, 2).unwrap().glitch_style, "one step back to the empty grid");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The Modules menu builds a chain: the two whole strips are presets, a module joins with a musical setting and leaves
+    /// with its setting kept, the order is the chain's, and every change is one undo step.
+    #[test]
+    fn the_modules_menu_builds_a_mixed_chain() {
+        let mut a = app();
+        let modules = |a: &App, n: u16| track_items(&a.state, n).into_iter().find(|i| i.label == "Modules").expect("the Modules submenu");
+        let chain = |a: &App| track(&a.state, 2).unwrap().chain;
+        let m = modules(&a, 2);
+        assert_eq!(m.children[0].mark, Mark::Radio(true), "a track starts on the analog chain");
+        assert_eq!(m.children[3].label.as_ref(), os_dsp::strip::CHAIN[1], "the sections follow the presets");
+        assert_eq!(chain(&a), os_model::CHAIN_ANALOG);
+        let steps = a.state.history.at();
+        // Out: COMP leaves, its word stays.
+        run(&mut a, MCmd::ChainModule(2, 5, false));
+        assert_eq!(chain(&a), [1, 2, 3, 4, 6, 0, 0, 0]);
+        assert_eq!(a.state.history.at(), steps + 1);
+        // In: the grid joins at the end, at a level that can be heard, and the strip runs.
+        run(&mut a, MCmd::ChainModule(2, 7, true));
+        let t = track(&a.state, 2).unwrap();
+        assert_eq!(t.chain, [1, 2, 3, 4, 6, 7, 0, 0]);
+        assert!(t.glitch_amount > 0);
+        assert!(!t.strip_bypassed, "a chain runs");
+        // Order is the chain's: a mixed chain, written whole.
+        run(&mut a, MCmd::Chain(2, [7, 1, 2, 3, 4, 6, 0, 0]));
+        assert_eq!(chain(&a), [7, 1, 2, 3, 4, 6, 0, 0]);
+        assert_eq!(modules(&a, 2).children[0].mark, Mark::Radio(false), "the analog preset is no longer the chain");
+        // The presets come back whole, and the console follows them.
+        run(&mut a, MCmd::Chain(2, os_model::CHAIN_GLITCH));
+        assert!(track(&a.state, 2).unwrap().glitch_style);
+        assert_eq!(a.state.history.at(), steps + 4);
+        crate::history::undo(&mut a.state);
+        assert_eq!(chain(&a), [7, 1, 2, 3, 4, 6, 0, 0], "one step back to the mixed chain");
     }
 
     /// plan v3 Milestone 1: the Analog Channel Strip's switch and low cut are the track's own state, one undo step

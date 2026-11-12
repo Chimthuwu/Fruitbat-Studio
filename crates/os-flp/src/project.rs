@@ -913,6 +913,7 @@ pub fn load(file: &FlpFile) -> Result<Project, ProjectError> {
     }
     p.mixer = load_mixer(events, &l, enc);
     read_strip(file, &mut p.mixer);
+    read_chain(file, &mut p.mixer);
     Ok(p)
 }
 
@@ -3609,6 +3610,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
         }
     }
     store_strip(project, file);
+    store_chain(project, file);
     Ok(())
 }
 
@@ -4136,6 +4138,7 @@ pub fn create(project: &Project) -> Result<FlpFile, ProjectError> {
         trailing: Vec::new(),
     };
     store_strip(project, &mut file);
+    store_chain(project, &mut file);
     Ok(file)
 }
 
@@ -4329,6 +4332,11 @@ pub fn default_arrangement() -> Arrangement {
 const STRIP_TAG: [u8; 4] = *b"LSCS";
 const STRIP_VERSION: u8 = 8;
 
+/// The chains' chunk: the modules of every track whose chain is not the one its style implies, in signal order. A side
+/// chunk rather than a strip version bump, so a build from before mixed strips still reads every track's strip.
+const CHAIN_TAG: [u8; 4] = *b"LSMX";
+const CHAIN_VERSION: u8 = 1;
+
 /// The strips' chunk payload, or `None` when no track has strip state: payload version, count, then per track its
 /// index, eight words, the bypass flag, its sixteen grid steps, the grid's amount and the style flag.
 fn strip_payload(project: &Project) -> Option<Vec<u8>> {
@@ -4359,6 +4367,84 @@ fn strip_payload(project: &Project) -> Option<Vec<u8>> {
 /// another build (a fork's version 5 or 6, with SnapTune's words) is left as it is: its state is not this build's.
 /// A version 4 chunk, from a build before the eighth word, is this build's and is written again at the current version,
 /// and so is a version 7 one, from a build before the glitch strip.
+/// The chain a track's style implies: the grid alone on the Glitch strip, the analog sections otherwise.
+fn implied_chain(m: &MixerTrack) -> [u8; 8] {
+    if m.glitch_style {
+        os_model::CHAIN_GLITCH
+    } else {
+        os_model::CHAIN_ANALOG
+    }
+}
+
+/// The chains' chunk payload, or `None` when every track's chain is the one its style implies: version, count, then
+/// per track its index and eight module ids.
+fn chain_payload(project: &Project) -> Option<Vec<u8>> {
+    let tracks: Vec<&MixerTrack> = project.mixer.iter().filter(|m| m.chain != implied_chain(m)).collect();
+    if tracks.is_empty() {
+        return None;
+    }
+    let mut out = vec![CHAIN_VERSION];
+    out.extend_from_slice(&(tracks.len() as u16).to_le_bytes());
+    for m in tracks {
+        out.extend_from_slice(&m.index.to_le_bytes());
+        out.extend_from_slice(&m.chain);
+    }
+    Some(out)
+}
+
+/// Writes the project's mixed chains into `file`, or removes the chunk when no track has one. A chunk of a version this
+/// build does not write is left alone.
+fn store_chain(project: &Project, file: &mut FlpFile) {
+    use crate::container::{Chunk, ChunkBody, Tag};
+    let at = file.chunks.iter().position(|c| c.tag.0 == CHAIN_TAG);
+    if let Some(i) = at {
+        let ours = matches!(&file.chunks[i].body, ChunkBody::Raw(d) if d.first() == Some(&CHAIN_VERSION));
+        if !ours {
+            return;
+        }
+    }
+    match (chain_payload(project), at) {
+        (Some(data), Some(i)) => file.chunks[i].body = ChunkBody::Raw(data),
+        (Some(data), None) => file.chunks.push(Chunk { tag: Tag(CHAIN_TAG), body: ChunkBody::Raw(data) }),
+        (None, Some(i)) => {
+            file.chunks.remove(i);
+        }
+        (None, None) => {}
+    }
+}
+
+/// Puts a file's mixed chains on its mixer tracks; a track without a record keeps the chain its style implies, and a
+/// payload of another version leaves every track as it is.
+fn read_chain(file: &FlpFile, mixer: &mut [MixerTrack]) {
+    use crate::container::ChunkBody;
+    // Every track's chain is the one its style implies unless the chain chunk says otherwise: the strip chunk carries
+    // the style, and this is how a file from before mixed strips gets its tracks their chains.
+    for m in mixer.iter_mut() {
+        m.chain = implied_chain(m);
+    }
+    let Some(data) = file.chunks.iter().find(|c| c.tag.0 == CHAIN_TAG).and_then(|c| match &c.body {
+        ChunkBody::Raw(d) => Some(d.as_slice()),
+        _ => None,
+    }) else {
+        return;
+    };
+    if data.first() != Some(&CHAIN_VERSION) || data.len() < 3 {
+        return;
+    }
+    let n = usize::from(u16::from_le_bytes([data[1], data[2]]));
+    let mut at = 3;
+    for _ in 0..n {
+        let Some(head) = data.get(at..at + 10) else { return };
+        let index = u16::from_le_bytes([head[0], head[1]]);
+        let mut chain = [0u8; 8];
+        chain.copy_from_slice(&head[2..10]);
+        if let Some(m) = mixer.iter_mut().find(|m| m.index == index) {
+            m.chain = chain;
+        }
+        at += 10;
+    }
+}
+
 fn store_strip(project: &Project, file: &mut FlpFile) {
     use crate::container::{Chunk, ChunkBody, Tag};
     let at = file.chunks.iter().position(|c| c.tag.0 == STRIP_TAG);
@@ -6225,6 +6311,37 @@ mod tests {
         assert!(unsaved_parts(&p, &file).is_empty());
     }
 
+
+    /// A mixed chain rides in its own chunk beside the strip's (`LSMX`): a track whose chain is what its style implies
+    /// writes nothing, so a build from before mixed strips still reads every track's strip, and a chain that is not
+    /// comes back whole through both writers.
+    #[test]
+    fn a_mixed_chain_rides_in_its_own_chunk() {
+        use os_model::MixerTrack;
+        let mut p = new_project();
+        p.mixer = (0..3).map(MixerTrack::new).collect();
+        p.arrangements.push(default_arrangement());
+        let bare = create(&p).unwrap();
+        assert!(!bare.chunks.iter().any(|c| c.tag.0 == *b"LSMX"), "the implied chains store nothing");
+        p.mixer[1].chain = [7, 1, 5, 0, 0, 0, 0, 0];
+        let file = create(&p).unwrap();
+        assert!(file.chunks.iter().any(|c| c.tag.0 == *b"LSMX"));
+        let back = load(&FlpFile::parse(&file.to_bytes().unwrap()).unwrap()).unwrap();
+        assert_eq!(back.mixer[1].chain, [7, 1, 5, 0, 0, 0, 0, 0]);
+        assert_eq!(back.mixer[2].chain, os_model::CHAIN_ANALOG, "a track without a record keeps its style's chain");
+        // In place too, and a chain back on what its style implies takes the chunk away.
+        let mut edited = back.clone();
+        edited.mixer[2].chain = os_model::CHAIN_GLITCH;
+        edited.mixer[2].glitch_style = true;
+        let mut file2 = file.clone();
+        apply(&edited, &mut file2).unwrap();
+        let again = load(&FlpFile::parse(&file2.to_bytes().unwrap()).unwrap()).unwrap();
+        assert_eq!(again.mixer[2].chain, os_model::CHAIN_GLITCH);
+        let mut plain = again.clone();
+        plain.mixer[1].chain = os_model::CHAIN_ANALOG;
+        apply(&plain, &mut file2).unwrap();
+        assert!(!file2.chunks.iter().any(|c| c.tag.0 == *b"LSMX"), "no mixed chain, no chunk");
+    }
 
     /// plan v3 §6.4: the strip is stored in its own chunk, only for tracks that changed it, through both writers
     /// (`create` for a new file, `apply` in place).

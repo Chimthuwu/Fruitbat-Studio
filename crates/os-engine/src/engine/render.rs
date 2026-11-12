@@ -208,15 +208,33 @@ pub(crate) fn mix_track(lane: Lane, cx: &multicore::MixCx, s: &mut multicore::Mi
     if let Some((r, at, arm)) = tap.filter(|(_, _, a)| matches!(a.point, RecordPoint::External | RecordPoint::WithMixer)) {
         rec_input(r, t, at, arm, track.input, cx.io, buf, &mut s.rec);
     }
-    // The track's strip, before the insert slots (plan v3 §6.1): the Analog Channel Strip, or the Glitch strip in its
-    // place when the track chose it. A strip that is off and has faded out is skipped: the track then passes through
-    // sample for sample (`Strip::idle`, `Glitch::idle`).
-    if track.glitch_style {
+    // The track's strip, before the insert slots (plan v3 §6.1): the chain of modules the track runs
+    // (`MixerTrack::chain`) — the Analog Channel Strip's six sections, the Glitch grid, or a mix of them in signal
+    // order. The two whole strips keep their own paths, so `CHAIN_ANALOG` renders as the strip always has (its bypass
+    // fade included) and `CHAIN_GLITCH` as the grid does; a track that has neither runs its modules in turn, with the
+    // strip's bypass switch as the chain's. An idle module writes nothing, so the same sample-for-sample pass-through
+    // holds (`Strip::idle`, `Glitch::idle`).
+    let chain = track.chain;
+    if chain == os_model::CHAIN_ANALOG {
+        if !track.strip.idle() {
+            track.strip.process(buf, cx.rate);
+        }
+    } else if chain == os_model::CHAIN_GLITCH {
         if !track.glitch.idle() {
             track.glitch.process(buf, cx.rate);
         }
-    } else if !track.strip.idle() {
-        track.strip.process(buf, cx.rate);
+    } else if !track.strip.bypassed {
+        // A mixed chain's bypass is a switch for now (plan P1): the strip's own fade belongs to the whole strip, and a
+        // chain level fade is the console's phase.
+        for &module in chain.iter().filter(|&&m| m != 0) {
+            if module == 7 {
+                if !track.glitch.idle() {
+                    track.glitch.process(buf, cx.rate);
+                }
+            } else {
+                track.strip.run_section(module, buf, cx.rate);
+            }
+        }
     }
     // A slot runs when its own switch is on and the track's slots are enabled (spec: audio/mixer.md).
     if track.slots_enabled && if t == 0 { cx.master_fx } else { cx.insert_fx } {

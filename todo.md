@@ -11,11 +11,18 @@
       still read, 5 and 6 are the fork's SnapTune ones). The console's style bar swaps the analog sections for the grid:
       a 4×4 of coloured cells, a click cycling a step's module, and one amount knob — no knob per module. Right-click
       menu: Strip style, Amount, Clear grid. `KnobId::Glitch` is scriptable as `glitch:<track>`.
-- [ ] **Mixing modules from both strips in one custom strip** (asked for with the glitcher): planned in
-      `docs/mixed-strips-plan.md` — `MixerTrack.chain: [u8; 8]` (six analog sections + the grid, in signal order), the
-      sections split into per-module DSP runs so an analog-preset chain renders bit-for-bit as today, a side chunk
-      `LSMX` beside the v8 strip chunk so older builds keep their strips, `MCmd::Chain` for one-step undo, and a chain
-      bar with one tile per module (the grid's 4×4 among them) in the console. Nothing built yet.
+- [x] **Mixing modules from both strips, P1 and P2** (`docs/mixed-strips-plan.md`): `MixerTrack.chain: [u8; 8]` — the
+      six analog sections and the grid (7), in signal order, with `CHAIN_ANALOG` / `CHAIN_GLITCH` the two whole strips and
+      `chain_add` / `chain_remove` / `chain_move` beside them. `Strip::run_section` runs one section over a block (a chain
+      of the six in the edition's order renders the strip bit for bit — `a_chain_of_the_sections_matches_the_strip`), the
+      engine walks the chain with the two whole strips keeping their old paths, and `Engine::glitch_steps` reports a grid
+      wherever it sits in a chain. A mixed chain rides in its own `LSMX` chunk (version 1, index + eight ids), so a build
+      from before mixed strips still reads every track's strip. Menu: Track ▸ Modules with the two presets and, per
+      module, add / take out (coming in, a zero word takes a musical default) and move earlier / later — one undo step
+      each (`MCmd::Chain`, `MCmd::ChainModule`).
+- [ ] **P3, the chain console**: the style bar becomes a chain bar of module chips and the panel draws one tile per
+      chain slot (the grid's 4×4 among them), paged when the chain is taller than four rows; a mixed chain also needs a
+      chain-level bypass fade (today the bypass switch is hard on a mixed chain). The plan's §"Console" has the layout.
 - [x] **A playhead on the grid, and painting it**: the feeder publishes each track's step (`Engine::glitch_steps`),
       `MixerUi::steps` carries it and the active cell is ringed in cream, repainting only the grid (`Live::Glitch`).
       Holding a cell down drags its module across the cells the pointer crosses (`App::Drag::GlitchPaint`,

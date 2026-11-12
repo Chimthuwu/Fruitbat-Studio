@@ -7,6 +7,13 @@ and the grid, in signal order — so a track can crush before it drives, or gate
 
 Roughly: DSP split + model + a side chunk (P1), commands and menus (P2), the console (P3).
 
+**Built 2026-11-12:** P1 and P2. `MixerTrack.chain` with `CHAIN_ANALOG` / `CHAIN_GLITCH` and `chain_add` /
+`chain_remove` / `chain_move`; `Strip::run_section` (a chain of the six sections in the edition's order renders the
+strip bit for bit — a test holds it to that); the `LSMX` side chunk; the engine's chain walk; and the track menu's
+**Modules** submenu (presets, add / take out with a musical default word, move earlier / later), one undo step per
+change. A mixed chain's bypass switch is hard (no chain-level fade) until P3. The console still shows one console per
+track: P3 is the chain bar and its tiles.
+
 ## The model: a chain, not a pick-list
 
 `MixerTrack.chain: [u8; 8]` — module ids in signal order, `0` is an empty slot. Ids are fixed and

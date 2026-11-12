@@ -14,6 +14,13 @@
 
 use crate::glide::{Glide, Ramp};
 
+/// The modules a track's chain can hold, in the ids the chain stores (`MixerTrack::chain`): the Analog Channel Strip's
+/// six sections in the edition's order, then the Glitch grid, which the engine runs (`crate::glitch`).
+pub const CHAIN: [&str; 8] = ["", "CUT", "OTT", "DRIVE", "TAME", "COMP", "TABLE", "GRID"];
+
+/// The same modules as two letters, the width a console row has.
+pub const CHAIN_SHORT: [&str; 8] = ["", "CT", "OT", "DR", "TM", "CP", "TB", "GR"];
+
 /// The low cut's control word as a cutoff: `20 × 17.5^v`, 20 Hz (word 0, the section off) to 350 Hz (65535).
 pub fn cut_hz(word: u16) -> f32 {
     20.0 * 17.5f32.powf(f32::from(word) / 65535.0)
@@ -1062,6 +1069,67 @@ impl Strip {
             }
         }
     }
+
+    /// Runs one module of a chain over the block, in place: 1..=6 are the sections (`CHAIN`), and 7 is the Glitch grid,
+    /// which the engine runs itself (`crate::glitch::Glitch`). A section that is off and has faded out writes nothing,
+    /// so an idle module in a chain costs a test. The whole strip's bypass fade is `process`'s: a chain's bypass is the
+    /// engine's. The six sections in the edition's order render exactly what `process` does (a test holds them to it).
+    pub fn run_section(&mut self, module: u8, buf: &mut [f32], rate: u32) {
+        let frames = buf.len() / 2;
+        match module {
+            // Low cut: the filter, one frame at a time, each side fading on its own.
+            1 => {
+                let Some(mut b) = self.low.block(frames, rate) else { return };
+                for f in buf.chunks_exact_mut(2) {
+                    for (ch, x) in f.iter_mut().enumerate() {
+                        let w = b.wet.next();
+                        *x = self.low.step(&b, w, ch, *x);
+                    }
+                }
+            }
+            2 => {
+                let Some(mut b) = self.ott.block(frames, rate) else { return };
+                for f in buf.chunks_exact_mut(2) {
+                    let y = self.ott.frame(&mut b, [f[0], f[1]]);
+                    f[0] = y[0];
+                    f[1] = y[1];
+                }
+            }
+            3 => {
+                let Some(mut b) = self.drive.block(frames, rate) else { return };
+                for f in buf.chunks_exact_mut(2) {
+                    Drive::frame(&mut b);
+                    f[0] = self.drive.step(&b, 0, f[0]);
+                    f[1] = self.drive.step(&b, 1, f[1]);
+                }
+            }
+            4 => {
+                let Some(mut b) = self.tame.block(frames, rate) else { return };
+                for f in buf.chunks_exact_mut(2) {
+                    let y = self.tame.frame(&mut b, [f[0], f[1]]);
+                    f[0] = y[0];
+                    f[1] = y[1];
+                }
+            }
+            5 => {
+                let Some(mut b) = self.comp.block(frames, rate) else { return };
+                for f in buf.chunks_exact_mut(2) {
+                    let g = self.comp.gain(&mut b, f[0], f[1]);
+                    f[0] *= g;
+                    f[1] *= g;
+                }
+            }
+            6 => {
+                let Some(mut b) = self.table.block(frames, rate) else { return };
+                for f in buf.chunks_exact_mut(2) {
+                    let y = self.table.frame(&mut b, [f[0], f[1]]);
+                    f[0] = y[0];
+                    f[1] = y[1];
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1070,6 +1138,25 @@ mod tests {
 
     const RATE: u32 = 48_000;
     const BLOCK: usize = 240;
+
+    /// A chain of the six sections in the edition's order renders what the whole strip renders: the modules' passes are
+    /// the same arithmetic as `process`'s one loop, so a mixed chain's analog half sounds like the analog strip.
+    #[test]
+    fn a_chain_of_the_sections_matches_the_strip() {
+        let words = [cut_word(120.0), comp_word(0.6), drive_word(0.5), ott_word(0.5), tame_word(0.4), comp_profile_word(2), drive_kind_word(1), table_word(0.5)];
+        let dry = sine(1_000.0, BLOCK * 2 * 12);
+        let mut strip = Strip::new(words, false);
+        let mut whole = dry.clone();
+        run(&mut strip, &mut whole);
+        let mut chain = Strip::new(words, false);
+        let mut mixed = dry.clone();
+        for block in mixed.chunks_mut(BLOCK * 2) {
+            for module in 1..=6 {
+                chain.run_section(module, block, RATE);
+            }
+        }
+        assert_eq!(mixed, whole, "a chain of the sections is the strip");
+    }
 
     fn sine(hz: f32, frames: usize) -> Vec<f32> {
         (0..frames).flat_map(|i| {
