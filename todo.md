@@ -129,8 +129,12 @@
       (`modulation::depth_on`, `views::mixer::mod_ring`). Tests: a kind switch keeps the rate and lays a pattern that is
       heard; the editor's entries are all live and its edits reach the engine, the ring follows enabled modulators alone,
       and an undo puts it back (os-app 1205 green).
-- [ ] **M1b, slice 3b, the rest**: drag an assignment from the rack onto a knob, and a list of every control one
-      modulator drives.
+- [x] **M1b, slice 3b, dragging a modulator onto a knob** (2026-11-12): the mixer's title bar lists the project's
+      modulators as chips (name · rate, dimmed while off, and how to make one when the graph is empty). A chip pressed
+      starts `Drag::Modulator`; the release over anything `App::automation_target` can name — any knob or fader —
+      assigns that modulator there through `ModCmd::Assign`, one undo step and heard at once; anywhere else the hint bar
+      says where to drop it. The chips are also the graph's only visible handle outside a knob's menu.
+- [ ] **M1b, slice 3b, the rest**: a list of every control one modulator drives.
 
 This file tracks the open/executed state of the todo items. The canonical priority plan is in `docs/roadmap-2026-11-10.md` — reference that doc for the full rationale, audit findings, and ordering.
 

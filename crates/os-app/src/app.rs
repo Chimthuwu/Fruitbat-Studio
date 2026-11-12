@@ -184,6 +184,8 @@ pub enum Action {
     Container(crate::container::CAct),
     /// The plugin palette's controls (spec: ui/plugin-menu.md §6).
     Palette(crate::plugin_palette::PalAct),
+    /// A modulator chip in the mixer's title bar: pressed, it is dragged onto a control to assign it (`crate::modulation`).
+    Modulator(os_model::modulation::ModulatorId),
     /// The Arpeggiate dialog's buttons, switches and menus (spec: ui/piano-arpeggiate.md).
     Arp(crate::arpeggiate::Act),
     /// The Flam, Flip and Scale levels dialogs' switches and buttons (spec: as `Win::PianoDlg`).
@@ -992,6 +994,8 @@ pub enum Drag {
     Pl(crate::playlist::PlDrag),
     /// A browser item pressed (`started` once it moved far enough), spec: ui/browser.md §3.
     Browser { item: views::browser::Item, label: String, m0: (f32, f32), started: bool },
+    /// A modulator chip held (the mixer's title bar), to be let go on a knob: the drop assigns it (`App::drop_modulator`).
+    Modulator { id: os_model::modulation::ModulatorId },
     /// Channel rack (spec: ui/channel-rack.md): step painting along the start row (§9), slot range select (§8),
     /// name width (§7), pattern length (§7), a row's loop length (§15), graph editor values (§14).
     RackPaint { row: usize, on: bool, last: u32 },
@@ -5902,6 +5906,8 @@ impl App {
         }
         if let Some(d) = self.drag.clone() {
             match d {
+                // A chip drag only claims its drop (the release); moving it changes nothing until then.
+                Drag::Modulator { .. } => {}
                 Drag::Browser { item, label, m0, started } => self.browser_drag_move(label, m0, started, item),
                 Drag::Pl(d) => {
                     if let Some(g) = self.pl_grid {
@@ -6659,6 +6665,12 @@ impl App {
             self.raise_at = None;
             self.raise_under_mouse();
         }
+        // A modulator chip is dragged, not clicked: it starts a drag that the release turns into an assignment on
+        // whatever knob (or fader) it was let go over.
+        if let Some(Action::Modulator(id)) = action.clone() {
+            self.drag = Some(Drag::Modulator { id });
+            return;
+        }
         if let Some(a) = action {
             if self.acts_on_release(&a) {
                 self.armed = Some(a);
@@ -7218,6 +7230,11 @@ impl App {
         self.hold_key(None, false);
         if matches!(self.drag, Some(Drag::Velocity { .. })) {
             self.state.piano.dirty = true;
+        }
+        if let Some(Drag::Modulator { id }) = self.drag {
+            self.drag = None;
+            self.drop_modulator(id);
+            return;
         }
         if let Some(Drag::Browser { item, started, .. }) = self.drag.clone() {
             self.drag = None;
@@ -8941,8 +8958,18 @@ impl App {
         }
         let s = &mut self.state;
         match a {
-            // PianoCmd is handled above, before `a`'s match borrows the state.
-            Action::PianoGrid | Action::PianoNote(_) | Action::PianoVelocity | Action::PianoKeys | Action::PianoRuler | Action::PianoSplitter | Action::Scrollbar(_) | Action::ScrollStep(..) | Action::PianoCmd(_) => {}
+            // PianoCmd is handled above, before `a`'s match borrows the state. A modulator chip is a drag, started at its
+            // press; clicking it does nothing on its own.
+            Action::PianoGrid
+            | Action::PianoNote(_)
+            | Action::PianoVelocity
+            | Action::PianoKeys
+            | Action::PianoRuler
+            | Action::PianoSplitter
+            | Action::Scrollbar(_)
+            | Action::ScrollStep(..)
+            | Action::PianoCmd(_)
+            | Action::Modulator(_) => {}
             Action::PianoTool(t) => {
                 s.piano.tool = t;
                 s.piano.overlay = None;
@@ -9495,6 +9522,21 @@ impl App {
         self.hint = Cow::Owned(m.clone());
         self.state.message = Some(m);
         self.damage_band(HINT_RECT);
+    }
+
+    /// A modulator chip let go: over a control that can be automated, that modulator is assigned to it (one undo step,
+    /// heard at once through [`crate::modulation::run`]); anywhere else the hint bar says where to drop it instead.
+    pub(crate) fn drop_modulator(&mut self, id: os_model::modulation::ModulatorId) -> bool {
+        let action = self.top_hit(self.mouse.0, self.mouse.1).map(|h| h.action.clone());
+        let Some((target, name, _)) = action.as_ref().and_then(|a| self.automation_target(a)) else {
+            self.say("Drop a modulator on a knob to assign it".into());
+            return true;
+        };
+        let msg = crate::modulation::run(self, crate::modulation::ModCmd::Assign(id, target))
+            .unwrap_or_else(|| "That control is already driven by this modulator".into());
+        self.say(format!("{msg} ({name})"));
+        self.invalidate();
+        true
     }
 
     /// ADD > Audio clip / Automation clip (spec: ui/add-clip-channels.md §3): the channel goes last in the rack (kept

@@ -429,6 +429,45 @@ fn title_tools(ui: &mut Ui, s: &State, r: Rect) {
     let hov = ui.hit(lb, Action::Mix(MHit::Layout), "Mixer layout");
     let name = crate::mixer::LAYOUTS[usize::from(s.mixer.layout.min(crate::mixer::LAYOUTS.len() as u8 - 1))];
     ui.c.text_clip(Font::new(17), r.x + 134.0 + px, r.y + 2.0, 66.0, if hov { ui.t.tx(0xffffff) } else { ui.t.tx(0xb8c4cb) }, name);
+
+    // The project's modulators, one chip each: a chip dragged onto any knob or fader assigns that modulator to it
+    // (`App::drop_modulator`), which is the graph's only visible handle outside a knob's own menu. The row says how to
+    // make the first one, so an empty graph is not a dead end.
+    let f = Font::new(13);
+    let mut x = r.x + 216.0 + px;
+    let limit = r.right() - 229.0;
+    if s.modulation.modulators.is_empty() {
+        if limit > x {
+            ui.c.text_clip(f, x, r.y + 3.0, limit - x, ui.t.s(0x6d777d), "No modulators — right-click a knob ▸ New LFO");
+        }
+        return;
+    }
+    for (i, m) in s.modulation.modulators.iter().enumerate() {
+        let label = chip_label(m);
+        let w = (ui.c.text_width(f, &label) + 14.0).min(104.0);
+        if x + w > limit {
+            let more = format!("+{}", s.modulation.modulators.len() - i);
+            ui.c.text_clip(Font::new(12), x, r.y + 4.0, (limit - x).max(0.0), ui.t.s(0x777f84), &more);
+            break;
+        }
+        let b = Rect::new(x, r.y + 3.0, w, 17.0);
+        let hov = ui.hit(b, Action::Modulator(m.id), format!("Drag {} onto a knob to assign it", crate::modulation::name_of(m)));
+        ui.c.fill_rrect(b, 3.0, if hov { ui.t.s(0x3a3f42) } else { ui.t.s(0x2c3033) });
+        ui.c.stroke_rrect(b, 3.0, 0.8, ui.t.h(0xf09a28).with_alpha(if hov { 180 } else { 60 }));
+        ui.c.text_clip(f, b.x + 6.0, b.y + 2.0, b.w - 10.0, if m.enabled { ui.t.tx(0xd6dde1) } else { ui.t.s(0x828a8f) }, &label);
+        x += w + 4.0;
+    }
+}
+
+/// A modulator chip's label: its name and, after a dot, its rate (an envelope has none, so it reads "env").
+fn chip_label(m: &os_model::modulation::Modulator) -> String {
+    use os_model::modulation::ModSource;
+    let short = match m.source {
+        ModSource::Lfo(l) => crate::modulation::rate_text(l.period),
+        ModSource::Steps(st) => crate::modulation::rate_text(st.period),
+        ModSource::Envelope(_) => "env".to_string(),
+    };
+    format!("{} · {short}", crate::modulation::name_of(m))
 }
 
 fn mix(a: Color, b: Color, t: f32) -> Color {
@@ -1755,6 +1794,33 @@ mod tests {
         assert_eq!(glitch_at(five, 5, (five.cx() + five.w * 2.0, five.cy())), 7, "two cells to the right");
         assert_eq!(glitch_at(five, 5, (five.cx(), five.cy() - five.h * 2.0)), 1, "a row up");
         assert_eq!(glitch_at(five, 5, (five.cx() - five.w * 9.0, five.cy())), 4, "and a point past the left edge takes its column's first cell");
+    }
+
+    /// A modulator chip in the title bar, dropped on a pan knob, assigns that modulator to the knob's parameter: the
+    /// engine gets it, and the drop is one undo step.
+    #[test]
+    fn a_modulator_chip_dropped_on_a_knob_drives_it() {
+        let mut app = app();
+        let Ok(mut c) = os_ui::Canvas::new(1600, 1000, 1.0) else { return };
+        let ws = &mut app.state.wins[crate::app::Win::Mixer.slot().unwrap()];
+        (ws.maxed, ws.rect) = (false, os_ui::Rect::new(100.0, 83.0, 1200.0, 900.0));
+        app.state.z = vec![crate::app::Win::Mixer];
+        let id = app.state.modulation.add(os_model::modulation::ModSource::default());
+        app.paint(&mut c, None);
+        let find = |app: &App, want: &crate::app::Action| app.hits.iter().find(|h| &h.action == want).map(|h| h.rect).expect("a hit");
+        let chip = find(&app, &crate::app::Action::Modulator(id));
+        let pan = find(&app, &crate::app::Action::Knob(KnobId::MixPan(2)));
+        app.mouse_move(chip.cx(), chip.cy());
+        app.mouse_down();
+        assert!(matches!(app.drag, Some(crate::app::Drag::Modulator { .. })), "the chip starts a drag");
+        app.mouse_move(pan.cx(), pan.cy());
+        app.mouse_up();
+        assert_eq!(app.state.modulation.get(id).map(|m| m.targets.len()), Some(1), "dropped on the pan knob");
+        let heard = crate::modulation::engine_spec(&app.state, &app.plugins)[0].targets[0].target;
+        assert_eq!(heard, os_model::target::decode(os_model::target::mixer(2, os_model::target::MIXER_PAN)));
+        // One step back takes the assignment away; the modulator stays.
+        crate::playlist::run(&mut app, crate::playlist::Cmd::Undo);
+        assert_eq!(app.state.modulation.get(id).map(|m| m.targets.len()), Some(0));
     }
 
     /// The chain bar is the chain: a chip per module in signal order, and one tile per slot in the body — a section's
