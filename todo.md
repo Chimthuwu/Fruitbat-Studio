@@ -49,16 +49,14 @@
       Console row label, the knob's text ("OTT: 40%"), the right-click submenu and the mixer/knob tests follow.
 - [x] **A maximized window resizes from its edges** (`621a6e9a`): the piano roll opens maximized and so had no resize
       edges at all; dragging one now puts the window back on its floating rect and resizes from there.
-- [ ] **Soothe-2 style dynamic EQ** — TAME already is a 72-band dynamic notch suppressor; asked for again 2026-11-12
-      ("a SOOTHE 2 style eq (ANINA)"). Decide whether TAME is renamed/retuned to be the Soothe slot or a second,
-      steeper one joins it.
-- [ ] **ANINA.vst3 / EB-FreakyTable** (on the user's Desktop): both are third-party plugins, not code in this repo —
-      load them through the device rack (or confirm what FreakyTable should do).
+- [x] ~~Soothe-2 style dynamic EQ; ANINA.vst3 / EB-FreakyTable~~ — **scrapped by the user 2026-11-12** ("forget the
+      Soothe2 Anina EBFreakyTable shit"): TAME stays as it is, and those plugins are not something this project takes on.
 
-## 🔝 TOP OF LIST — Modulation system (PAUSED, resume next)
+## 🔝 TOP OF LIST — Modulation system (UN-PAUSED 2026-11-12, next)
 - [ ] **M0 persistent parameter identity is DONE & shipped** on `origin/modulation-m0` (milestones 1+2, 16 tests green:
-      7 os-model + 9 os-app). Resume at **M1**: the actual modulation graph + the app→engine update path (Section K K.4 /
-      K.5 §7 scoped this as an M1 decision). Do **not** start M1 until explicitly un-paused.
+      7 os-model + 9 os-app). Next is **M1**: the actual modulation graph + the app→engine update path (Section K K.4 /
+      K.5 §7 scoped this as an M1 decision). The user un-paused it on 2026-11-12, to start once mixed strips' console
+      (P3) is in.
 
 This file tracks the open/executed state of the todo items. The canonical priority plan is in `docs/roadmap-2026-11-10.md` — reference that doc for the full rationale, audit findings, and ordering.
 

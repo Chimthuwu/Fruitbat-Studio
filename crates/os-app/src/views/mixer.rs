@@ -718,6 +718,18 @@ fn glitch_ink(ui: &Ui, module: usize) -> Color {
     }
 }
 
+/// A module's console ink: the analog sections keep the Edition's colours (low cut and OTT cream, drive amber, the
+/// compressor and TAME green-gold, the table blue) and the grid the glitch modules' orange.
+fn chain_ink(ui: &Ui, st: &ConsoleStyle, module: u8) -> Color {
+    match module {
+        1 | 2 => st.cut,
+        3 => st.drive,
+        4 | 5 => st.comp,
+        6 => st.ds,
+        _ => glitch_ink(ui, 1),
+    }
+}
+
 /// The glitch grid's area in a console body `r` and one cell's size: the amount row's 26 px and a 3 px gap, then the
 /// 4×4. `glitch_panel` draws from it, so a drag's `glitch_at` finds the cells it sees.
 fn glitch_area(r: Rect) -> (Rect, f32, f32) {
@@ -794,69 +806,98 @@ fn console_panel(ui: &mut Ui, s: &State, n: u16, r: Rect) {
     // own compact strips.
     let wide = r.w >= 64.0;
     let values = r.w >= 50.0;
-    // The style bar: which of the two strips the track has. A click hands the console to the other one — the glitcher's
-    // grid in place of the analog sections (`MixerTrack::glitch_style`), so a strip carries either of them.
-    let glitch = m.glitch_style;
+    // The chain bar: one chip per module the track runs, in signal order, so the two whole strips read through the same
+    // bar (six chips, or one). A click takes a module out — the Modules menu puts it back and reorders — and the bar's
+    // empty foot switches the track between the two whole strips, as it always did. Below 50 px a handful of 6 px chips
+    // would not be clickable, so the narrow form is "MOD" and the count, and the menu is the way in.
+    let chain = m.chain;
+    let mut modules = [0u8; 8];
+    let mut count = 0;
+    for &module in &chain {
+        if module != 0 {
+            modules[count] = module;
+            count += 1;
+        }
+    }
+    let modules = &modules[..count];
     let bar = Rect::new(r.x, top.bottom(), r.w, 14.0);
     let hov = ui.hit(
         bar,
         Action::Mix(MHit::GlitchMode(n)),
-        if glitch { "Glitch strip (click for the analog strip)" } else { "Analog strip (click for the glitch strip)" },
+        if m.glitch_style { "Glitch strip (click for the analog strip)" } else { "Analog strip (click for the glitch strip)" },
     );
     ui.c.fill_rrect(bar.inset(1.0), 2.0, if hov { ui.t.button_hi } else { ui.t.s(0x202628) });
     ui.c.line(bar.x + 2.0, bar.bottom(), bar.right() - 2.0, bar.bottom(), 1.0, st.edge);
-    ui.c.text_center(Font::new(8).bold(), bar, if glitch { st.ds } else { st.cut }, if glitch { "GLITCH" } else { "ANALOG" });
-    if glitch {
-        let body = Rect::new(r.x, bar.bottom() + 3.0, r.w, (r.bottom() - bar.bottom() - 3.0).max(40.0));
-        glitch_panel(ui, s, n, m, body);
-        return;
+    if r.w >= 50.0 {
+        let cw = (bar.w - 2.0) / modules.len().max(1) as f32;
+        for (i, &module) in modules.iter().enumerate() {
+            let chip = Rect::new(bar.x + 1.0 + cw * i as f32, bar.y + 2.0, (cw - 1.0).max(3.0), bar.h - 4.0);
+            let ink = chain_ink(ui, &st, module);
+            ui.c.fill_rrect(chip, 1.5, ink.mix(ui.t.s(0x14171a), if ui.hovering(chip) { 0.2 } else { 0.5 }));
+            ui.c.text_center(Font::new(7).bold(), chip, ink, os_dsp::strip::CHAIN_SHORT[usize::from(module)]);
+            let what = os_dsp::strip::CHAIN[usize::from(module)];
+            ui.hit(chip, Action::Mix(MHit::ChainSlot(n, module)), format!("{what} in the chain (click to take it out; the menu reorders)"));
+        }
+    } else {
+        ui.c.text_center(Font::new(8).bold(), bar, st.cut, &format!("MOD {count}"));
     }
     let body = Rect::new(r.x, bar.bottom() + 3.0, r.w, (r.bottom() - bar.bottom() - 3.0).max(40.0));
-    // The rows share the panel's height (up to 76 px: the Edition's 57 px row plus room for the readout), so the console
-    // reaches as far down the strip as the plugin list beside it.
-    let row = (body.h / 4.0).min(76.0);
-    let at = |i: usize| Rect::new(body.x, body.y + row * i as f32, body.w, (row - 2.0).max(6.0));
-
-    // Low cut and OTT.
-    let b = at(0);
-    console_plate(ui, b, &st);
-    console_label(ui, b, 0.0, 0.54, if wide { "LOW CUT" } else { "CUT" }, st.cut);
-    console_label(ui, b, 0.54, 0.46, "OTT", st.cut);
-    console_knob(ui, s, b, 0.27, KnobId::Strip(n, 0), st.cut, values);
-    console_knob(ui, s, b, 0.73, KnobId::Strip(n, 3), st.cut, values);
-
-    // Drive, with the character's button where the Edition keeps it (the row's right half).
-    let b = at(1);
-    console_plate(ui, b, &st);
-    console_label(ui, b, 0.0, 0.54, "DRIVE", st.drive);
-    console_knob(ui, s, b, 0.27, KnobId::Strip(n, 2), st.drive, values);
-    let kind = os_dsp::strip::drive_kind(m.strip[6]).min(os_dsp::strip::DRIVE_TYPES.len() - 1);
-    let kind_name = os_dsp::strip::DRIVE_TYPES[kind];
-    let bt = Rect::new(b.x + b.w * 0.54, b.cy() - 9.0, (b.w * 0.46 - 1.0).max(10.0), 18.0);
-    let hov = ui.hit(bt, Action::Mix(MHit::StripKind(n)), format!("Drive character: {kind_name} (click to change)"));
-    ui.c.fill_rrect(bt, 3.0, if hov { ui.t.button_hi } else { ui.t.s(0x202729) });
-    ui.c.stroke_rrect(bt, 3.0, 1.0, ui.t.s(0x59636a));
-    ui.c.text_center(Font::new(9), Rect::new(bt.x, bt.y, bt.w - 6.0, bt.h), st.drive, kind_name);
-    ui.c.fill_polygon(&[(bt.right() - 6.0, bt.cy() - 1.0), (bt.right() - 2.0, bt.cy() - 1.0), (bt.right() - 4.0, bt.cy() + 2.0)], st.drive);
-
-    // Compressor, its profile cycling from the label, and TAME.
-    let b = at(2);
-    console_plate(ui, b, &st);
-    let profile = os_dsp::strip::comp_profile(m.strip[5]).min(os_dsp::strip::PROFILES.len() - 1);
-    let profile_name = os_dsp::strip::PROFILES[profile].name;
-    let label = Rect::new(b.x, b.y, b.w * 0.54, 12.0);
-    ui.c.text_center(Font::new(9), Rect::new(label.x, label.y + 2.0, label.w, 11.0), st.comp, "COMP");
-    ui.c.fill_polygon(&[(label.right() - 5.0, b.y + 5.0), (label.right() - 1.0, b.y + 5.0), (label.right() - 3.0, b.y + 8.0)], st.comp);
-    ui.hit(label, Action::Mix(MHit::StripProfile(n)), format!("Compressor profile: {profile_name} (click to change)"));
-    console_label(ui, b, 0.54, 0.46, "TAME", st.comp);
-    console_knob(ui, s, b, 0.27, KnobId::Strip(n, 1), st.comp, values);
-    console_knob(ui, s, b, 0.73, KnobId::Strip(n, 4), st.comp, values);
-
-    // The table on its own, centred as the Edition's DS row was.
-    let b = at(3);
-    console_plate(ui, b, &st);
-    ui.c.text_center(Font::new(9), Rect::new(b.x, b.y + 2.0, b.w, 11.0), st.ds, if wide { "TABLE" } else { "TBL" });
-    console_knob(ui, s, b, 0.5, KnobId::Strip(n, 7), st.ds, values);
+    // One tile per module, top to bottom in signal order: an analog section is one row (its label, its knob, and the
+    // drive character's or the compressor's profile where the module has one), and the grid is its amount over the 4×4,
+    // four rows tall. The rows share the body's height, up to the Edition's 76 px; a chain too tall for the console
+    // squeezes them and is clipped there, and the menu still reaches every module.
+    let units: f32 = modules.iter().map(|&x| if x == 7 { 4.0 } else { 1.0 }).sum::<f32>().max(1.0);
+    let unit = (body.h / units).min(76.0);
+    ui.c.push_clip(body);
+    let mut y = body.y;
+    for &module in modules {
+        if module == 7 {
+            glitch_panel(ui, s, n, m, Rect::new(body.x, y, body.w, unit * 4.0));
+            y += unit * 4.0;
+            continue;
+        }
+        let row = Rect::new(body.x, y, body.w, (unit - 2.0).max(6.0));
+        y += unit;
+        console_plate(ui, row, &st);
+        match module {
+            // Drive, with the character's button where the Edition keeps it (the row's right half).
+            3 => {
+                console_label(ui, row, 0.0, 0.54, "DRIVE", st.drive);
+                console_knob(ui, s, row, 0.27, KnobId::Strip(n, 2), st.drive, values);
+                let kind = os_dsp::strip::drive_kind(m.strip[6]).min(os_dsp::strip::DRIVE_TYPES.len() - 1);
+                let kind_name = os_dsp::strip::DRIVE_TYPES[kind];
+                let bt = Rect::new(row.x + row.w * 0.54, row.cy() - 9.0, (row.w * 0.46 - 1.0).max(10.0), 18.0);
+                let hov = ui.hit(bt, Action::Mix(MHit::StripKind(n)), format!("Drive character: {kind_name} (click to change)"));
+                ui.c.fill_rrect(bt, 3.0, if hov { ui.t.button_hi } else { ui.t.s(0x202729) });
+                ui.c.stroke_rrect(bt, 3.0, 1.0, ui.t.s(0x59636a));
+                ui.c.text_center(Font::new(9), Rect::new(bt.x, bt.y, bt.w - 6.0, bt.h), st.drive, kind_name);
+                ui.c.fill_polygon(&[(bt.right() - 6.0, bt.cy() - 1.0), (bt.right() - 2.0, bt.cy() - 1.0), (bt.right() - 4.0, bt.cy() + 2.0)], st.drive);
+            }
+            // The compressor, its profile cycling from the label, as the Edition's little triangle says.
+            5 => {
+                let profile = os_dsp::strip::comp_profile(m.strip[5]).min(os_dsp::strip::PROFILES.len() - 1);
+                let profile_name = os_dsp::strip::PROFILES[profile].name;
+                let label = Rect::new(row.x, row.y, row.w * 0.54, 12.0);
+                ui.c.text_center(Font::new(9), Rect::new(label.x, label.y + 2.0, label.w, 11.0), st.comp, "COMP");
+                ui.c.fill_polygon(&[(label.right() - 5.0, row.y + 5.0), (label.right() - 1.0, row.y + 5.0), (label.right() - 3.0, row.y + 8.0)], st.comp);
+                ui.hit(label, Action::Mix(MHit::StripProfile(n)), format!("Compressor profile: {profile_name} (click to change)"));
+                console_knob(ui, s, row, 0.73, KnobId::Strip(n, 1), st.comp, values);
+            }
+            1 | 2 | 4 | 6 => {
+                let (name, word) = match module {
+                    1 => (if wide { "LOW CUT" } else { "CUT" }, 0),
+                    2 => ("OTT", 3),
+                    4 => ("TAME", 4),
+                    _ => (if wide { "TABLE" } else { "TBL" }, 7),
+                };
+                let ink = chain_ink(ui, &st, module);
+                ui.c.text_center(Font::new(9), Rect::new(row.x, row.y + 2.0, row.w, 11.0), ink, name);
+                console_knob(ui, s, row, 0.5, KnobId::Strip(n, word), ink, values);
+            }
+            _ => {}
+        }
+    }
+    ui.c.pop_clip();
 }
 
 /// One strip; `left` is its left edge (44 px pitch). Columns: knobs at +22, meter / fader at +32,
@@ -1488,6 +1529,53 @@ mod tests {
         assert_eq!(glitch_at(five, 5, (five.cx() + five.w * 2.0, five.cy())), 7, "two cells to the right");
         assert_eq!(glitch_at(five, 5, (five.cx(), five.cy() - five.h * 2.0)), 1, "a row up");
         assert_eq!(glitch_at(five, 5, (five.cx() - five.w * 9.0, five.cy())), 4, "and a point past the left edge takes its column's first cell");
+    }
+
+    /// The chain bar is the chain: a chip per module in signal order, and one tile per slot in the body — a section's
+    /// row, or the grid's 4×4 four rows tall — so a mixed strip is visible as well as audible. A chip's click takes its
+    /// module out, one undo step, and a narrow console shows the count instead of chips it could not make clickable.
+    #[test]
+    fn the_chain_bar_and_tiles_follow_the_chain() {
+        let mut app = app();
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let ws = &mut app.state.wins[crate::app::Win::Mixer.slot().unwrap()];
+        (ws.maxed, ws.rect) = (false, os_ui::Rect::new(100.0, 83.0, 1200.0, 900.0));
+        app.state.z = vec![crate::app::Win::Mixer];
+        // Wide 3's 80 px strip leaves the console 60 px beside the meter: wide enough for the chips, where Wide 2's
+        // 64 px strip leaves it 44 and the bar reads its count instead.
+        app.state.mixer.layout = 5;
+        let has = |a: &App, want: Action| a.hits.iter().any(|h| h.action == want);
+        let chip = |a: &App, m: u8| a.hits.iter().find(|h| h.action == Action::Mix(MHit::ChainSlot(2, m))).map(|h| h.rect).expect("a chain chip");
+        let knob = |a: &App, word: u8| a.hits.iter().find(|h| h.action == Action::Knob(KnobId::Strip(2, word))).map(|h| h.rect);
+        app.paint(&mut c, None);
+        // The analog strip is its six sections, in the Edition's order.
+        for module in 1..=6u8 {
+            assert!(has(&app, Action::Mix(MHit::ChainSlot(2, module))), "chip {module}");
+        }
+        assert!(!has(&app, Action::Mix(MHit::ChainSlot(2, 7))), "no grid on the analog chain");
+        assert!(chip(&app, 1).x < chip(&app, 3).x, "the chips follow the chain");
+        let (cut, drive) = (knob(&app, 0).expect("low cut"), knob(&app, 2).expect("drive"));
+        assert!(cut.y < drive.y, "and the tiles do: low cut before drive");
+        // A mixed chain: the grid joins and its 4×4 draws in the body beside the sections.
+        app.state.project.mixer.iter_mut().find(|m| m.index == 2).unwrap().chain = [1, 3, 7, 0, 0, 0, 0, 0];
+        app.paint(&mut c, None);
+        assert!(has(&app, Action::Mix(MHit::GlitchCell(2, 0))), "the grid's tile");
+        assert!(has(&app, Action::Mix(MHit::GlitchCell(2, 15))), "its last step");
+        assert!(has(&app, Action::Mix(MHit::ChainSlot(2, 7))), "its chip too");
+        assert!(knob(&app, 2).is_some(), "the drive's tile stays");
+        // A chip takes its module out, one undo step, and its tile goes with it.
+        let at = app.state.history.at();
+        crate::mixer::hit(&mut app, MHit::ChainSlot(2, 3));
+        assert_eq!(app.state.project.mixer.iter().find(|m| m.index == 2).unwrap().chain, [1, 7, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(app.state.history.at(), at + 1);
+        app.paint(&mut c, None);
+        assert!(knob(&app, 2).is_none(), "the drive's tile is gone");
+        // Narrow: seven chips would not be clickable, so the bar reads its count and the menu is the way in.
+        app.state.mixer.layout = 3; // Wide, 44 px
+        app.state.mixer.console.insert(2, true);
+        app.paint(&mut c, None);
+        assert!(!has(&app, Action::Mix(MHit::ChainSlot(2, 1))), "no chips at 44 px");
+        assert!(has(&app, Action::Mix(MHit::StripPower(2))), "the console still shows");
     }
 
     /// Wide 2, Wide 3 and Wide alt draw the console and the strip's own meter side by side: the console gives up the

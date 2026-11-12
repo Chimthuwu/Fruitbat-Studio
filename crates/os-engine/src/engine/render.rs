@@ -223,16 +223,27 @@ pub(crate) fn mix_track(lane: Lane, cx: &multicore::MixCx, s: &mut multicore::Mi
         if !track.glitch.idle() {
             track.glitch.process(buf, cx.rate);
         }
-    } else if !track.strip.bypassed {
-        // A mixed chain's bypass is a switch for now (plan P1): the strip's own fade belongs to the whole strip, and a
-        // chain level fade is the console's phase.
-        for &module in chain.iter().filter(|&&m| m != 0) {
-            if module == 7 {
-                if !track.glitch.idle() {
-                    track.glitch.process(buf, cx.rate);
+    } else {
+        // A mixed chain fades across the strip's bypass switch in 10 ms (`chain_ramp`): the modules keep running while
+        // the gain goes down, so the switch does not click, and stop once it is at zero, when they can no longer be
+        // heard anyway.
+        let gain = chain_ramp(track.chain_gain, !track.strip.bypassed, frames, cx.rate as f32);
+        track.chain_gain = gain;
+        if gain > 0.0 {
+            for &module in chain.iter().filter(|&&m| m != 0) {
+                if module == 7 {
+                    if !track.glitch.idle() {
+                        track.glitch.process(buf, cx.rate);
+                    }
+                } else {
+                    track.strip.run_section(module, buf, cx.rate);
                 }
-            } else {
-                track.strip.run_section(module, buf, cx.rate);
+            }
+            // The whole buffer fades as one: the chain's four modules each mix their own dry, so they see one gain.
+            if gain < 1.0 {
+                for x in buf[..frames * 2].iter_mut() {
+                    *x *= gain;
+                }
             }
         }
     }
@@ -357,4 +368,35 @@ fn rec_input(tap: &dyn RecordTap, t: usize, at: u64, arm: rec::Arm, input: i32, 
         }
     }
     tap.push(t, at, take);
+}
+
+/// A mixed chain's gain on a block of `frames`, toward 1 (`on`: the chain runs) or 0 (the strip is bypassed): a 10 ms
+/// ramp, so the bypass switch does not click, clamped at both ends so a bypassed chain stops at exactly zero and can.
+fn chain_ramp(gain: f32, on: bool, frames: usize, rate: f32) -> f32 {
+    let step = frames as f32 / (0.010 * rate.max(1.0));
+    let target = if on { 1.0 } else { 0.0 };
+    if gain < target {
+        (gain + step).min(target)
+    } else {
+        (gain - step).max(target)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::chain_ramp;
+
+    /// A mixed chain's bypass is a ramp, not a switch: 10 ms either way at 48 kHz, clamped at both ends.
+    #[test]
+    fn a_mixed_chain_fades_across_its_bypass() {
+        // 480 frames is 10 ms: one block takes the gain all the way, in either direction.
+        assert_eq!(chain_ramp(1.0, false, 480, 48_000.0), 0.0);
+        assert_eq!(chain_ramp(0.0, true, 480, 48_000.0), 1.0);
+        // 240 frames is half of it: 0.5 each way.
+        assert!((chain_ramp(1.0, false, 240, 48_000.0) - 0.5).abs() < 1e-6);
+        assert!((chain_ramp(0.0, true, 240, 48_000.0) - 0.5).abs() < 1e-6);
+        // No overshoot: a chain switched off stops at zero and one switched on stops at one.
+        assert_eq!(chain_ramp(0.2, false, 480, 48_000.0), 0.0);
+        assert_eq!(chain_ramp(0.9, true, 960, 48_000.0), 1.0);
+    }
 }

@@ -39,10 +39,13 @@ pub enum MHit {
     StripPower(u16),
     StripKind(u16),
     StripProfile(u16),
-    /// The glitch console's style bar (`.0`: the track), which swaps the strip between the analog sections and the grid,
-    /// and a grid cell (`.1`: the step, 0..16) — a click cycles the cell to the next module (`MCmd::GlitchStep`).
+    /// The chain bar (`.0`: the track), which swaps the strip between the analog sections and the grid, and a grid cell
+    /// (`.1`: the step, 0..16) — a click cycles the cell to the next module (`MCmd::GlitchStep`).
     GlitchMode(u16),
     GlitchCell(u16, u8),
+    /// A chain chip in the console's chain bar (`.1`: the module): a click takes that module out of the chain, one undo
+    /// step (the Modules menu puts it back and reorders).
+    ChainSlot(u16, u8),
     /// The strip's own panel button: shows or hides the console on that channel alone (`console_shown`), whatever the
     /// layout. Session state, not project data.
     StripPanel(u16),
@@ -750,13 +753,33 @@ pub fn hit(app: &mut App, h: MHit) -> Option<String> {
             });
             None
         }
-        // The glitch console's style bar and its grid: one step each, as the analog panel's controls are.
+        // The chain bar and its grid: one step each, as the analog panel's controls are. The bar's empty foot switches the
+        // track between the two whole strips, which sets the chain with it, so the bar and the sound agree.
         MHit::GlitchMode(n) => {
             select(s, n, ctrl);
             let glitch = track(s, n).is_some_and(|m| m.glitch_style);
+            let chain = if glitch { os_model::CHAIN_ANALOG } else { os_model::CHAIN_GLITCH };
             let _ = edit(s, "Glitch strip", Region::Track(n), |s| {
                 let m = track_mut(s, n)?;
+                m.chain = chain;
                 m.glitch_style = !glitch;
+                changed(s);
+                Some(())
+            });
+            None
+        }
+        // A chain chip: the module leaves the chain and its word stays, so the menu can put it back as it was.
+        MHit::ChainSlot(n, module) => {
+            select(s, n, ctrl);
+            let _ = edit(s, "Module chain", Region::Track(n), |s| {
+                let m = track_mut(s, n)?;
+                m.chain = os_model::chain_remove(m.chain, module);
+                // Back to a whole strip, the console shows that strip.
+                if m.chain == os_model::CHAIN_ANALOG {
+                    m.glitch_style = false;
+                } else if m.chain == os_model::CHAIN_GLITCH {
+                    m.glitch_style = true;
+                }
                 changed(s);
                 Some(())
             });

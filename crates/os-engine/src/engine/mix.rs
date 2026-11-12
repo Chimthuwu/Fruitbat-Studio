@@ -36,6 +36,9 @@ pub(crate) struct MixTrack {
     /// The modules the track runs in its strip's place (`MixerTrack::chain`): 1..=6 the analog sections, 7 the grid,
     /// in signal order. The two whole strips keep their old paths in `render`.
     pub(crate) chain: [u8; 8],
+    /// A mixed chain's gain, ramped across the strip's bypass switch in 10 ms (`chain_ramp`) so the switch does not
+    /// click. 1 when the chain runs; the two whole strips keep their own fade and leave it at 1.
+    pub(crate) chain_gain: f32,
     /// Insert effects in slot order (applied before the fader).
     pub(crate) effects: Vec<FxSlot>,
     /// Slot switches and stored mix levels (0..12800) by slot, for hosted effects attached later.
@@ -211,6 +214,7 @@ impl MixTrack {
             glitch: os_dsp::glitch::Glitch::new(os_dsp::glitch::Pattern::OFF),
             glitch_style: false,
             chain: os_model::CHAIN_ANALOG,
+            chain_gain: 1.0,
             effects: Vec::new(),
             slot_on: [true; 10],
             slot_mix: [12800; 10],
