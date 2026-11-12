@@ -11,7 +11,7 @@
 
 use crate::app::State;
 use crate::plugins::Plugins;
-use os_model::modulation::{ModulatorId, OwnerLocator, ParameterKey, ParameterPath, ParamResolution, PersistentObjectId};
+use os_model::modulation::{Modulator, ModulatorId, OwnerLocator, ParameterKey, ParameterPath, ParamResolution, PersistentObjectId};
 use os_model::target;
 
 impl State {
@@ -155,6 +155,108 @@ pub fn resolve_path(s: &State, plugins: &Plugins, path: ParameterPath) -> Option
     target_for(owner, path.parameter, native_ids.as_deref())
 }
 
+/// The owner and parameter a FLP `Target` names, read back from its encoding ([`target_for`] is the other way). This is
+/// how the interface turns the control under the cursor into a graph assignment. The owner is a locator, not an id:
+/// [`path_in`] asks the registry, [`target_path`] mints one when the owner is new.
+pub fn path_of(target: u32) -> Option<(OwnerLocator, ParameterKey)> {
+    let lower = (target & 0xFFFF) as u16;
+    let high = target >> 16;
+    // A plugin parameter's index lives behind the low half's PLUGIN_PARAM bit; anything else is a host code.
+    let plugin = lower & target::PLUGIN_PARAM != 0;
+    let parameter = if plugin { ParameterKey::LegacyPluginIndex(lower & 0x7FFF) } else { ParameterKey::HostParameterCode(lower) };
+    let owner = if high >= 0x7000 {
+        // A mixer track: `0x7000 + track * 64 + slot`. Only a plugin parameter names a slot.
+        let rest = high - 0x7000;
+        let track = (rest / 64) as u16;
+        let slot = (rest % 64) as u8;
+        if plugin {
+            OwnerLocator::Slot(track, slot)
+        } else {
+            OwnerLocator::Track(track)
+        }
+    } else {
+        OwnerLocator::Channel(high as u16)
+    };
+    Some((owner, parameter))
+}
+
+/// `target` as a [`ParameterPath`] against the current registry: `None` when the owner has no id yet.
+pub fn path_in(s: &State, target: u32) -> Option<ParameterPath> {
+    let (owner, parameter) = path_of(target)?;
+    Some(ParameterPath { owner: s.owner_of(owner)?, parameter })
+}
+
+/// `target` as a [`ParameterPath`], giving its owner an identity if it has none: what an assignment stores.
+pub fn target_path(s: &mut State, target: u32) -> Option<ParameterPath> {
+    let (owner, parameter) = path_of(target)?;
+    Some(ParameterPath { owner: s.ensure_owner(owner), parameter })
+}
+
+/// A modulator's name for a menu: what the user typed, else a default made from its source ("LFO 2", "STEPS 1").
+pub fn name_of(m: &Modulator) -> String {
+    if !m.name.is_empty() {
+        return m.name.clone();
+    }
+    let kind = match m.source {
+        os_model::modulation::ModSource::Lfo(_) => "LFO",
+        os_model::modulation::ModSource::Steps(_) => "STEPS",
+        os_model::modulation::ModSource::Envelope(_) => "ENV",
+    };
+    format!("{kind} {}", m.id.0)
+}
+
+/// What a knob's Modulation menu asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModCmd {
+    /// A new LFO driving the parameter `Target` names.
+    New(u32),
+    /// Modulator `.0` starts driving that parameter.
+    Assign(ModulatorId, u32),
+    /// Modulator `.0` stops driving it.
+    Unassign(ModulatorId, u32),
+    /// A modulator goes, with every assignment it had.
+    Remove(ModulatorId),
+}
+
+/// Runs a [`ModCmd`] as one undo step (the graph and the identities it names are part of the project's undo), and hands
+/// the graph to playback at once so the change is heard without touching anything else.
+pub fn run(app: &mut crate::app::App, cmd: ModCmd) -> Option<String> {
+    let msg = crate::control::edit_app(app, "Modulation", crate::control::command::Region::Project, |app| {
+        let s = &mut app.state;
+        let path = match cmd {
+            ModCmd::New(t) | ModCmd::Assign(_, t) | ModCmd::Unassign(_, t) => target_path(s, t),
+            ModCmd::Remove(_) => None,
+        };
+        let msg = match cmd {
+            ModCmd::New(_) => path.map(|path| {
+                let id = s.modulation.add(os_model::modulation::ModSource::default());
+                s.modulation.assign(id, os_model::modulation::ModTarget::new(path));
+                let m = s.modulation.get(id).expect("just added");
+                format!("{} now drives this control", name_of(m))
+            }),
+            ModCmd::Assign(id, _) => path.map(|path| {
+                s.modulation.assign(id, os_model::modulation::ModTarget::new(path));
+                let m = s.modulation.get(id).expect("an existing modulator");
+                format!("{} now drives this control", name_of(m))
+            }),
+            ModCmd::Unassign(id, _) => path.and_then(|path| {
+                s.modulation.unassign(id, path).then(|| "Stopped driving this control".to_string())
+            }),
+            ModCmd::Remove(id) => s.modulation.remove(id).map(|m| format!("{} removed", name_of(&m))),
+        };
+        if msg.is_some() {
+            s.piano.dirty = true;
+        }
+        msg
+    });
+    if msg.is_some() {
+        let spec = engine_spec(&app.state, &app.plugins);
+        app.transport.set_modulation(spec);
+        app.invalidate();
+    }
+    msg
+}
+
 /// The modulation graph as the engine runs it (`os_engine::Engine::set_modulation`): each modulator's source and its
 /// targets resolved to the concrete FLP [`os_model::target::Target`] the engine addresses. An assignment that does
 /// not resolve is left out here (it stays in the graph, and [`unresolved`] reports it), so a plugin that comes back
@@ -267,5 +369,50 @@ mod tests {
         assert_eq!(spec[0].targets[0].target, target::decode(target::channel(0, target::CHANNEL_VOLUME)));
         assert_eq!(spec[0].targets[0].depth, -0.75);
         assert_eq!(spec[0].targets[0].polarity, os_model::modulation::Polarity::Bipolar);
+    }
+
+    /// A knob's target reads back to the owner and parameter that wrote it, and `target_for` writes the same target
+    /// again: the inverse the Modulation menu needs, for a channel, a track's host parameter and a slot's plugin.
+    #[test]
+    fn a_target_reads_back_to_its_parameter() {
+        let cases = [
+            (target::channel_param(3, 2), (OwnerLocator::Channel(3), ParameterKey::LegacyPluginIndex(2))),
+            (target::mixer(5, 3), (OwnerLocator::Track(5), ParameterKey::HostParameterCode(0x1F00 | 3))),
+            (target::slot_param(2, 1, 4), (OwnerLocator::Slot(2, 1), ParameterKey::LegacyPluginIndex(4))),
+        ];
+        for (t, want) in cases {
+            assert_eq!(path_of(t), Some(want), "target {t:#x}");
+            let (owner, key) = want;
+            assert_eq!(target_for(owner, key, None).map(|(t, _)| t), Some(t), "and back: {want:?}");
+        }
+    }
+
+    /// A knob's Modulation menu makes a modulator that drives it, the engine gets the assignment, and each step is one
+    /// undo away: assigning, unassigning and removing.
+    #[test]
+    fn a_new_modulator_from_a_knob_is_an_undo_step() {
+        let mut app = crate::app::App::new(None);
+        app.state.project = crate::app::test_project();
+        app.state.control.settle(&mut app.state.project);
+        let t = target::channel_param(0, 1);
+        let msg = run(&mut app, ModCmd::New(t)).expect("made a modulator");
+        assert!(msg.contains("drives"), "{msg}");
+        assert_eq!(app.state.modulation.modulators.len(), 1);
+        let (id, path) = {
+            let m = &app.state.modulation.modulators[0];
+            (m.id, m.targets.first().expect("one assignment").path)
+        };
+        assert_eq!(app.state.identity.owners.get(&path.owner), Some(&OwnerLocator::Channel(0)));
+        let heard = engine_spec(&app.state, &app.plugins).first().and_then(|m| m.targets.first()).map(|t| t.target);
+        assert_eq!(heard, Some(target::decode(t)), "the assignment is the knob's own parameter");
+        // Taking the assignment away leaves the modulator, driving nothing.
+        run(&mut app, ModCmd::Unassign(id, t)).expect("unassigned");
+        assert_eq!(app.state.modulation.get(id).map(|m| m.targets.len()), Some(0));
+        assert!(engine_spec(&app.state, &app.plugins).first().is_some_and(|m| m.targets.is_empty()));
+        // Removing it and undoing that puts it back.
+        run(&mut app, ModCmd::Remove(id)).expect("removed");
+        assert!(app.state.modulation.is_empty());
+        crate::playlist::run(&mut app, crate::playlist::Cmd::Undo);
+        assert_eq!(app.state.modulation.get(id).map(|m| m.targets.len()), Some(0), "the undo brings the modulator back");
     }
 }

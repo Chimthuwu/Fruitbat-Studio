@@ -100,10 +100,27 @@
       matrix is recomputed only when a value changes, and a track the graph stops driving gets its own value back
       (`Engine::set_modulation` releases every track). Tests: a step source lifting a track's fader to the top while
       another track stays at its own value, and the fader returning when the graph goes.
-- [ ] **M1b, slice 2b — a track's EQ bands, its sends and a slot's wet level**: the same run writes those where the mixer
-      reads them (`TrackEq`, `Route::gain`, `slot_mix`), each with the mixer's own units.
-- [ ] **M1b, slice 3 — the UI**: create a modulator, pick its source, drag an assignment onto a knob, show the depth
-      ring; the graph edits go through the control plane (one undo step each) and `Transport::set_modulation` follows.
+- [x] **M1b, slice 2b — a track's EQ bands, its sends and a slot's wet level** (2026-11-12): `Engine::run_host_modulation`
+      now drives `Target::MixerEq` / `MixerSend` / `SlotMix` beside the fader, pan and separation, each in the units the
+      mixer reads it in. Nothing loses its authored value: a band's authored setting stays in `MixTrack::eq_own` (the EQ
+      runs at the modulated value, with `MixTrack::set_eq` the automation path and `sync_eq` the write), a slot keeps its
+      stored `slot_mix` while `mod_slot_mix` holds the level the effect reads, and a route keeps its `level` / `gain`
+      while `mod_level` holds the send's, `Route::effective` giving the gain the mixer ramps to. `release_modulation`
+      puts all three back when the graph goes (and `set_modulation` releases every track); playback starting elsewhere
+      releases them too. Tests: a step source lifting band 0's gain to +18 dB, a send to 0.9 and a slot to full wet
+      while their authored values stay put, and all three returning when the graph is emptied (os-engine 384, its
+      integration tests 5, os-app 1200 green).
+- [x] **M1b, slice 3a — assigning from a knob** (2026-11-12): every knob's right-click menu has a **Modulation** part:
+      "New LFO for this control", one entry per modulator (ticked when it already drives this control, and clicking it
+      unassigns), and a Remove modulator submenu. `modulation::path_of` reads a control's FLP `Target` back to its owner
+      and parameter, `path_in` asks the identity registry and `target_path` mints an id for a new owner, so an assignment
+      stores the same `ParameterPath` a saved project holds; `ModCmd` runs each edit as one undo step through
+      `control::edit_app` on `Region::Project` (the undo's `Side` now carries the graph and the identity registry), and
+      `Transport::set_modulation` gets the new spec at once, so the LFO is heard without stopping. Tests: the target
+      round-trips for a channel, a track's host parameter and a slot's plugin; a new modulator drives the knob and the
+      engine spec carries it; unassigning leaves it driving nothing; removing it undoes back (os-app 1203 green).
+- [ ] **M1b, slice 3b — the rest of the UI**: choose and edit a modulator's source and rate (the graph has LFO, steps and
+      envelope; none has an editor yet), show the depth ring on a driven knob, and drag an assignment onto a knob.
 
 This file tracks the open/executed state of the todo items. The canonical priority plan is in `docs/roadmap-2026-11-10.md` — reference that doc for the full rationale, audit findings, and ordering.
 

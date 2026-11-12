@@ -422,6 +422,10 @@ pub struct Side {
     pub loop_len: std::collections::BTreeMap<usize, u32>,
     /// The mixer's slot names typed in this session (they follow tracks and slots as they move).
     pub slot_names: std::collections::HashMap<(u16, u8), String>,
+    /// The modulation graph and the identities its assignments name, so adding, assigning or removing a modulator is
+    /// one undo step like any other edit.
+    pub modulation: os_model::modulation::ModGraph,
+    pub identity: os_model::modulation::IdentityRegistry,
 }
 
 impl Side {
@@ -438,6 +442,8 @@ impl Side {
             locked: r.locked.clone(),
             loop_len: r.loop_len.clone(),
             slot_names: s.mixer.slot_names.clone(),
+            modulation: s.modulation.clone(),
+            identity: s.identity.clone(),
         }
     }
 }
@@ -1509,8 +1515,12 @@ fn restore(s: &mut State, side: Side) {
     let sel_clips = selected_clips(s);
     let new_row: std::collections::HashMap<u32, usize> = side.project.channels.iter().enumerate().map(|(r, c)| (c.id.0, r)).collect();
     let map: Vec<Option<usize>> = old.iter().map(|id| new_row.get(id).copied()).collect();
-    let Side { project, tempo, pattern, groups, unsorted_at, filter, zipped, locked, loop_len, slot_names } = side;
+    let Side { project, tempo, pattern, groups, unsorted_at, filter, zipped, locked, loop_len, slot_names, modulation, identity } = side;
     s.mixer.slot_names = slot_names;
+    // The modulation graph and the identities its assignments name come back with the project: adding, assigning or
+    // removing a modulator is undone like any other edit.
+    s.modulation = modulation;
+    s.identity = identity;
     let mutes = Mutes::of(&s.project);
     s.project = project;
     mutes.keep(&mut s.project);

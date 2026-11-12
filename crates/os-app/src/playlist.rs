@@ -209,6 +209,8 @@ pub enum Cmd {
     Nothing,
     /// A knob menu's Remote control part (spec: ui/remote-control.md §1).
     Remote(crate::remote::RCmd),
+    /// A knob menu's Modulation part: a new LFO, an assignment, or a modulator removed (`crate::modulation::ModCmd`).
+    Mod(crate::modulation::ModCmd),
     /// Settings > MIDI ▸ External clock sync: the device chosen (`None` = Off).
     MidiExt(Option<String>),
     /// Plugin window menu > Detached: rack row, new state (spec: ui/plugin-window.md "Docking and the window menu").
@@ -3389,6 +3391,8 @@ pub fn knob_menu(s: &State, auto: Option<(u32, String, f64)>, typein: Option<cra
         _ => None,
     };
     let mut items: Vec<PItem> = reset.map(|c| PItem::new("Reset", Cmd::Reset(c))).into_iter().collect();
+    // Kept before `auto` is consumed: the Modulation part needs the control's own target.
+    let auto_target = auto.as_ref().map(|(t, _, _)| *t);
     let events = crate::events::menu_item(auto.as_ref(), None);
     if let Some((tgt, name, value)) = auto {
         let [init, delete] = crate::init::items(s, Some((tgt, value)));
@@ -3402,6 +3406,34 @@ pub fn knob_menu(s: &State, auto: Option<(u32, String, f64)>, typein: Option<cra
     }
     if typein.is_some() {
         items.extend(crate::remote::menu_items(typein));
+    }
+    // Modulation: a new LFO for the control, the modulators it can be handed to, and removing one. Only a control
+    // that is a real parameter has a target (`auto`), which is what an assignment stores.
+    if let Some(tgt) = auto_target {
+        if crate::modulation::path_of(tgt).is_some() {
+            let here = crate::modulation::path_in(s, tgt);
+            items.push(PItem::head("Modulation"));
+            items.push(PItem::new("New LFO for this control", Cmd::Mod(crate::modulation::ModCmd::New(tgt))));
+            for m in &s.modulation.modulators {
+                let on = here.is_some_and(|p| m.targets.iter().any(|t| t.path == p));
+                let name = crate::modulation::name_of(m);
+                let cmd = if on {
+                    crate::modulation::ModCmd::Unassign(m.id, tgt)
+                } else {
+                    crate::modulation::ModCmd::Assign(m.id, tgt)
+                };
+                items.push(PItem::new(name, Cmd::Mod(cmd)).mark(Mark::Check(on)));
+            }
+            if !s.modulation.modulators.is_empty() {
+                let remove = s
+                    .modulation
+                    .modulators
+                    .iter()
+                    .map(|m| PItem::new(crate::modulation::name_of(m), Cmd::Mod(crate::modulation::ModCmd::Remove(m.id))))
+                    .collect();
+                items.push(PItem::sub("Remove modulator", remove));
+            }
+        }
     }
     if let Some(t) = typein {
         items.extend([PItem::head("Value"), PItem::new("Enter value...", Cmd::TypeIn(t))]);
@@ -4753,6 +4785,7 @@ pub fn run(app: &mut App, cmd: Cmd) -> Option<String> {
             app.remote_cmd(c);
             return None;
         }
+        Cmd::Mod(c) => return crate::modulation::run(app, c),
         Cmd::MidiExt(d) => return app.set_ext_sync(d),
         Cmd::Reset(c) => {
             app.reset_control(c);
@@ -5058,7 +5091,7 @@ pub fn run(app: &mut App, cmd: Cmd) -> Option<String> {
             snapshot(s);
             (!delete_space(s)).then(|| "Delete space: make a time selection first (right-drag the ruler)".into())
         }
-        Cmd::Consolidate | Cmd::ExportTracks | Cmd::QuantizeStarts | Cmd::PointValue(..) | Cmd::ClipPreview(_) | Cmd::TypeIn(_) | Cmd::Reset(_) | Cmd::Remote(_) | Cmd::MidiExt(_) => None,
+        Cmd::Consolidate | Cmd::ExportTracks | Cmd::QuantizeStarts | Cmd::PointValue(..) | Cmd::ClipPreview(_) | Cmd::TypeIn(_) | Cmd::Reset(_) | Cmd::Remote(_) | Cmd::MidiExt(_) | Cmd::Mod(_) => None,
         Cmd::StretchMode => {
             s.playlist.stretch = !s.playlist.stretch;
             Some(if s.playlist.stretch { "Stretch mode on: resizing an audio clip stretches it".into() } else { "Stretch mode off".into() })
