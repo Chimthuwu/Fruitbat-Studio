@@ -28,6 +28,11 @@ pub const SHORT: [&str; 6] = ["", "ST", "CR", "RV", "GT", "RG"];
 /// How many steps a bar of the grid has.
 pub const STEPS: usize = 16;
 
+/// The grid a track gets when it takes the glitcher without painting one: a stutter on every beat and a gate closing
+/// the bar. An empty grid is silent by design (no step fires), so a grid switched in from a menu or a style bar is
+/// heard at once rather than doing nothing.
+pub const DEFAULT_STEPS: [u8; STEPS] = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 4];
+
 /// The ring the slicer reads its repeats, reverses and retriggers from: 8192 frames, a sixth of a second at 48 kHz.
 const RING: usize = 8192;
 

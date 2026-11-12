@@ -23,6 +23,11 @@
 - [ ] **P3, the chain console**: the style bar becomes a chain bar of module chips and the panel draws one tile per
       chain slot (the grid's 4×4 among them), paged when the chain is taller than four rows; a mixed chain also needs a
       chain-level bypass fade (today the bypass switch is hard on a mixed chain). The plan's §"Console" has the layout.
+- [x] **A grid that joins a chain is heard** (2026-11-12): an empty grid fires no step, so a grid added from the Track ▸
+      Modules menu, the Chain presets or the console's style bar was silent. All three now lay
+      `os_dsp::glitch::DEFAULT_STEPS` (a stutter on every beat, a gate closing the bar) and a 70 % amount when the grid
+      comes in without a pattern of its own. `a_grid_in_a_mixed_chain_changes_the_track` holds the engine's side: a grid
+      in a mixed chain changes the track, an empty one at the same amount passes it through.
 - [x] **A playhead on the grid, and painting it**: the feeder publishes each track's step (`Engine::glitch_steps`),
       `MixerUi::steps` carries it and the active cell is ringed in cream, repainting only the grid (`Live::Glitch`).
       Holding a cell down drags its module across the cells the pointer crosses (`App::Drag::GlitchPaint`,

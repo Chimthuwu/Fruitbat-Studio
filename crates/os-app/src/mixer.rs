@@ -763,6 +763,15 @@ pub fn hit(app: &mut App, h: MHit) -> Option<String> {
                 let m = track_mut(s, n)?;
                 m.chain = chain;
                 m.glitch_style = !glitch;
+                // Switching the grid in without one gets the default pattern and a level: an empty grid is silent.
+                if m.glitch_style {
+                    if m.glitch_amount == 0 {
+                        m.glitch_amount = os_dsp::glitch::glitch_word(0.7);
+                    }
+                    if m.glitch.iter().all(|&step| step == 0) {
+                        m.glitch = os_dsp::glitch::DEFAULT_STEPS;
+                    }
+                }
                 changed(s);
                 Some(())
             });
@@ -2072,6 +2081,16 @@ fn set_chain(s: &mut State, n: u16, chain: [u8; 8]) {
         if chain != os_model::CHAIN_ANALOG {
             t.strip_bypassed = false;
         }
+        // A grid coming in without a pattern of its own gets the default one and a level: an empty grid fires no step
+        // and so is silent, which reads as "the glitcher does nothing".
+        if chain.contains(&7) {
+            if t.glitch_amount == 0 {
+                t.glitch_amount = os_dsp::glitch::glitch_word(0.7);
+            }
+            if t.glitch.iter().all(|&m| m == 0) {
+                t.glitch = os_dsp::glitch::DEFAULT_STEPS;
+            }
+        }
         changed(s);
     }
 }
@@ -2120,6 +2139,10 @@ fn chain_module(s: &mut State, n: u16, module: u8, on: bool) {
         7 => {
             if t.glitch_amount == 0 {
                 t.glitch_amount = os_dsp::glitch::glitch_word(0.7);
+            }
+            // An empty grid is silent, so a grid joining the chain brings the default pattern with it.
+            if t.glitch.iter().all(|&m| m == 0) {
+                t.glitch = os_dsp::glitch::DEFAULT_STEPS;
             }
         }
         _ => {}
@@ -2680,6 +2703,15 @@ fn run_now(app: &mut App, c: MCmd) -> Option<String> {
         MCmd::StripStyle(n, glitch) => {
             if let Some(t) = track_mut(s, n) {
                 t.glitch_style = glitch;
+                // A grid switched in without a pattern of its own gets the default one: an empty grid is silent.
+                if glitch {
+                    if t.glitch_amount == 0 {
+                        t.glitch_amount = os_dsp::glitch::glitch_word(0.7);
+                    }
+                    if t.glitch.iter().all(|&m| m == 0) {
+                        t.glitch = os_dsp::glitch::DEFAULT_STEPS;
+                    }
+                }
                 changed(s);
             }
             None
@@ -4501,13 +4533,14 @@ mod tests {
         let steps = a.state.history.at();
         run(&mut a, MCmd::StripStyle(2, true));
         assert!(g(&a).glitch_style);
+        assert_eq!(g(&a).glitch, os_dsp::glitch::DEFAULT_STEPS, "the grid comes in with a pattern, not empty (an empty grid is silent)");
         assert_eq!(a.state.history.at(), steps + 1);
         crate::mixer::hit(&mut a, MHit::GlitchCell(2, 3));
         assert_eq!(g(&a).glitch[3], 1, "a click places the first module");
         assert!(g(&a).glitch_amount > 0, "and brings the amount up so it is heard");
         crate::mixer::hit(&mut a, MHit::GlitchCell(2, 3));
         assert_eq!(g(&a).glitch[3], 2, "the next click moves it on");
-        assert_eq!(g(&a).glitch[4], 0, "the step beside it is untouched");
+        assert_eq!(g(&a).glitch[5], 0, "the step beside it is untouched");
         crate::mixer::hit(&mut a, MHit::GlitchMode(2));
         assert!(!g(&a).glitch_style, "the bar is the style switch");
         crate::mixer::hit(&mut a, MHit::GlitchMode(2));
@@ -4598,6 +4631,7 @@ mod tests {
         let t = track(&a.state, 2).unwrap();
         assert_eq!(t.chain, [1, 2, 3, 4, 6, 7, 0, 0]);
         assert!(t.glitch_amount > 0);
+        assert!(t.glitch.iter().any(|&m| m != 0), "and a pattern: an empty grid is silent");
         assert!(!t.strip_bypassed, "a chain runs");
         // Order is the chain's: a mixed chain, written whole.
         run(&mut a, MCmd::Chain(2, [7, 1, 2, 3, 4, 6, 0, 0]));

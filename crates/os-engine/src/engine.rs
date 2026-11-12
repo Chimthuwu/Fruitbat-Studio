@@ -6388,6 +6388,28 @@ mod tests {
         e.render_all(512)
     }
 
+    /// A grid in a mixed chain is heard: with a pattern and an amount it changes the track's audio, while an empty
+    /// grid at the same amount is the grid off (which is why the consoles lay the default pattern in when the grid
+    /// joins a chain).
+    #[test]
+    fn a_grid_in_a_mixed_chain_changes_the_track() {
+        let render = |steps: [u8; 16]| {
+            let mut p = insert_project();
+            p.mixer[1].chain = [1, 7, 0, 0, 0, 0, 0, 0];
+            p.mixer[1].strip_bypassed = false;
+            p.mixer[1].glitch = steps;
+            p.mixer[1].glitch_amount = os_dsp::glitch::glitch_word(0.7);
+            let mut lib = SampleLibrary::new(None);
+            let mut e = Engine::new(&p, &mut lib, 44100, PlayMode::Pattern(1));
+            e.render_all(512)
+        };
+        let dry = render([0; 16]);
+        assert!(dry.iter().any(|&x| x.abs() > 0.01), "the track plays");
+        let wet = render(os_dsp::glitch::DEFAULT_STEPS);
+        let diff = dry.iter().zip(&wet).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        assert!(diff > 0.01, "the grid in the chain is heard (largest difference {diff})");
+    }
+
     /// plan v3 §6.1: the strip runs before the insert slots. Slot 0 adds a DC offset: an insert after the strip leaves
     /// it on the track, while an insert before the strip would have the low cut take it away (a high-pass has no gain
     /// at DC), so the track's mean would be near zero. The mean is not, so the strip is first.
