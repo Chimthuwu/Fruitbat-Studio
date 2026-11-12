@@ -68,8 +68,24 @@
       against the current project and plugin metadata (a missing native id, a device that went) instead of dropping
       them. Tests: ids never reused, one assignment per parameter per modulator, depth clamping, event round trip,
       `.lemon` round trip (and the FLP dropping it), truncated payloads, unresolved reporting.
-- [ ] **M1b, the app→engine update path** (Section K K.4 / K.5 §7 scoped this as an M1 decision): evaluate the sources on
-      the engine's clock and write the values through the existing target path — no FLP `Target` bytes change.
+- [x] **M1b, the app→engine update path, slice 1: plugin parameters** (2026-11-12): the graph reaches the engine as
+      `os_engine::Modulator` / `ModTarget` (the app's `modulation::engine_spec` resolves each `ParameterPath` to the FLP
+      `Target` the engine already addresses, and leaves unresolved assignments out). `Engine::set_modulation` installs
+      it; `Transport::set_modulation` keeps it in `Shared` for every engine built after (playback, export, the
+      `render` tool) and hands it to the playing one (`Cmd::Modulation`), skipping an unchanged graph. The engine
+      evaluates it every `PARAM_STEP` (64 frames) in `engine/modulation.rs`: an LFO's six shapes, a 16-step sequence
+      (jumping or gliding) and an envelope, on the transport's own clock (`Sync` in sixteenths, `Free` in hertz; the
+      random shape hashes its cycle number so a render equals playback and a seek lands on the same value), through
+      `Curve` and `Polarity` (bipolar swings ±depth around the base, unipolar 0..depth above it). A modulation moves the
+      value the clips last gave the parameter — `ParamAuto` keeps that base, and the modulation is computed inside the
+      automation step loop, so a knob's automation and its modulation are one step's two halves; several modulators add
+      up. No FLP `Target` byte changes. Tests: shapes and curves, envelope, steps, random repeatability, an LFO swinging
+      a parameter between 0 and 1, a modulator riding an automation ramp, and a disabled modulator or a host-parameter
+      target sending nothing (os-engine 380 + os-app 1199 green).
+- [ ] **M1b, slice 2 — host parameters**: a track's volume, pan, EQ and sends (`Target::MixerVolume` and friends) are
+      decoded but not driven yet; the mixer path needs to take the modulated value where it takes the fader's.
+- [ ] **M1b, slice 3 — the UI**: create a modulator, pick its source, drag an assignment onto a knob, show the depth
+      ring; the graph edits go through the control plane (one undo step each) and `Transport::set_modulation` follows.
 
 This file tracks the open/executed state of the todo items. The canonical priority plan is in `docs/roadmap-2026-11-10.md` — reference that doc for the full rationale, audit findings, and ordering.
 

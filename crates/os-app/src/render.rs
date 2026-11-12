@@ -145,6 +145,8 @@ pub fn render(o: &Opts) -> Result<(), String> {
     lemon_sampler::set_host_ticks(project.ppq);
     let mut e = Engine::with_instruments(&project, &mut library, o.rate, PlayMode::Song, &app.plugins.instruments());
     crate::project_plugins::attach_effects(&mut e, &project, app.plugins.effects());
+    // The modulation graph (M1b): a render plays what the song does.
+    e.set_modulation(crate::modulation::engine_spec(&app.state, &app.plugins));
     if o.from > 0 {
         e.seek_tick(o.from);
     } else {

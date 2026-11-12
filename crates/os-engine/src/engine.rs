@@ -34,6 +34,8 @@ mod layers;
 mod marks;
 mod notes;
 mod param_auto;
+mod modulation;
+pub use modulation::{ModTarget, Modulator, DEFAULT_BASE};
 mod multicore;
 pub use multicore::LoadGate;
 mod pdc;
@@ -233,6 +235,8 @@ pub struct Engine {
     init: Vec<(os_model::target::Target, i64)>,
     /// Clips on plugin parameters: this tick's events.
     params: param_auto::ParamAuto,
+    /// The modulation graph (M1b), evaluated every tick: its values reach the plugin parameters after the clips'.
+    mods: modulation::Modulation,
     /// The project's random generator (random layers; spec: audio/channel-misc.md "FL's random generator").
     rng: layers::Mt19937,
     /// The metronome of a playback stream (`set_metronome`), and the beats from one accent to the next: the project
@@ -685,6 +689,7 @@ impl Engine {
             main_glide: os_dsp::glide::Glide::new(main_gain),
             exporting: false,
             params: param_auto::ParamAuto::new(autos.iter().flat_map(|a| &a.targets).any(|&t| param_auto::is_param(t))),
+            mods: modulation::Modulation::default(),
             // Seeded, one output taken, at every start of playback or of a render (spec: audio/channel-misc.md "FL's
             // random generator"; whether FL's live playback draws as its render does is not covered, Lemon Studio
             // does).

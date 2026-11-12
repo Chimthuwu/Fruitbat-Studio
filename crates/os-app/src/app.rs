@@ -4421,6 +4421,8 @@ impl App {
             // Also while Play is still starting (not `playing` yet); ignored when stopped.
             {
                 self.transport.update(&crate::rack::play_project(&self.state));
+                // The modulation graph reaches playback the same way (M1b); an unchanged one is not sent again.
+                self.transport.set_modulation(crate::modulation::engine_spec(&self.state, &self.plugins));
             }
         }
         self.playback_damage();

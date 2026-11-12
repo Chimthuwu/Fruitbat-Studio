@@ -155,6 +155,33 @@ pub fn resolve_path(s: &State, plugins: &Plugins, path: ParameterPath) -> Option
     target_for(owner, path.parameter, native_ids.as_deref())
 }
 
+/// The modulation graph as the engine runs it (`os_engine::Engine::set_modulation`): each modulator's source and its
+/// targets resolved to the concrete FLP [`os_model::target::Target`] the engine addresses. An assignment that does
+/// not resolve is left out here (it stays in the graph, and [`unresolved`] reports it), so a plugin that comes back
+/// brings its modulation back with it.
+///
+/// The engine drives plugin parameters from this today: a channel's instrument and a mixer slot's hosted effect. A
+/// host parameter (a track's volume, pan, EQ, a send) decodes to another `Target` and waits for the mixer path.
+pub fn engine_spec(s: &State, plugins: &Plugins) -> Vec<os_engine::Modulator> {
+    s.modulation
+        .modulators
+        .iter()
+        .map(|m| os_engine::Modulator {
+            id: m.id.0,
+            source: m.source,
+            enabled: m.enabled,
+            targets: m
+                .targets
+                .iter()
+                .filter_map(|t| {
+                    let (target, _) = resolve_path(s, plugins, t.path)?;
+                    Some(os_engine::ModTarget { target: target::decode(target), depth: t.depth, curve: t.curve, polarity: t.polarity })
+                })
+                .collect(),
+        })
+        .collect()
+}
+
 /// Every assignment in the modulation graph whose [`ParameterPath`] does not resolve right now, as (modulator,
 /// parameter), in graph order: a native id the plugin no longer exposes, or an owner the project no longer has.
 /// The UI lists these as missing rather than dropping them — a plugin that comes back brings its assignments back.
@@ -218,5 +245,27 @@ mod tests {
         let (t, res) = target_for(OwnerLocator::Member(2, 0, 1), ParameterKey::PluginNativeId(50), Some(&[50, 60])).unwrap();
         assert_eq!(t, target::slot_param(2, 0, target::member_item(1, 0).unwrap()));
         assert_eq!(res, ParamResolution::Unique(0));
+    }
+
+    /// The graph reaches the engine with its sources and the assignments that resolve, and without the ones that do
+    /// not (a native id and no plugin metadata); depths and curves travel unchanged.
+    #[test]
+    fn the_engine_spec_carries_the_graphs_targets() {
+        let mut app = crate::app::App::new(None);
+        app.state.project = crate::app::test_project();
+        app.state.control.settle(&mut app.state.project);
+        let owner = app.state.ensure_owner(OwnerLocator::Channel(0));
+        let id = app.state.modulation.add(os_model::modulation::ModSource::default());
+        let voice = ParameterPath { owner, parameter: ParameterKey::HostParameterCode(target::CHANNEL_VOLUME) };
+        let native = ParameterPath { owner, parameter: ParameterKey::PluginNativeId(5) };
+        assert!(app.state.modulation.assign(id, os_model::modulation::ModTarget::new(voice).with_depth(-0.75)));
+        assert!(app.state.modulation.assign(id, os_model::modulation::ModTarget::new(native)));
+        let spec = engine_spec(&app.state, &app.plugins);
+        assert_eq!(spec.len(), 1);
+        assert_eq!(spec[0].id, id.0);
+        assert_eq!(spec[0].targets.len(), 1, "the native id has no metadata to resolve against");
+        assert_eq!(spec[0].targets[0].target, target::decode(target::channel(0, target::CHANNEL_VOLUME)));
+        assert_eq!(spec[0].targets[0].depth, -0.75);
+        assert_eq!(spec[0].targets[0].polarity, os_model::modulation::Polarity::Bipolar);
     }
 }

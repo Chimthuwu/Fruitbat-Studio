@@ -84,6 +84,9 @@ const PREFILL_FRAMES: usize = 1024;
 #[derive(Default)]
 pub struct Shared {
     state: AtomicU8,
+    /// The modulation graph as the engine runs it (M1b), the app's `modulation::engine_spec`: engines are built with
+    /// it and a running one takes it in place (`Transport::set_modulation`).
+    modulation: Mutex<Vec<os_engine::Modulator>>,
     /// Counts play and stop requests (see the module docs).
     generation: AtomicU64,
     /// The running playback is the playlist (else one pattern).
@@ -399,6 +402,8 @@ enum Cmd {
     Update,
     /// Levels changed, and nothing else (`Transport::update`).
     LiveEdits(Vec<os_engine::LiveEdit>),
+    /// The modulation graph in `Shared::modulation` changed (`Transport::set_modulation`): the running engine takes it.
+    Modulation,
     Preview(Box<Project>),
     /// Play a project's playlist once on the preview stream (clip preview).
     PreviewSong(Box<Project>),
@@ -695,6 +700,18 @@ impl Transport {
             *slot = Some(project.clone());
         }
         let _ = self.tx.send(Cmd::Update);
+    }
+
+    /// The modulation graph as the engine runs it (`crate::modulation::engine_spec`), from now on: engines built after
+    /// this start with it, and a playing one takes it in place. An unchanged graph is not sent again.
+    pub fn set_modulation(&self, mods: Vec<os_engine::Modulator>) {
+        if let Ok(mut slot) = self.shared.modulation.lock() {
+            if *slot == mods {
+                return;
+            }
+            *slot = mods;
+        }
+        let _ = self.tx.send(Cmd::Modulation);
     }
 
     /// Play pattern 1 of `project` once (a one-note preview project), on its own stream.
@@ -1313,6 +1330,8 @@ fn engine(project: &Project, library: &mut SampleLibrary, rate: u32, mode: PlayM
 fn export(project: &Project, mode: PlayMode, rate: u32, job: &crate::export::Job, library: &mut SampleLibrary, inst: &Instruments, shared: &Shared) -> Result<(f64, Vec<PathBuf>), String> {
     let o = &job.options;
     let mut e = engine(project, library, rate, mode, inst, true);
+    // An export plays the modulation the app last set (M1b): a render equals what the song plays.
+    e.set_modulation(shared.modulation.lock().map(|m| m.clone()).unwrap_or_default());
     e.set_interpolation(o.points);
     e.set_effects(o.insert_fx, o.master_fx);
     match job.span {
@@ -1454,6 +1473,14 @@ fn audio_thread(rx: Receiver<Cmd>, shared: Arc<Shared>, latest: Arc<Mutex<Option
             // The output is closed by Auto close: previews and live notes find no stream and open none.
             // So is a device that failed, until it opens again.
             Ok(Cmd::Preview(_) | Cmd::PreviewFor(..) | Cmd::PreviewSong(_) | Cmd::NoteOn(..) | Cmd::Midi(..) | Cmd::TapClick(..)) if closed || lost.is_some() => {}
+            Ok(Cmd::Modulation) => {
+                let mods = shared.modulation.lock().map(|m| m.clone()).unwrap_or_default();
+                for s in [session.as_mut(), live.as_mut()].into_iter().flatten() {
+                    if let Ok(mut e) = s.engine.lock() {
+                        e.set_modulation(mods.clone());
+                    }
+                }
+            }
             Ok(Cmd::LiveEdits(edits)) => {
                 for s in [session.as_mut(), live.as_mut()].into_iter().flatten() {
                     if let Ok(mut e) = s.engine.lock() {
@@ -2151,6 +2178,8 @@ impl Session {
         let out = device.open()?;
         let (rate, fixed, info) = (out.info.rate, out.info.fixed, out.info.clone());
         let mut e = engine(project, library, rate, mode, inst, kind != Kind::Preview);
+        // The modulation graph as the app last set it: the engine evaluates it every tick (M1b).
+        e.set_modulation(shared.modulation.lock().map(|m| m.clone()).unwrap_or_default());
         // The device's output pairs, and its inputs for the mixer tracks that hear them (a preview hears none; spec:
         // audio/track-io.md §2.2).
         let input = (kind != Kind::Preview).then(|| crate::device::input_reader((f64::from(rate) * MARGIN_MAX) as u64));

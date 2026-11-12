@@ -57,6 +57,8 @@ pub(super) struct ParamAuto {
     /// Pattern control points on plugin parameters due on the tick starting now: target, level 0..1. They act before
     /// the clips of the same tick (spec: audio/automation.md "Pattern control points").
     pub points: Vec<(Target, f64)>,
+    /// The value each parameter last had from a clip (or a control point): where modulation moves from.
+    base: Vec<(Target, f64)>,
 }
 
 impl ParamAuto {
@@ -69,7 +71,32 @@ impl ParamAuto {
             ticks: Vec::with_capacity(16),
             last_tick: Vec::with_capacity(16),
             points: Vec::with_capacity(16),
+            base: Vec::with_capacity(16),
         }
+    }
+
+    /// The value the clips (or a control point) last gave `target`, if any: the base modulation moves from.
+    pub fn base_of(&self, target: Target) -> Option<f64> {
+        self.base.iter().find(|(t, _)| *t == target).map(|(_, v)| *v)
+    }
+
+    /// Remembers `value` as `target`'s base (from a clip or a control point).
+    pub fn set_base(&mut self, target: Target, value: f64) {
+        match self.base.iter_mut().find(|(t, _)| *t == target) {
+            Some((_, v)) => *v = value,
+            None => self.base.push((target, value)),
+        }
+    }
+
+    /// Adds an event for `target` at `offset` frames into the block (modulation's values, after the clips'). A target
+    /// the engine does not hand parameter values to is skipped.
+    pub fn push(&mut self, target: Target, offset: u32, value: f64) {
+        let (dest, index) = match target {
+            Target::ChannelParam(c, k) => (Dest::Channel(usize::from(c)), k),
+            Target::SlotParam(t, s, k) => (Dest::Slot(usize::from(t), usize::from(s)), k),
+            _ => return,
+        };
+        self.events.push(ParamEvent { dest, offset, index: u32::from(index), value });
     }
 
     /// A control point on a plugin parameter, handed on with this tick's values (`point_ticks`, `point_events`).
@@ -98,6 +125,7 @@ impl ParamAuto {
                 Some((_, last)) => *last = level,
                 None => self.last.push((target, level)),
             }
+            self.set_base(target, level);
             self.events.push(ParamEvent { dest, offset: 0, index: u32::from(index), value: level });
         }
     }
@@ -185,6 +213,7 @@ impl Engine {
         self.params.events.clear();
         self.params.point_events();
         if !self.params.any {
+            self.run_modulation(frames);
             return;
         }
         let (now, len, ppq) = (self.tick as f64, frames.max(1) as f64, f64::from(self.ppq));
@@ -192,6 +221,8 @@ impl Engine {
         // is read that much earlier. Playback's first tick waits for nothing, so the curve holds where that tick left
         // it until the rest arrives (spec: audio/delay-compensation.md "Automation waits for late audio").
         let (first, from, tick_len) = (self.tick == self.auto_from, self.auto_from as f64, self.tick_len());
+        // Modulation's own clock: seconds per tick, for its free rates.
+        let secs_per_tick = tick_len as f64 / f64::from(self.rate.max(1));
         let (pa, pdc) = (&mut self.params, &self.pdc);
         for step in (0..frames).step_by(PARAM_STEP) {
             // The position in ticks: the tick plus the share of it the step has reached.
@@ -236,8 +267,14 @@ impl Engine {
                         Target::SlotParam(t, s, k) => (Dest::Slot(usize::from(t), usize::from(s)), k),
                         _ => continue,
                     };
+                    pa.set_base(target, v);
                     pa.events.push(ParamEvent { dest, offset: step as u32, index: u32::from(index), value: v });
                 }
+            }
+            // The step's modulated values, on the base the clips just gave (M1b).
+            if !self.mods.is_empty() {
+                let pos = now + step as f64 / len;
+                super::modulation::step_values(pa, &mut self.mods, pos, step as u32, secs_per_tick, ppq);
             }
         }
     }
