@@ -10,12 +10,19 @@
 //! payload starts with a layout version (1), and numbers are little-endian. Save writes them all (empty ones too, so a
 //! file saved again holds no stale state); an FLP target drops them with the rest of `LMex`. Open reads them back from
 //! a `.lemon` file only; an FLP's icons come from its icon numbers instead.
+//!
+//! Two of them belong to the modulation system: the persistent identity registry (M0, event 206) and the graph
+//! itself (M1, event 207). The graph names parameters by that identity, so the two are written together and neither
+//! is ever an FLP target (audit K.1/K.3).
 
 use crate::app::State;
 use crate::playlist::{ICONS, IconOwner};
 use crate::plugins::Plugins;
 use os_flp::{Event, FlpFile, Value, lemon};
-use os_model::modulation::{IdentityRegistry, OwnerLocator, PersistentObjectId};
+use os_model::modulation::{
+    Curve, Envelope, IdentityRegistry, Lfo, LfoShape, ModGraph, ModSource, ModTarget, Modulator, ModulatorId, OwnerLocator,
+    ParameterKey, ParameterPath, PersistentObjectId, Polarity, Steps, Timebase,
+};
 use std::collections::BTreeMap;
 
 /// The payload layout written (the first byte of each event). A reader ignores an event with a layout it does not know.
@@ -60,6 +67,7 @@ pub fn events(s: &State, plugins: &Plugins) -> Vec<Event> {
         v.push(lane_bindings(s));
     }
     v.push(owner_ids(s));
+    v.push(modulation(s));
     v
 }
 
@@ -156,6 +164,227 @@ fn read_identity(d: &[u8]) -> Option<IdentityRegistry> {
     Some(IdentityRegistry { owners, next, native_bindings })
 }
 
+/// The `LMex` event holding the modulation graph (M1).
+pub fn modulation(s: &State) -> Event {
+    Event::new(lemon::MODULATION, Value::var(write_graph(&s.modulation)))
+}
+
+/// Serializes the graph: layout version, the modulator count, the id counter, then per modulator its id, enabled
+/// flag, name, source and targets; numbers are little-endian and a source's kind picks the fields that follow.
+/// Readers ignore a layout they do not know, so a later record can grow.
+fn write_graph(g: &ModGraph) -> Vec<u8> {
+    let mut b = start(g.modulators.len());
+    b.extend_from_slice(&g.next.to_le_bytes());
+    for m in &g.modulators {
+        b.extend_from_slice(&m.id.0.to_le_bytes());
+        b.push(u8::from(m.enabled));
+        let name = &m.name.as_bytes()[..m.name.len().min(usize::from(u16::MAX))];
+        b.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        b.extend_from_slice(name);
+        match &m.source {
+            ModSource::Lfo(l) => {
+                b.push(LFO);
+                b.push(lfo_code(l.shape));
+                write_timebase(&mut b, l.period);
+                b.extend_from_slice(&l.phase.to_le_bytes());
+            }
+            ModSource::Steps(st) => {
+                b.push(STEPS);
+                write_timebase(&mut b, st.period);
+                b.push(u8::from(st.smooth));
+                b.extend(st.values.iter().map(|&v| v as u8));
+            }
+            ModSource::Envelope(e) => {
+                b.push(ENVELOPE);
+                for v in [e.attack, e.decay, e.sustain, e.release] {
+                    b.extend_from_slice(&v.to_le_bytes());
+                }
+            }
+        }
+        b.extend_from_slice(&(m.targets.len() as u16).to_le_bytes());
+        for t in &m.targets {
+            b.extend_from_slice(&t.path.owner.0.to_le_bytes());
+            match t.path.parameter {
+                ParameterKey::PluginNativeId(n) => {
+                    b.push(NATIVE_ID);
+                    b.extend_from_slice(&n.to_le_bytes());
+                }
+                ParameterKey::LegacyPluginIndex(i) => {
+                    b.push(LEGACY_INDEX);
+                    b.extend_from_slice(&i.to_le_bytes());
+                }
+                ParameterKey::HostParameterCode(c) => {
+                    b.push(HOST_CODE);
+                    b.extend_from_slice(&c.to_le_bytes());
+                }
+            }
+            b.extend_from_slice(&t.depth.to_le_bytes());
+            b.push(curve_code(t.curve));
+            b.push(polarity_code(t.polarity));
+        }
+    }
+    b
+}
+
+/// A source kind in [`write_graph`].
+const LFO: u8 = 0;
+const STEPS: u8 = 1;
+const ENVELOPE: u8 = 2;
+
+/// A [`Timebase`] kind in [`write_graph`]: 0 hertz (f32), 1 synced (u16 sixteenths).
+const FREE: u8 = 0;
+const SYNC: u8 = 1;
+
+/// A [`ParameterKey`] kind in [`write_graph`].
+const NATIVE_ID: u8 = 0;
+const LEGACY_INDEX: u8 = 1;
+const HOST_CODE: u8 = 2;
+
+fn lfo_code(s: LfoShape) -> u8 {
+    match s {
+        LfoShape::Sine => 0,
+        LfoShape::Triangle => 1,
+        LfoShape::SawUp => 2,
+        LfoShape::SawDown => 3,
+        LfoShape::Square => 4,
+        LfoShape::Random => 5,
+    }
+}
+
+fn lfo_shape(c: u8) -> Option<LfoShape> {
+    Some(match c {
+        0 => LfoShape::Sine,
+        1 => LfoShape::Triangle,
+        2 => LfoShape::SawUp,
+        3 => LfoShape::SawDown,
+        4 => LfoShape::Square,
+        5 => LfoShape::Random,
+        _ => return None,
+    })
+}
+
+fn curve_code(c: Curve) -> u8 {
+    match c {
+        Curve::Linear => 0,
+        Curve::Exp => 1,
+        Curve::Log => 2,
+        Curve::S => 3,
+    }
+}
+
+fn curve_of(c: u8) -> Option<Curve> {
+    Some(match c {
+        0 => Curve::Linear,
+        1 => Curve::Exp,
+        2 => Curve::Log,
+        3 => Curve::S,
+        _ => return None,
+    })
+}
+
+fn polarity_code(p: Polarity) -> u8 {
+    match p {
+        Polarity::Bipolar => 0,
+        Polarity::Unipolar => 1,
+    }
+}
+
+fn polarity_of(p: u8) -> Option<Polarity> {
+    Some(match p {
+        0 => Polarity::Bipolar,
+        1 => Polarity::Unipolar,
+        _ => return None,
+    })
+}
+
+fn write_timebase(b: &mut Vec<u8>, t: Timebase) {
+    match t {
+        Timebase::Free(hz) => {
+            b.push(FREE);
+            b.extend_from_slice(&hz.to_le_bytes());
+        }
+        Timebase::Sync(beats) => {
+            b.push(SYNC);
+            b.extend_from_slice(&beats.to_le_bytes());
+        }
+    }
+}
+
+fn read_timebase(r: &mut Reader) -> Option<Timebase> {
+    Some(match r.u8()? {
+        FREE => Timebase::Free(r.f32()?),
+        SYNC => Timebase::Sync(r.u16()?),
+        _ => return None,
+    })
+}
+
+/// Inverse of [`write_graph`]. A payload cut short keeps the modulators before the cut (their incomplete targets
+/// left out); `None` for an unrecognized layout or one too short to hold the counter.
+fn read_graph(d: &[u8]) -> Option<ModGraph> {
+    let mut r = Reader(d);
+    if r.u8()? != LAYOUT {
+        return None;
+    }
+    let count = r.u32()? as usize;
+    let next = r.u32()?;
+    let mut modulators = Vec::new();
+    for _ in 0..count {
+        let (Some(id), Some(enabled), Some(len)) = (r.u32(), r.u8(), r.u16()) else { break };
+        let Some(name) = r.take(usize::from(len)) else { break };
+        let Some(kind) = r.u8() else { break };
+        let Some(source) = read_source(&mut r, kind) else { break };
+        let Some(tcount) = r.u16() else { break };
+        let mut targets = Vec::new();
+        let mut cut = false;
+        for _ in 0..tcount {
+            let Some(t) = read_target(&mut r) else {
+                cut = true;
+                break;
+            };
+            targets.push(t);
+        }
+        let name = String::from_utf8_lossy(name).into_owned();
+        modulators.push(Modulator { id: ModulatorId(id), name, source, targets, enabled: enabled != 0 });
+        if cut {
+            break;
+        }
+    }
+    Some(ModGraph { modulators, next })
+}
+
+fn read_source(r: &mut Reader, kind: u8) -> Option<ModSource> {
+    Some(match kind {
+        LFO => ModSource::Lfo(Lfo { shape: lfo_shape(r.u8()?)?, period: read_timebase(r)?, phase: r.f32()? }),
+        STEPS => {
+            let period = read_timebase(r)?;
+            let smooth = r.u8()? != 0;
+            let mut values = [0i8; 16];
+            for v in &mut values {
+                *v = r.u8()? as i8;
+            }
+            ModSource::Steps(Steps { values, period, smooth })
+        }
+        ENVELOPE => {
+            ModSource::Envelope(Envelope { attack: r.f32()?, decay: r.f32()?, sustain: r.f32()?, release: r.f32()? })
+        }
+        _ => return None,
+    })
+}
+
+fn read_target(r: &mut Reader) -> Option<ModTarget> {
+    let owner = PersistentObjectId(r.u32()?);
+    let parameter = match r.u8()? {
+        NATIVE_ID => ParameterKey::PluginNativeId(r.u32()?),
+        LEGACY_INDEX => ParameterKey::LegacyPluginIndex(r.u16()?),
+        HOST_CODE => ParameterKey::HostParameterCode(r.u16()?),
+        _ => return None,
+    };
+    let depth = r.f32()?;
+    let curve = curve_of(r.u8()?)?;
+    let polarity = polarity_of(r.u8()?)?;
+    Some(ModTarget { path: ParameterPath { owner, parameter }, depth, curve, polarity })
+}
+
 /// Puts the state a `.lemon` file holds into `s` and `plugins` (a project just opened, its ids given). An FLP has
 /// none; its channels and mixer tracks show the icons their numbers stand for instead ([`from_flp`]).
 pub fn apply(s: &mut State, plugins: &mut Plugins, file: &FlpFile) {
@@ -167,10 +396,16 @@ pub fn apply(s: &mut State, plugins: &mut Plugins, file: &FlpFile) {
     if let Some(&on) = read(lemon::LINEAR_MODE).as_deref().and_then(|d| d.get(1)) {
         s.project.linear_mode = on != 0;
     }
-    // The modulation system's persistent device/owner identity registry (M0, K.2/K.3).
+    // The modulation system's persistent device/owner identity registry (M0, K.2/K.3) and its graph (M1): the graph
+    // names parameters by the ids the registry holds, so they are read together.
     if let Some(d) = read(lemon::OWNER_IDS) {
         if let Some(reg) = read_identity(&d) {
             s.identity = reg;
+        }
+    }
+    if let Some(d) = read(lemon::MODULATION) {
+        if let Some(g) = read_graph(&d) {
+            s.modulation = g;
         }
     }
     if let Some(d) = read(lemon::TRACKS) {
@@ -576,6 +811,10 @@ impl<'a> Reader<'a> {
     fn u32(&mut self) -> Option<u32> {
         self.take(4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
+
+    fn f32(&mut self) -> Option<f32> {
+        self.take(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
 }
 
 #[cfg(test)]
@@ -633,8 +872,10 @@ mod tests {
         #[cfg(any(windows, target_os = "macos"))]
         want.push(lemon::KEY_FOCUS);
         want.extend([lemon::TRACK_LOCKS, lemon::NOTE_LOCKS, lemon::TRACKS, lemon::LINEAR_MODE]);
-        // The modulation identity registry (M0): a state with devices in it has owners, and they persist.
+        // The modulation identity registry (M0) and its graph (M1): a state with devices in it has owners, and
+        // both are written (an empty graph too, so a saved file holds no stale one).
         want.push(lemon::OWNER_IDS);
+        want.push(lemon::MODULATION);
         assert_eq!(ids, want);
         let mut back = App::new(None);
         back.open(path.clone());
@@ -991,5 +1232,112 @@ mod modulation_identity_tests {
     fn identity_rejects_unknown_layout() {
         assert!(read_identity(&[0u8]).is_none());
         assert!(read_identity(&[]).is_none());
+    }
+}
+
+#[cfg(test)]
+mod modulation_graph_tests {
+    use super::*;
+    use crate::app::App;
+
+    fn dir(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("os_lemon_graph_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// A graph with every kind of source and every kind of parameter: an LFO driving a host parameter, a step
+    /// sequence driving a legacy positional parameter, and an envelope (off) driving a native plugin parameter.
+    fn graph() -> ModGraph {
+        let mut g = ModGraph::default();
+        let lfo = g.add(ModSource::Lfo(Lfo { shape: LfoShape::Triangle, period: Timebase::Sync(16), phase: 0.25 }));
+        g.get_mut(lfo).unwrap().name = "Wobble".into();
+        g.assign(
+            lfo,
+            ModTarget {
+                path: ParameterPath { owner: PersistentObjectId(1), parameter: ParameterKey::HostParameterCode(0x0100) },
+                depth: -0.5,
+                curve: Curve::Exp,
+                polarity: Polarity::Unipolar,
+            },
+        );
+        let mut values = [0i8; 16];
+        for (i, v) in values.iter_mut().enumerate() {
+            *v = (i as i16 * 12 - 90) as i8;
+        }
+        let steps = g.add(ModSource::Steps(Steps { values, period: Timebase::Free(2.5), smooth: true }));
+        g.assign(steps, ModTarget::new(ParameterPath { owner: PersistentObjectId(2), parameter: ParameterKey::LegacyPluginIndex(5) }));
+        let env = g.add(ModSource::Envelope(Envelope { attack: 0.01, decay: 0.2, sustain: 0.5, release: 0.3 }));
+        g.get_mut(env).unwrap().enabled = false;
+        g.assign(env, ModTarget::new(ParameterPath { owner: PersistentObjectId(3), parameter: ParameterKey::PluginNativeId(42) }));
+        g
+    }
+
+    /// The graph's event payload is its exact round trip; a layout this version does not know is ignored, and a
+    /// payload cut anywhere still reads the modulators before the cut instead of panicking.
+    #[test]
+    fn the_graph_round_trips_through_its_lemon_event() {
+        let g = graph();
+        let bytes = write_graph(&g);
+        assert_eq!(read_graph(&bytes), Some(g.clone()));
+        assert_eq!(lemon::MODULATION, 207, "after the identity registry's 206 (K.3)");
+        assert!(read_graph(&[]).is_none());
+        assert!(read_graph(&[2, 0, 0, 0, 0]).is_none(), "a later layout is not read");
+        for n in 1..bytes.len() {
+            if let Some(part) = read_graph(&bytes[..n]) {
+                assert!(part.modulators.len() <= 3, "a cut payload keeps at most what it held");
+            }
+        }
+    }
+
+    /// Saved to a .lemon file and opened again, every modulator comes back with its source, name, enabled flag and
+    /// its targets' depth, curve and polarity; adding one is an unsaved change, and an FLP drops the graph.
+    #[test]
+    fn the_graph_round_trips_through_a_lemon_file() {
+        let d = dir("round");
+        let (lemon_path, flp_path) = (d.join("Mod.lemon"), d.join("Mod.flp"));
+        let mut app = App::new(None);
+        app.state.project = crate::app::test_project();
+        app.state.control.settle(&mut app.state.project);
+        app.state.modulation = graph();
+        app.save_to(lemon_path.clone());
+        app.save_to(flp_path.clone());
+        let file = os_flp::FlpFile::parse(&std::fs::read(&lemon_path).unwrap()).unwrap();
+        assert_eq!(lemon::data(&file, lemon::MODULATION), Some(write_graph(&graph())));
+        let mut back = App::new(None);
+        back.open(lemon_path.clone());
+        assert!(!back.unsaved(), "the graph read back is the saved one");
+        assert_eq!(back.state.modulation, graph());
+        assert_eq!(back.state.modulation.get(ModulatorId(1)).map(|m| m.name.as_str()), Some("Wobble"));
+        assert!(!back.state.modulation.get(ModulatorId(3)).unwrap().enabled, "a modulator saved off comes back off");
+        // Adding a modulator is an unsaved change, and saving again writes the new one.
+        back.state.modulation.add(ModSource::default());
+        assert!(back.unsaved());
+        back.save_to(lemon_path.clone());
+        let mut again = App::new(None);
+        again.open(lemon_path);
+        assert_eq!(again.state.modulation.modulators.len(), 4);
+        // An FLP has no place for the identity or the graph.
+        let mut flp = App::new(None);
+        flp.open(flp_path);
+        assert!(flp.state.modulation.is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// An assignment whose parameter does not resolve now (a native id with no plugin metadata) is reported, not
+    /// dropped, and the rest of the graph still resolves.
+    #[test]
+    fn an_assignment_that_does_not_resolve_is_reported() {
+        let mut app = App::new(None);
+        app.state.project = crate::app::test_project();
+        app.state.control.settle(&mut app.state.project);
+        let owner = app.state.ensure_owner(OwnerLocator::Track(2));
+        let id = app.state.modulation.add(ModSource::default());
+        let good = ParameterPath { owner, parameter: ParameterKey::HostParameterCode(0x0100) };
+        let native = ParameterPath { owner, parameter: ParameterKey::PluginNativeId(7) };
+        assert!(app.state.modulation.assign(id, ModTarget::new(good)));
+        assert!(app.state.modulation.assign(id, ModTarget::new(native)));
+        assert_eq!(crate::modulation::unresolved(&app.state, &app.plugins), vec![(id, native)]);
     }
 }

@@ -1020,6 +1020,9 @@ pub struct State {
     /// Persistent device/parameter identity for the modulation system (M0). Lives here (app state),
     /// persisted in the `.lemon` extension — never inside FLP target bytes (audit K.1/K.3).
     pub identity: os_model::modulation::IdentityRegistry,
+    /// The modulation graph (M1): each modulator's source and the parameters it drives, saved in the `.lemon`
+    /// extension beside the identity registry. No engine path reads it yet.
+    pub modulation: os_model::modulation::ModGraph,
     /// The toolbar's scope / analyzer and peak bars (fed from the audio tap in `App::tick`).
     pub monitor: crate::monitor::Monitor,
     /// The plugin database: choices, last scan, the plugin menus' lists, the plugin manager's table (spec:
@@ -1689,6 +1692,7 @@ impl App {
                 global_snap: Default::default(),
                 pat_ui: Default::default(),
                 identity: Default::default(),
+                modulation: Default::default(),
                 wins: crate::arrange::default_wins(),
                 screen: (1920.0, 1080.0),
                 display_scale: 1.0,

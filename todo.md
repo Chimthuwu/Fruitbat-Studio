@@ -52,11 +52,24 @@
 - [x] ~~Soothe-2 style dynamic EQ; ANINA.vst3 / EB-FreakyTable~~ — **scrapped by the user 2026-11-12** ("forget the
       Soothe2 Anina EBFreakyTable shit"): TAME stays as it is, and those plugins are not something this project takes on.
 
-## 🔝 TOP OF LIST — Modulation system (UN-PAUSED 2026-11-12, next)
-- [ ] **M0 persistent parameter identity is DONE & shipped** on `origin/modulation-m0` (milestones 1+2, 16 tests green:
-      7 os-model + 9 os-app). Next is **M1**: the actual modulation graph + the app→engine update path (Section K K.4 /
-      K.5 §7 scoped this as an M1 decision). The user un-paused it on 2026-11-12, to start once mixed strips' console
-      (P3) is in.
+## 🔝 TOP OF LIST — Modulation system (UN-PAUSED 2026-11-12, in progress)
+- [x] **M0 persistent parameter identity is DONE & shipped** on `origin/modulation-m0` (milestones 1+2, 16 tests green:
+      7 os-model + 9 os-app).
+- [x] **M1a, the modulation graph model and its `.lemon` persistence** (2026-11-12, no engine wiring): `os_model::modulation`
+      gains `ModGraph` / `Modulator` / `ModTarget` beside the M0 identity types — a modulator is one `ModSource`
+      (`Lfo` with `LfoShape` + `Timebase`, `Steps` with sixteen `i8` values, or `Envelope` attack/decay/sustain/release),
+      a user name, an enabled flag, and a list of targets. Each target is a `ParameterPath` (the M0 identity) with a
+      `depth` (clamped to ±1, 25 % by default), a `Curve` (linear / exp / log / S) and a `Polarity` (bipolar / unipolar).
+      One modulator drives a parameter at most once; several modulators may drive the same one (`ModGraph::assign`,
+      `unassign`, `targets_on`, ids minted from `next` and never reused). The graph is saved as `LMex` event 207
+      (`lemon::MODULATION`, layout 1: graph next + per modulator id / enabled / name / source / targets, parameter keys as
+      native id, legacy index or host code), read back in `lemon_state::apply`, and always written so a removed graph
+      leaves no stale one; `State::modulation`. `modulation::unresolved` lists the assignments that do not resolve
+      against the current project and plugin metadata (a missing native id, a device that went) instead of dropping
+      them. Tests: ids never reused, one assignment per parameter per modulator, depth clamping, event round trip,
+      `.lemon` round trip (and the FLP dropping it), truncated payloads, unresolved reporting.
+- [ ] **M1b, the app→engine update path** (Section K K.4 / K.5 §7 scoped this as an M1 decision): evaluate the sources on
+      the engine's clock and write the values through the existing target path — no FLP `Target` bytes change.
 
 This file tracks the open/executed state of the todo items. The canonical priority plan is in `docs/roadmap-2026-11-10.md` — reference that doc for the full rationale, audit findings, and ordering.
 

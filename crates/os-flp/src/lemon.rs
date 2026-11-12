@@ -53,6 +53,10 @@ pub const LANE_BINDINGS: u8 = 205;
 /// A `BTreeMap<PersistentObjectId, OwnerLocator>` plus the id counter and any explicit native bindings.
 /// Event IDs 192–205 are taken by other Lemon Studio state; 206 is the first free id (K.3).
 pub const OWNER_IDS: u8 = 206;
+/// `LMex` event: the modulation system's graph (M1) — each modulator's source, name and enabled flag, and the
+/// parameters it drives with their depth, curve and polarity. Lemon Studio's design, like `OWNER_IDS`: it refers to
+/// parameters by their persistent identity and is never written into an FLP target (audit K.1/K.3).
+pub const MODULATION: u8 = 207;
 
 /// Whether `file` is a `.lemon` file (its first chunk is `LMhd`).
 pub fn is_lemon(file: &FlpFile) -> bool {

@@ -11,7 +11,7 @@
 
 use crate::app::State;
 use crate::plugins::Plugins;
-use os_model::modulation::{OwnerLocator, ParameterKey, ParameterPath, ParamResolution, PersistentObjectId};
+use os_model::modulation::{ModulatorId, OwnerLocator, ParameterKey, ParameterPath, ParamResolution, PersistentObjectId};
 use os_model::target;
 
 impl State {
@@ -153,6 +153,21 @@ pub fn resolve_path(s: &State, plugins: &Plugins, path: ParameterPath) -> Option
     let owner = s.identity.owners.get(&path.owner).copied()?;
     let native_ids = hosted_native_ids(plugins, owner);
     target_for(owner, path.parameter, native_ids.as_deref())
+}
+
+/// Every assignment in the modulation graph whose [`ParameterPath`] does not resolve right now, as (modulator,
+/// parameter), in graph order: a native id the plugin no longer exposes, or an owner the project no longer has.
+/// The UI lists these as missing rather than dropping them — a plugin that comes back brings its assignments back.
+pub fn unresolved(s: &State, plugins: &Plugins) -> Vec<(ModulatorId, ParameterPath)> {
+    let mut v = Vec::new();
+    for m in &s.modulation.modulators {
+        for t in &m.targets {
+            if resolve_path(s, plugins, t.path).is_none() {
+                v.push((m.id, t.path));
+            }
+        }
+    }
+    v
 }
 
 #[cfg(test)]

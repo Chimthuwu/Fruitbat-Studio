@@ -115,6 +115,253 @@ impl ParamResolution {
 /// The reserved slot value for a channel-container member's place (matches `container::CHANNEL`).
 pub const CHANNEL_SENTINEL: u8 = 0xFF;
 
+// ---------------------------------------------------------------------------------------------------------------
+// M1: the modulation graph
+//
+// A *modulator* is one source (an LFO, a step sequence or an envelope) plus the parameters it drives, each with its
+// own depth, curve and polarity. The graph is the list of them. It refers to parameters by [`ParameterPath`], so an
+// assignment survives a device move the way the device's identity does, and it is saved in the `.lemon` extension
+// (never in an FLP target). Nothing here evaluates or renders anything yet: this is the data the engine path and the
+// UI are built on.
+// ---------------------------------------------------------------------------------------------------------------
+
+/// A modulator's identity in the project's graph. Minted from [`ModGraph::next`], never reused, saved with the graph;
+/// `0` means "not assigned" ([`MODULATOR_NONE`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub struct ModulatorId(pub u32);
+
+/// The reserved value for "no modulator".
+pub const MODULATOR_NONE: ModulatorId = ModulatorId(0);
+
+impl ModulatorId {
+    pub fn is_none(self) -> bool {
+        self == MODULATOR_NONE
+    }
+}
+
+/// An LFO's waveform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LfoShape {
+    #[default]
+    Sine,
+    Triangle,
+    SawUp,
+    SawDown,
+    Square,
+    /// Sample and hold: one new random value each cycle, held until the next.
+    Random,
+}
+
+/// How a source's period is measured.
+///
+/// A period is the length of an LFO's cycle or of one step of a [`Steps`]. Both spellings are fractions of the
+/// project's own time, so nothing here depends on a sample rate or a tempo that is not the project's.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Timebase {
+    /// Free-running, in hertz: cycles (or steps) a second.
+    Free(f32),
+    /// Synced to the project's tempo: the period in sixteenth notes — `1` a sixteenth, `4` a beat, `16` a bar.
+    Sync(u16),
+}
+
+impl Default for Timebase {
+    /// One cycle (or step) a second.
+    fn default() -> Self {
+        Timebase::Free(1.0)
+    }
+}
+
+/// A low-frequency oscillator.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Lfo {
+    pub shape: LfoShape,
+    /// One cycle's length.
+    pub period: Timebase,
+    /// Where in the cycle it starts, `0..=1` (`1` wraps to `0`).
+    pub phase: f32,
+}
+
+/// A step sequence: sixteen held values, one every `period`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Steps {
+    /// Each step's value in percent of the depth, `-100..=100` (`i8`, so a file keeps every value exactly).
+    pub values: [i8; 16],
+    /// How long one step lasts.
+    pub period: Timebase,
+    /// Glide from one step to the next instead of jumping.
+    pub smooth: bool,
+}
+
+impl Default for Steps {
+    /// Sixteen steps of nothing, one a sixteenth at 120 BPM (an eighth of a second at 120).
+    fn default() -> Self {
+        Steps { values: [0; 16], period: Timebase::Sync(1), smooth: false }
+    }
+}
+
+/// A one-shot shape: rises over `attack`, falls to `sustain` over `decay`, holds, falls to nothing over `release`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Envelope {
+    /// Seconds.
+    pub attack: f32,
+    pub decay: f32,
+    /// `0..=1` of the depth.
+    pub sustain: f32,
+    pub release: f32,
+}
+
+/// What drives a modulator.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ModSource {
+    Lfo(Lfo),
+    Steps(Steps),
+    Envelope(Envelope),
+}
+
+impl Default for ModSource {
+    fn default() -> Self {
+        ModSource::Lfo(Lfo::default())
+    }
+}
+
+/// The shape of a target's response to the source's `0..=1` value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Curve {
+    #[default]
+    Linear,
+    /// Slow at the bottom, fast at the top.
+    Exp,
+    /// Fast at the bottom, slow at the top.
+    Log,
+    /// Eased at both ends.
+    S,
+}
+
+/// Where the modulation moves the parameter from its own value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Polarity {
+    /// Above and below the value: the source swings both ways.
+    #[default]
+    Bipolar,
+    /// Only above it: the parameter's own value is the floor.
+    Unipolar,
+}
+
+/// One parameter a modulator drives, and how far.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModTarget {
+    /// The parameter, by its persistent identity ([`ParameterPath`]).
+    pub path: ParameterPath,
+    /// `-DEPTH_MAX..=DEPTH_MAX` of the parameter's range; negative inverts the source.
+    pub depth: f32,
+    pub curve: Curve,
+    pub polarity: Polarity,
+}
+
+impl ModTarget {
+    /// The largest depth: the whole range either way.
+    pub const DEPTH_MAX: f32 = 1.0;
+    /// What an assignment gets before the user moves it: a quarter of the range, so a new target is audible.
+    pub const DEPTH_DEFAULT: f32 = 0.25;
+
+    /// A target at [`ModTarget::DEPTH_DEFAULT`], linear, bipolar.
+    pub fn new(path: ParameterPath) -> Self {
+        ModTarget { path, depth: Self::DEPTH_DEFAULT, curve: Curve::Linear, polarity: Polarity::Bipolar }
+    }
+
+    /// With its depth set and clamped to `-DEPTH_MAX..=DEPTH_MAX` (a value that is not a number is 0).
+    pub fn with_depth(mut self, depth: f32) -> Self {
+        self.depth = if depth.is_finite() { depth.clamp(-Self::DEPTH_MAX, Self::DEPTH_MAX) } else { 0.0 };
+        self
+    }
+}
+
+/// One modulator: its source and the parameters it drives.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Modulator {
+    pub id: ModulatorId,
+    /// The user's name; empty until they give one (the UI makes a default from the source).
+    pub name: String,
+    pub source: ModSource,
+    /// In assignment order; a parameter appears at most once ([`ModGraph::assign`]).
+    pub targets: Vec<ModTarget>,
+    /// Off keeps the assignments and drives nothing.
+    pub enabled: bool,
+}
+
+/// The project's modulation graph: every modulator, in creation order, and the counter that mints ids.
+///
+/// Assignments name their parameter by ([`ParameterPath`]), never by position, so a device move follows the same
+/// identity rules the registry does (K.5 §6, K.6): an owner that is gone leaves the assignment unresolved rather
+/// than pointing at whatever took its place.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ModGraph {
+    pub modulators: Vec<Modulator>,
+    /// Next [`ModulatorId`] to mint (monotonic, never reused).
+    pub next: u32,
+}
+
+impl ModGraph {
+    /// No modulators (a project without any writes no graph).
+    pub fn is_empty(&self) -> bool {
+        self.modulators.is_empty()
+    }
+
+    /// Adds a modulator with a fresh id and no targets yet.
+    pub fn add(&mut self, source: ModSource) -> ModulatorId {
+        let id = ModulatorId(self.next.max(1));
+        self.next = id.0 + 1;
+        self.modulators.push(Modulator { id, name: String::new(), source, targets: Vec::new(), enabled: true });
+        id
+    }
+
+    pub fn get(&self, id: ModulatorId) -> Option<&Modulator> {
+        self.modulators.iter().find(|m| m.id == id)
+    }
+
+    pub fn get_mut(&mut self, id: ModulatorId) -> Option<&mut Modulator> {
+        self.modulators.iter_mut().find(|m| m.id == id)
+    }
+
+    /// Takes a modulator out (and its assignments with it). Ids are never reused, so `next` stays where it is.
+    pub fn remove(&mut self, id: ModulatorId) -> Option<Modulator> {
+        let at = self.modulators.iter().position(|m| m.id == id)?;
+        Some(self.modulators.remove(at))
+    }
+
+    /// Assigns `target` to modulator `id`: `false` for an unknown modulator, or when it already drives that
+    /// parameter (one assignment per parameter per modulator — a second would be two depths for one value).
+    /// The depth is clamped ([`ModTarget::with_depth`]).
+    pub fn assign(&mut self, id: ModulatorId, target: ModTarget) -> bool {
+        let Some(m) = self.get_mut(id) else { return false };
+        if m.targets.iter().any(|t| t.path == target.path) {
+            return false;
+        }
+        m.targets.push(target.with_depth(target.depth));
+        true
+    }
+
+    /// Stops modulator `id` driving `path`; `false` when it did not.
+    pub fn unassign(&mut self, id: ModulatorId, path: ParameterPath) -> bool {
+        let Some(m) = self.get_mut(id) else { return false };
+        let before = m.targets.len();
+        m.targets.retain(|t| t.path != path);
+        m.targets.len() != before
+    }
+
+    /// Every assignment driving `path`, as (`modulator`, its assignment), in graph order. A parameter may be driven
+    /// by several modulators; one modulator drives it at most once.
+    pub fn targets_on(&self, path: ParameterPath) -> Vec<(ModulatorId, ModTarget)> {
+        let mut v = Vec::new();
+        for m in &self.modulators {
+            for t in m.targets.iter().filter(|t| t.path == path) {
+                v.push((m.id, *t));
+            }
+        }
+        v
+    }
+}
+
 /// The authoritative mapping from persistent owner identity to the owner's current location,
 /// plus the counter that mints new identities. Persisted in the `.lemon` extension.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -265,5 +512,60 @@ mod tests {
         assert_eq!(r.owners.get(&PersistentObjectId(1)), Some(&OwnerLocator::Member(4, 2, 100)), "wrapped slot plugin keeps id as member");
         assert_eq!(r.owners.get(&PersistentObjectId(2)), Some(&OwnerLocator::Member(4, 2, 101)), "wrapped channel instrument keeps id as member");
         assert_eq!(r.owners.get(&PersistentObjectId(3)), Some(&OwnerLocator::Member(4, 2, 200)), "nested member keeps id at new container place");
+    }
+
+    // M1: the modulation graph (model only — no engine reads it yet).
+
+    fn track_path(t: u16) -> ParameterPath {
+        ParameterPath { owner: PersistentObjectId(1), parameter: ParameterKey::HostParameterCode(t) }
+    }
+
+    #[test]
+    fn a_modulators_id_is_fresh_and_never_reused() {
+        let mut g = ModGraph::default();
+        let a = g.add(ModSource::Lfo(Lfo::default()));
+        let b = g.add(ModSource::Envelope(Envelope::default()));
+        assert_eq!((a.0, b.0), (1, 2), "ids start at 1; 0 is \"no modulator\"");
+        assert!(!a.is_none() && !g.get(a).is_some_and(|m| m.id != a));
+        assert!(g.get(a).is_some_and(|m| m.enabled), "a new modulator is on");
+        assert_eq!(g.add(ModSource::Steps(Steps::default())).0, 3);
+        assert_eq!(g.remove(b).map(|m| m.id), Some(b));
+        assert!(g.get(b).is_none());
+        // An id stays spent: nothing ever takes the removed modulator's place.
+        assert_eq!(g.add(ModSource::default()).0, 4);
+        assert_eq!(g.modulators.len(), 3);
+    }
+
+    #[test]
+    fn a_parameter_takes_one_assignment_per_modulator() {
+        let mut g = ModGraph::default();
+        let a = g.add(ModSource::default());
+        let b = g.add(ModSource::default());
+        let path = track_path(0x0100);
+        assert!(g.assign(a, ModTarget::new(path)));
+        assert!(!g.assign(a, ModTarget::new(path)), "the same parameter twice on one modulator is one assignment");
+        assert!(g.assign(b, ModTarget::new(path)), "two modulators may drive one parameter");
+        assert_eq!(g.targets_on(path).len(), 2);
+        assert!(g.targets_on(track_path(0x0101)).is_empty());
+        assert!(g.unassign(a, path));
+        assert!(!g.unassign(a, path), "removing what is not assigned does nothing");
+        assert_eq!(g.targets_on(path).len(), 1);
+    }
+
+    #[test]
+    fn a_targets_depth_is_clamped_and_defaults_to_a_quarter() {
+        let mut g = ModGraph::default();
+        let id = g.add(ModSource::default());
+        let path = track_path(0x0100);
+        assert_eq!(ModTarget::new(path).depth, ModTarget::DEPTH_DEFAULT);
+        // A depth past the range is the range; a value that is not a number is nothing.
+        assert!(g.assign(id, ModTarget::new(path).with_depth(3.0)));
+        assert_eq!(g.get(id).unwrap().targets[0].depth, 1.0);
+        assert!(g.unassign(id, path));
+        assert!(g.assign(id, ModTarget::new(path).with_depth(-3.0)));
+        assert_eq!(g.get(id).unwrap().targets[0].depth, -1.0);
+        assert_eq!(ModTarget::new(path).with_depth(f32::NAN).depth, 0.0);
+        assert!(!g.assign(ModulatorId(99), ModTarget::new(path)), "an unknown modulator takes no assignment");
+        assert!(!g.unassign(ModulatorId(99), path));
     }
 }
