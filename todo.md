@@ -11,8 +11,11 @@
       still read, 5 and 6 are the fork's SnapTune ones). The console's style bar swaps the analog sections for the grid:
       a 4×4 of coloured cells, a click cycling a step's module, and one amount knob — no knob per module. Right-click
       menu: Strip style, Amount, Clear grid. `KnobId::Glitch` is scriptable as `glitch:<track>`.
-- [ ] **Mixing modules from both strips in one custom strip** (asked for with the glitcher): needs a module list per
-      track rather than a style switch — plan it after the two consoles settle.
+- [ ] **Mixing modules from both strips in one custom strip** (asked for with the glitcher): planned in
+      `docs/mixed-strips-plan.md` — `MixerTrack.chain: [u8; 8]` (six analog sections + the grid, in signal order), the
+      sections split into per-module DSP runs so an analog-preset chain renders bit-for-bit as today, a side chunk
+      `LSMX` beside the v8 strip chunk so older builds keep their strips, `MCmd::Chain` for one-step undo, and a chain
+      bar with one tile per module (the grid's 4×4 among them) in the console. Nothing built yet.
 - [x] **A playhead on the grid, and painting it**: the feeder publishes each track's step (`Engine::glitch_steps`),
       `MixerUi::steps` carries it and the active cell is ringed in cream, repainting only the grid (`Live::Glitch`).
       Holding a cell down drags its module across the cells the pointer crosses (`App::Drag::GlitchPaint`,
