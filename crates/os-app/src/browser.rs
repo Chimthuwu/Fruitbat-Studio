@@ -72,7 +72,7 @@ impl App {
                 }
                 let s = &mut self.state;
                 s.browser_scroll = s.browser_scroll.min(view::max_scroll(s));
-                if !matches!(row.item, Item::None | Item::File(_) | Item::History(_)) {
+                if !matches!(row.item, Item::None | Item::File(_) | Item::History(_) | Item::ModRouting(..)) {
                     self.drag = Some(Drag::Browser { item: row.item, label: row.label, m0: self.mouse, started: false });
                 }
             }
@@ -613,7 +613,7 @@ impl App {
                     self.state.message = Some(m);
                 }
             }
-            Item::None | Item::File(_) | Item::History(_) | Item::Preset(_) => {}
+            Item::None | Item::File(_) | Item::History(_) | Item::Preset(_) | Item::ModRouting(..) => {}
         }
     }
 
@@ -680,6 +680,16 @@ impl App {
                     s.rack.select_only(c);
                 }
                 Item::History(e) => return crate::history::go_to(s, e),
+                // A routing row goes to its target's track and opens the modulator's editor (the handoff §7).
+                Item::ModRouting(id, path, ..) => {
+                    if let Some(loc) = s.identity.owners.get(&path.owner).copied() {
+                        if let os_model::modulation::OwnerLocator::Track(t) | os_model::modulation::OwnerLocator::Slot(t, _) | os_model::modulation::OwnerLocator::Member(t, _, _) = loc {
+                            s.playlist.track = t;
+                        }
+                    }
+                    s.mod_editor = Some(id);
+                    s.mod_routing = None;
+                }
                 _ => {}
             },
             RowCmd::Pattern(pc) => {
@@ -1051,6 +1061,24 @@ pub fn row_menu(s: &crate::app::State, row: &view::Row) -> Vec<PItem> {
         }
         Item::Effect(index) => items.push(PItem::new("Add to selected mixer track", Cmd::Plugin(crate::plugin_menu::PlugCmd::Effect { index, slot: None }))),
         Item::History(_) => items.push(r("Go to this step", RowCmd::Activate)),
+        // The management path (the handoff §7): go to the target, switch the routing, change its depth, remove it.
+        Item::ModRouting(id, path, depth, enabled) => {
+            items.push(r("Go to target", RowCmd::Activate));
+            items.push(PItem::new(
+                if enabled { "Disable routing" } else { "Enable routing" },
+                Cmd::ModAct(crate::modulation::ModAct::TargetEnabled(id, path, !enabled)),
+            ));
+            let d = depth.clamp(-1.0, 1.0);
+            items.push(PItem::sub(
+                "Depth",
+                vec![
+                    PItem::new("+10%", Cmd::ModAct(crate::modulation::ModAct::DepthPath(id, path, (d + 0.1).min(1.0)))),
+                    PItem::new("-10%", Cmd::ModAct(crate::modulation::ModAct::DepthPath(id, path, (d - 0.1).max(-1.0)))),
+                    PItem::new("Invert", Cmd::ModAct(crate::modulation::ModAct::DepthPath(id, path, -d))),
+                ],
+            ));
+            items.push(PItem::new("Remove routing", Cmd::ModAct(crate::modulation::ModAct::RemovePath(id, path))));
+        }
         // Into the selected channel's plugin (spec: plugins/presets.md "Browser").
         Item::Preset(ref p) if crate::channel_states::is_state_file(std::path::Path::new(p)) => {
             items.push(PItem::new("Add to channel rack", Cmd::ChannelState(crate::channel_states::CsCmd::Add(p.into()))));

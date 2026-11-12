@@ -35,7 +35,7 @@ mod marks;
 mod notes;
 mod param_auto;
 mod modulation;
-pub use modulation::{ModTarget, Modulator, DEFAULT_BASE};
+pub use modulation::{ModSnapshot, ModTarget, Modulator, DEFAULT_BASE};
 mod multicore;
 pub use multicore::LoadGate;
 mod pdc;
@@ -2258,6 +2258,9 @@ impl Engine {
                 self.tail_done = true;
             }
         }
+        // The audio follower hears the tick that just finished (master, after effects and the main volume). It is one
+        // tick behind the value the tick's modulation used, which is inaudible at control rate.
+        self.mods.feed_master(&self.out, self.rate as f32);
         self.route_out();
         self.hand_out(tick, start, false, was_done);
         // The file keeps its length: as many frames as the head skipped follow the tick that ended the song.

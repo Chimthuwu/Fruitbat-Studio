@@ -24,7 +24,10 @@
 //! The random LFO is a hash of its cycle number, so a render equals live playback and a seek lands on the same value.
 //! An envelope is a one-shot from the transport's start for now (a note-triggered one needs the note path).
 
-use os_model::modulation::{Curve, Envelope, Lfo, LfoShape, ModSource, Polarity, Steps, Timebase};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+
+use os_model::modulation::{AudioFollower, Curve, Detection, Distribution, Envelope, Lfo, LfoShape, ModSource, Polarity, Random, Steps, Timebase};
 use os_model::target::Target;
 
 use super::param_auto::{ParamAuto, PARAM_STEP};
@@ -32,6 +35,131 @@ use super::Engine;
 
 /// Where a parameter sits when nothing has set it: halfway.
 pub const DEFAULT_BASE: f64 = 0.5;
+
+/// The live modulation values the UI reads every frame (the handoff's lock-free snapshot). Preallocated by the app
+/// when it installs a graph; the audio thread only stores into it, and nothing here allocates or locks.
+#[derive(Debug, Default)]
+pub struct ModSnapshot {
+    /// The modulator ids, in the order `outputs` is indexed by.
+    ids: Vec<u32>,
+    /// The targets, in the order `values` is indexed by.
+    targets: Vec<Target>,
+    outputs: Box<[AtomicU32]>,
+    values: Box<[AtomicU32]>,
+}
+
+impl ModSnapshot {
+    /// A snapshot for a graph of `ids` driving `targets`.
+    pub fn new(ids: &[u32], targets: &[Target]) -> ModSnapshot {
+        ModSnapshot {
+            ids: ids.to_vec(),
+            targets: targets.to_vec(),
+            outputs: (0..ids.len()).map(|_| AtomicU32::new(0)).collect(),
+            values: (0..targets.len()).map(|_| AtomicU32::new(0)).collect(),
+        }
+    }
+
+    /// A modulator's latest `0..=1` output.
+    pub fn output(&self, id: u32) -> Option<f32> {
+        let i = self.ids.iter().position(|&x| x == id)?;
+        Some(f32::from_bits(self.outputs[i].load(Ordering::Relaxed)))
+    }
+
+    /// A target's latest effective (modulated, normalized) value.
+    pub fn value(&self, target: u32) -> Option<f32> {
+        let want = os_model::target::decode(target);
+        let i = self.targets.iter().position(|&x| x == want)?;
+        Some(f32::from_bits(self.values[i].load(Ordering::Relaxed)))
+    }
+
+    fn write_output(&self, index: usize, v: f32) {
+        if let Some(a) = self.outputs.get(index) {
+            a.store(v.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    fn write_value(&self, target: Target, v: f64) {
+        let Some(index) = self.targets.iter().position(|&x| x == target) else { return };
+        if let Some(a) = self.values.get(index) {
+            a.store((v.clamp(0.0, 1.0) as f32).to_bits(), Ordering::Relaxed);
+        }
+    }
+}
+
+/// One audio follower's detector state: a cheap band filter, a level and its attack/release envelope. No FFT, no
+/// allocation, no lock.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Follower {
+    id: u32,
+    source: AudioFollower,
+    /// One-pole states: two cascaded low-passes and two cascaded high-passes on the mono sum.
+    lp: [f32; 2],
+    hp: [f32; 2],
+    prev: f32,
+    level: f32,
+}
+
+impl Follower {
+    fn new(id: u32, source: AudioFollower) -> Follower {
+        Follower { id, source, lp: [0.0; 2], hp: [0.0; 2], prev: 0.0, level: 0.0 }
+    }
+
+    /// Detects the band-filtered level of `samples` (interleaved stereo) and moves the smoothed level toward it.
+    /// The frequency filtering happens **before** level detection, as the handoff requires.
+    fn feed(&mut self, samples: &[f32], rate: f32) {
+        // Decimated: a control-rate follower needs no sample-rate detector, and this keeps the audio thread free.
+        const STEP: usize = 8;
+        let dt = STEP as f32 / rate.max(1.0);
+        let (low, high) = match self.source.band.edges() {
+            Some((low, high)) => (low.clamp(20.0, 20000.0), high.clamp(20.0, 20000.0)),
+            None => (0.0, 0.0),
+        };
+        let hp_a = if low > 0.0 { let rc = 1.0 / (std::f32::consts::TAU * low); rc / (rc + dt) } else { 1.0 };
+        let lp_a = if high > 0.0 { let rc = 1.0 / (std::f32::consts::TAU * high); dt / (rc + dt) } else { 1.0 };
+        let mut peak = 0.0f32;
+        let mut sum_sq = 0.0f64;
+        let mut n = 0u32;
+        let mut i = 0usize;
+        while i + 1 < samples.len() {
+            let x = 0.5 * (samples[i] + samples[i + 1]);
+            // High-pass first, then low-pass: the detection band, before any level is measured.
+            let mut y = x;
+            if low > 0.0 {
+                for s in &mut self.hp {
+                    *s = hp_a * (*s + y - self.prev);
+                    y = *s;
+                }
+            }
+            if high > 0.0 {
+                for s in &mut self.lp {
+                    *s += (y - *s) * lp_a;
+                    y = *s;
+                }
+            }
+            self.prev = x;
+            peak = peak.max(y.abs());
+            sum_sq += f64::from(y) * f64::from(y);
+            n += 1;
+            i += STEP * 2;
+        }
+        let rms = if n > 0 { (sum_sq / f64::from(n)).sqrt() as f32 } else { 0.0 };
+        let detected = match self.source.detection {
+            Detection::Peak => peak,
+            Detection::Rms => rms,
+        } * 10f32.powf(self.source.gain_db / 20.0);
+        // Attack and release are one-pole over the detector's own block; no per-sample branching.
+        let tau = if detected > self.level { self.source.attack } else { self.source.release }
+            .clamp(0.0005, 30.0);
+        let k = (dt / (tau + dt)).clamp(0.0, 1.0);
+        self.level += (detected - self.level) * k;
+        self.level = self.level.clamp(0.0, 1.0);
+    }
+
+    /// Its `0..=1` output: the level scaled by the source's amount.
+    fn value(&self) -> f32 {
+        (self.level * self.source.amount.clamp(0.0, 1.0)).clamp(0.0, 1.0)
+    }
+}
 
 /// One parameter a modulator drives, resolved to an engine [`Target`].
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -41,6 +169,8 @@ pub struct ModTarget {
     pub depth: f32,
     pub curve: Curve,
     pub polarity: Polarity,
+    /// Off keeps the routing but drives nothing.
+    pub enabled: bool,
 }
 
 /// A modulator as the engine runs it.
@@ -61,17 +191,50 @@ pub struct Modulator {
 pub(super) struct Modulation {
     modulators: Vec<Modulator>,
     last: Vec<(Target, f64, f64)>,
+    /// The audio followers in the graph, by modulator id (rebuilt when the graph is installed).
+    followers: Vec<Follower>,
+    /// The live values the UI reads.
+    pub(super) snapshot: Option<Arc<ModSnapshot>>,
 }
 
 impl Modulation {
-    /// Replaces the graph; every value is sent again from scratch, as after a seek.
+    /// Replaces the graph; every value is sent again from scratch, as after a seek, and every follower starts at
+    /// silence rather than at whatever the last graph detected.
     pub fn set(&mut self, modulators: Vec<Modulator>) {
+        self.followers = modulators
+            .iter()
+            .filter_map(|m| match m.source {
+                ModSource::AudioFollower(f) => Some(Follower::new(m.id, f)),
+                _ => None,
+            })
+            .collect();
         self.modulators = modulators;
         self.last.clear();
     }
 
     pub fn is_empty(&self) -> bool {
         self.modulators.is_empty()
+    }
+
+    fn follower(&self, id: u32) -> Option<&Follower> {
+        self.followers.iter().find(|f| f.id == id)
+    }
+
+    /// The source's value for modulator `m` at a position (`0..=1`; a follower reads its detector).
+    fn value(&self, m: &Modulator, beats: f64, secs: f64) -> f32 {
+        match &m.source {
+            ModSource::AudioFollower(_) => self.follower(m.id).map_or(0.0, |f| f.value()),
+            other => source_value(other, m.id, beats, secs),
+        }
+    }
+
+    /// Feeds every follower the master output of the tick that just finished. Called once a tick, after the master's
+    /// effects and main volume: the follower is one tick behind the value the tick's modulation used, which is
+    /// inaudible at control rate and keeps the detector off the evaluation path.
+    pub(super) fn feed_master(&mut self, samples: &[f32], rate: f32) {
+        for f in &mut self.followers {
+            f.feed(samples, rate);
+        }
     }
 }
 
@@ -81,6 +244,9 @@ pub fn source_value(source: &ModSource, id: u32, beats: f64, secs: f64) -> f32 {
         ModSource::Lfo(l) => lfo_value(l, id, cycles(l.period, beats, secs) + f64::from(l.phase)),
         ModSource::Steps(s) => steps_value(s, cycles(s.period, beats, secs)),
         ModSource::Envelope(e) => envelope_value(e, secs),
+        ModSource::Random(r) => random_value(r, cycles(r.period, beats, secs)),
+        // A follower's value comes from the master detector, not from the position: `Modulation::value` reads it.
+        ModSource::AudioFollower(_) => 0.0,
     }
 }
 
@@ -110,7 +276,53 @@ fn lfo_value(l: &Lfo, id: u32, cycles: f64) -> f32 {
         }
         LfoShape::Random => random(cycles.floor() as i64, id),
     };
-    ((wave + 1.0) / 2.0) as f32
+    // The source's own output mode: bipolar swings either side of the middle (which the assignment reads as -1..1);
+    // unipolar starts at the middle and only rises, so a bipolar assignment moves 0..depth above the base.
+    let centered = (wave + 1.0) / 2.0;
+    // The source's amount is a gain around the middle, so 0 is a flat line (the middle) whatever the shape.
+    let gained = 0.5 + (centered - 0.5) * f64::from(l.amount.clamp(0.0, 1.0));
+    let shaped = if l.bipolar { gained } else { 0.5 + gained * 0.5 };
+    (shaped + f64::from(l.offset)).clamp(0.0, 1.0) as f32
+}
+
+/// A random source's value at `cycles`, `0..=1`. Deterministic from the seed and the cycle number; `smooth` is a
+/// slew from the previous cycle's value over the first fraction of the cycle, which is seek-safe.
+fn random_value(r: &Random, cycles: f64) -> f32 {
+    let cycle = cycles.floor() as i64;
+    let frac = cycles.rem_euclid(1.0) as f32;
+    let cur = random_at(r.seed, cycle, r.distribution);
+    let prev = random_at(r.seed, cycle - 1, r.distribution);
+    let u = if r.interpolate {
+        prev + (cur - prev) * frac
+    } else if r.smooth > 0.0005 {
+        let k = (frac / r.smooth.clamp(0.0, 1.0)).min(1.0);
+        prev + (cur - prev) * k
+    } else {
+        cur
+    };
+    let centered = if r.bipolar { u } else { 0.5 + u * 0.5 };
+    (centered * r.amount.clamp(0.0, 1.0)).clamp(0.0, 1.0)
+}
+
+/// A random draw in `0..1` for `cycle` from `seed`, in the source's distribution.
+fn random_at(seed: u64, cycle: i64, distribution: Distribution) -> f32 {
+    let base = seed ^ (cycle as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    match distribution {
+        Distribution::Uniform => hash_unit(base),
+        // The mean of four draws is a cheap, bounded bell: most values near the middle, no tails past either end.
+        Distribution::Gaussian => {
+            let sum: f32 = (0..4u64).map(|i| hash_unit(base ^ (i + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15))).sum();
+            (sum / 4.0).clamp(0.0, 1.0)
+        }
+    }
+}
+
+/// A hash's value in `0..1`.
+fn hash_unit(mut x: u64) -> f32 {
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+    x ^= x >> 33;
+    (x >> 11) as f32 / (1u64 << 53) as f32
 }
 
 /// A deterministic value in `-1..1` for `cycle`, from modulator `id`: a random source repeats identically on every
@@ -179,11 +391,15 @@ fn offset(t: &ModTarget, u: f32) -> f64 {
 /// no clip drives parameters at all.
 pub(super) fn step_values(params: &mut ParamAuto, mods: &mut Modulation, pos: f64, at: u32, secs_per_tick: f64, ppq: f64) {
     let (beats, secs) = (pos / ppq, pos * secs_per_tick);
+    let snap = mods.snapshot.clone();
     // Every modulator's offset for a parameter adds up, then the parameter's own base carries them.
     let mut offsets: Vec<(Target, f64)> = Vec::new();
-    for m in mods.modulators.iter().filter(|m| m.enabled) {
-        let u = source_value(&m.source, m.id, beats, secs);
-        for t in &m.targets {
+    for (i, m) in mods.modulators.iter().enumerate().filter(|(_, m)| m.enabled) {
+        let u = mods.value(m, beats, secs);
+        if let Some(snap) = &snap {
+            snap.write_output(i, u);
+        }
+        for t in m.targets.iter().filter(|t| t.enabled) {
             let by = offset(t, u);
             match offsets.iter_mut().find(|(x, _)| *x == t.target) {
                 Some((_, v)) => *v += by,
@@ -194,6 +410,9 @@ pub(super) fn step_values(params: &mut ParamAuto, mods: &mut Modulation, pos: f6
     for (target, by) in offsets {
         let base = params.base_of(target).unwrap_or(DEFAULT_BASE);
         let value = (base + by).clamp(0.0, 1.0);
+        if let Some(snap) = &snap {
+            snap.write_value(target, value);
+        }
         match mods.last.iter_mut().find(|(x, ..)| *x == target) {
             Some((_, last_value, last_base)) if (*last_value - value).abs() < 1e-7 && (*last_base - base).abs() < 1e-7 => continue,
             Some((_, last_value, last_base)) => {
@@ -237,6 +456,11 @@ fn host_target(target: Target) -> Option<(usize, HostParam)> {
 }
 
 impl Engine {
+    /// The live snapshot the UI reads; the app builds it with the graph so both describe the same modulators and targets.
+    pub fn set_mod_snapshot(&mut self, snapshot: Arc<ModSnapshot>) {
+        self.mods.snapshot = Some(snapshot);
+    }
+
     /// Installs the modulation graph (an empty one: no modulation). Values are sent again from scratch, and every
     /// track gives its host parameters back.
     pub fn set_modulation(&mut self, modulators: Vec<Modulator>) {
@@ -263,15 +487,19 @@ impl Engine {
         let ppq = f64::from(self.ppq.max(1));
         let secs_per_tick = self.tick_len() as f64 / f64::from(self.rate.max(1));
         let (beats, secs) = (now / ppq, now * secs_per_tick);
-        let mut offsets: Vec<(usize, HostParam, f64)> = Vec::new();
-        for m in self.mods.modulators.iter().filter(|m| m.enabled) {
-            let u = source_value(&m.source, m.id, beats, secs);
-            for t in &m.targets {
+        let snap = self.mods.snapshot.clone();
+        let mut offsets: Vec<(usize, HostParam, Target, f64)> = Vec::new();
+        for (i, m) in self.mods.modulators.iter().enumerate().filter(|(_, m)| m.enabled) {
+            let u = self.mods.value(m, beats, secs);
+            if let Some(snap) = &snap {
+                snap.write_output(i, u);
+            }
+            for t in m.targets.iter().filter(|t| t.enabled) {
                 let Some((track, param)) = host_target(t.target) else { continue };
                 let by = offset(t, u);
-                match offsets.iter_mut().find(|(x, p, _)| *x == track && *p == param) {
-                    Some((_, _, v)) => *v += by,
-                    None => offsets.push((track, param, by)),
+                match offsets.iter_mut().find(|(x, p, ..)| *x == track && *p == param) {
+                    Some((_, _, _, v)) => *v += by,
+                    None => offsets.push((track, param, t.target, by)),
                 }
             }
         }
@@ -282,7 +510,7 @@ impl Engine {
                 (f64::from(m.pan) + 6400.0) / 12800.0,
                 (f64::from(m.sep) + 64.0) / 128.0,
             ];
-            let driven = |param: HostParam| offsets.iter().find(|(t, p, _)| *t == track && *p == param).map(|(_, _, by)| *by);
+            let driven = |param: HostParam| offsets.iter().find(|(t, p, ..)| *t == track && *p == param).map(|(_, _, _, by)| *by);
             let mut changed = false;
             for (i, param) in [HostParam::Volume, HostParam::Pan, HostParam::Separation].into_iter().enumerate() {
                 let want = driven(param).map(|by| {
@@ -347,6 +575,29 @@ impl Engine {
             for route in &mut m.routes {
                 let by = driven(HostParam::Send(route.dest as u16));
                 route.mod_level = by.map(|by| (f64::from(route.level) + by).clamp(0.0, 1.0) as f32);
+            }
+        }
+        // Publish every driven host target's effective normalized value (the units differ per control; the UI's cursor
+        // wants them all on 0..1, so each is put back into the domain its base is read in).
+        if let Some(snap) = &snap {
+            for &(track, param, target, by) in &offsets {
+                let Some(m) = self.tracks.get(track) else { continue };
+                let base = match param {
+                    HostParam::Volume => f64::from(m.vol) / 16000.0,
+                    HostParam::Pan => (f64::from(m.pan) + 6400.0) / 12800.0,
+                    HostParam::Separation => (f64::from(m.sep) + 64.0) / 128.0,
+                    HostParam::Eq(band, field) => {
+                        let own = f64::from(m.eq_own[usize::from(band)][usize::from(field)]);
+                        if field == 0 {
+                            (own / 1800.0 + 1.0) / 2.0
+                        } else {
+                            own / 65536.0
+                        }
+                    }
+                    HostParam::Send(d) => m.routes.iter().find(|r| r.dest as u16 == d).map_or(0.0, |r| f64::from(r.level)),
+                    HostParam::SlotMix(k) => f64::from(m.slot_mix[usize::from(k)]) / 12800.0,
+                };
+                snap.write_value(target, (base + by).clamp(0.0, 1.0));
             }
         }
     }
@@ -465,9 +716,9 @@ mod tests {
     fn lfo(shape: LfoShape, sixteenths: u16, depth: f32, polarity: Polarity) -> Modulator {
         Modulator {
             id: 1,
-            source: ModSource::Lfo(Lfo { shape, period: Timebase::Sync(sixteenths), phase: 0.0 }),
+            source: ModSource::Lfo(Lfo { shape, period: Timebase::Sync(sixteenths), ..Lfo::default() }),
             enabled: true,
-            targets: vec![ModTarget { target: Target::ChannelParam(0, 7), depth, curve: Curve::Linear, polarity }],
+            targets: vec![ModTarget { target: Target::ChannelParam(0, 7), depth, curve: Curve::Linear, polarity, enabled: true }],
         }
     }
 
@@ -505,7 +756,7 @@ mod tests {
             id: 1,
             source: ModSource::Steps(steps),
             enabled: true,
-            targets: vec![ModTarget { target: Target::ChannelParam(0, 7), depth: 0.25, curve: Curve::Linear, polarity: Polarity::Bipolar }],
+            targets: vec![ModTarget { target: Target::ChannelParam(0, 7), depth: 0.25, curve: Curve::Linear, polarity: Polarity::Bipolar, enabled: true }],
         }]);
         run(&mut e, 98000, 1000);
         let seen = probe.lock().unwrap().seen.clone();
@@ -545,7 +796,7 @@ mod tests {
             id: 2,
             source: ModSource::Steps(Steps { values: [100; 16], ..Steps::default() }),
             enabled: true,
-            targets: vec![ModTarget { target: Target::MixerVolume(1), depth: 1.0, curve: Curve::Linear, polarity: Polarity::Unipolar }],
+            targets: vec![ModTarget { target: Target::MixerVolume(1), depth: 1.0, curve: Curve::Linear, polarity: Polarity::Unipolar, enabled: true }],
         };
         e.set_modulation(vec![off, host]);
         run(&mut e, 24000, 1000);
@@ -556,7 +807,7 @@ mod tests {
     /// swing, the saws go one way, the square is a switch.
     #[test]
     fn the_lfo_shapes() {
-        let l = |shape| Lfo { shape, period: Timebase::Free(1.0), phase: 0.0 };
+        let l = |shape| Lfo { shape, period: Timebase::Free(1.0), ..Lfo::default() };
         let at = |shape, cycles: f64| lfo_value(&l(shape), 1, cycles);
         assert!((at(LfoShape::Sine, 0.0) - 0.5).abs() < 1e-6);
         assert!((at(LfoShape::Sine, 0.25) - 1.0).abs() < 1e-6);
@@ -574,7 +825,7 @@ mod tests {
     /// second read (a render equals playback; a seek lands where it would have).
     #[test]
     fn the_random_shape_holds_and_repeats() {
-        let l = Lfo { shape: LfoShape::Random, period: Timebase::Free(2.0), phase: 0.0 };
+        let l = Lfo { shape: LfoShape::Random, period: Timebase::Free(2.0), ..Lfo::default() };
         let (a, b, c) = (lfo_value(&l, 1, 0.1), lfo_value(&l, 1, 0.9), lfo_value(&l, 1, 1.1));
         assert_eq!(a, b, "one value a cycle");
         assert_ne!(a, c, "a new value the next cycle");
@@ -610,7 +861,7 @@ mod tests {
     /// The curves and the two polarities: a quarter of the range means different offsets above and around the base.
     #[test]
     fn curves_and_polarity() {
-        let t = |curve, polarity| ModTarget { target: Target::ChannelParam(0, 0), depth: 0.5, curve, polarity };
+        let t = |curve, polarity| ModTarget { target: Target::ChannelParam(0, 0), depth: 0.5, curve, polarity, enabled: true };
         assert!((offset(&t(Curve::Linear, Polarity::Bipolar), 0.5) - 0.0).abs() < 1e-9);
         assert!((offset(&t(Curve::Linear, Polarity::Bipolar), 0.0) + 0.5).abs() < 1e-9);
         assert!((offset(&t(Curve::Linear, Polarity::Unipolar), 0.0) - 0.0).abs() < 1e-9);
@@ -635,7 +886,7 @@ mod tests {
             id: 1,
             source: ModSource::Steps(steps),
             enabled: true,
-            targets: vec![ModTarget { target: Target::MixerVolume(1), depth: 0.5, curve: Curve::Linear, polarity: Polarity::Bipolar }],
+            targets: vec![ModTarget { target: Target::MixerVolume(1), depth: 0.5, curve: Curve::Linear, polarity: Polarity::Bipolar, enabled: true }],
         }]);
         run(&mut e, 1000, 1000);
         assert_eq!(e.tracks[1].mod_vol, Some(16000), "unity plus half the range is the top");
@@ -656,7 +907,7 @@ mod tests {
         let p = project(0);
         let mut e = Engine::new(&p, &mut SampleLibrary::new(None), 48000, PlayMode::Pattern(1));
         let steps = Steps { values: [100; 16], period: Timebase::Sync(1), smooth: false };
-        let target = |target, depth, polarity| ModTarget { target, depth, curve: Curve::Linear, polarity };
+        let target = |target, depth, polarity| ModTarget { target, depth, curve: Curve::Linear, polarity, enabled: true };
         e.set_modulation(vec![Modulator {
             id: 1,
             source: ModSource::Steps(steps),
@@ -683,7 +934,7 @@ mod tests {
         p.mixer[1].slot_mix[0] = 0.5;
         let mut e = Engine::new(&p, &mut SampleLibrary::new(None), 48000, PlayMode::Pattern(1));
         let steps = Steps { values: [100; 16], period: Timebase::Sync(1), smooth: false };
-        let target = |target| ModTarget { target, depth: 0.5, curve: Curve::Linear, polarity: Polarity::Bipolar };
+        let target = |target| ModTarget { target, depth: 0.5, curve: Curve::Linear, polarity: Polarity::Bipolar, enabled: true };
         e.set_modulation(vec![Modulator {
             id: 1,
             source: ModSource::Steps(steps),

@@ -621,6 +621,15 @@ pub fn run(app: &mut App, act: RackAct) {    match act {
             app.invalidate();
         }
         RackAct::ParamSet { key, id, v } => {
+            // Routing mode (handoff §4): a press on a tinted parameter sets the modulation depth, not the base value.
+            if let Some(mod_id) = app.state.mod_routing {
+                if let Some(target) = crate::params::target_of(&app.state, key, usize::try_from(id).unwrap_or(usize::MAX))
+                    .filter(|&t| crate::modulation::is_modulatable(&app.state, t))
+                {
+                    crate::modulation::begin_routing_drag(app, mod_id, target);
+                    return;
+                }
+            }
             // Sets the value at once (a bar's click, or the dial's start value) and keeps dragging it: the
             // drag's move maps y onto a vertical dial drag.
             set_param_value(app, key, id, v);
@@ -2177,7 +2186,9 @@ mod tests {
             assert!(tile.contains(h.rect.cx(), h.rect.cy()), "{name}: {:?} is outside its tile {tile:?}", h.rect);
         }
         let (w, _) = editor.size();
-        assert!(tile.w > TILE_W && tile.w <= w + 2.0 * TILE_PAD + 1.0, "{name}: tile {} for a {w} px editor", tile.w);
+        // The tile is as wide as the editor needs, up to the tile cap; at the default rack height the project-modulator
+        // row shortens the body, so the editor (and with it the tile) scales down. It never goes below the 180 px floor.
+        assert!((180.0..=w + 2.0 * TILE_PAD + 1.0).contains(&tile.w), "{name}: tile {} for a {w} px editor", tile.w);
         assert!(params.iter().any(|p| p.plain != 0.0 || p.min != 0.0 || p.max != 0.0), "plain ranges reach the tile");
     }
 

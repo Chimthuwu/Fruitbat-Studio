@@ -186,6 +186,8 @@ pub enum Action {
     Palette(crate::plugin_palette::PalAct),
     /// A modulator chip in the mixer's title bar: pressed, it is dragged onto a control to assign it (`crate::modulation`).
     Modulator(os_model::modulation::ModulatorId),
+    /// The modulator UI (the eight slot row, its editor, its menus and the browser's Modulation section).
+    Mod(crate::modulation::ModAct),
     /// The Arpeggiate dialog's buttons, switches and menus (spec: ui/piano-arpeggiate.md).
     Arp(crate::arpeggiate::Act),
     /// The Flam, Flip and Scale levels dialogs' switches and buttons (spec: as `Win::PianoDlg`).
@@ -941,6 +943,25 @@ pub enum Drag {
     DeviceRackTile { kind: crate::device_rack::DeviceKind, _x0: f32 },
     /// A device tile's parameter row dragged: the value follows the pointer along its bar.
     DeviceRackParam { key: usize, id: u32, y0: f32, v0: f64 },
+    /// Routing mode: a tinted control dragged up / down. The base value is untouched; the drag delta is the depth.
+    /// `before` is the graph as it stood on the press, so cancel restores it and the release is one undo step.
+    ModDepth {
+        id: os_model::modulation::ModulatorId,
+        target: u32,
+        path: os_model::modulation::ParameterPath,
+        y0: f32,
+        depth: f32,
+        before: os_model::modulation::ModGraph,
+    },
+    /// A knob in a modulator's editor: the source on the press and as it is now (one undo step on release).
+    ModKnob {
+        id: os_model::modulation::ModulatorId,
+        field: crate::modulation::KnobField,
+        y0: f32,
+        v0: f32,
+        src0: os_model::modulation::ModSource,
+        src_now: os_model::modulation::ModSource,
+    },
     /// A tile header's channel knob (PAN / VOL / PITCH) dragged: `v0` at `y0`.
     RackStrip { row: usize, which: ChannelControl, y0: f32, v0: f64 },
     /// Monitor debug panel slider.
@@ -1025,8 +1046,25 @@ pub struct State {
     /// persisted in the `.lemon` extension — never inside FLP target bytes (audit K.1/K.3).
     pub identity: os_model::modulation::IdentityRegistry,
     /// The modulation graph (M1): each modulator's source and the parameters it drives, saved in the `.lemon`
-    /// extension beside the identity registry. No engine path reads it yet.
+    /// extension beside the identity registry.
     pub modulation: os_model::modulation::ModGraph,
+    /// The live modulation values the engine publishes (lock-free): the tiles' plots and the parameter cursors read it.
+    pub mod_snapshot: std::sync::Arc<os_engine::ModSnapshot>,
+    /// Routing mode: the one modulator whose targets are tinted and ready to be dragged. **UI state only** — never
+    /// saved, never an undo step (handoff §4.1).
+    pub mod_routing: Option<os_model::modulation::ModulatorId>,
+    /// The slot whose graphical editor is open, if any.
+    pub mod_editor: Option<os_model::modulation::ModulatorId>,
+    /// The slot whose right-click menu is open.
+    pub mod_menu: Option<os_model::modulation::ModulatorId>,
+    /// The empty slot whose "add modulator" menu is open.
+    pub mod_add_slot: Option<u8>,
+    /// When routing mode was entered or the pointer last crossed it: the patch-point button flashes while it is on.
+    pub mod_flash: Option<std::time::Instant>,
+    /// The tiles' scrolling output history (view state, sampled from the snapshot).
+    pub mod_hist: std::cell::RefCell<crate::modulation::History>,
+    /// A modulation drag in routing mode begins: the graph as it was, so cancel and undo are one step.
+    pub mod_drag_before: Option<os_model::modulation::ModGraph>,
     /// The toolbar's scope / analyzer and peak bars (fed from the audio tap in `App::tick`).
     pub monitor: crate::monitor::Monitor,
     /// The plugin database: choices, last scan, the plugin menus' lists, the plugin manager's table (spec:
@@ -1638,6 +1676,14 @@ impl App {
                 browser_w: crate::browser::load_width(),
                 browser_split_click: None,
                 show_device_rack: true,
+                mod_snapshot: std::sync::Arc::new(os_engine::ModSnapshot::default()),
+                mod_routing: None,
+                mod_editor: None,
+                mod_menu: None,
+                mod_add_slot: None,
+                mod_flash: None,
+                mod_hist: std::cell::RefCell::new(crate::modulation::History::default()),
+                mod_drag_before: None,
                 device_rack_h: crate::device_rack::DEFAULT_H,
                 device_rack_collapsed: false,
                 device_rack_pin: None,
@@ -4226,10 +4272,37 @@ impl App {
         self.damage_win(Win::Mixer);
     }
 
+    /// Esc in the modulator UI: abandon a depth or knob drag (restoring the graph exactly), then leave routing mode
+    /// and close any editor / menu. Routing mode is never project state, so there is nothing to undo.
+    fn mod_escape(&mut self) {
+        if let Some(Drag::ModDepth { before, .. }) = self.drag.clone() {
+            self.state.modulation = before;
+            self.drag = None;
+            crate::modulation::sync(self);
+        }
+        if let Some(Drag::ModKnob { id, src0, .. }) = self.drag.clone() {
+            self.drag = None;
+            if let Some(m) = self.state.modulation.get_mut(id) {
+                m.source = src0;
+            }
+            crate::modulation::sync(self);
+        }
+        self.state.mod_routing = None;
+        self.state.mod_editor = None;
+        self.state.mod_menu = None;
+        self.state.mod_add_slot = None;
+        self.invalidate();
+    }
+
     /// The monitor is moving (a signal or a decay), or the tapper's pad fading, or the CPU panel counting frames (View
     /// FPS): the shell should tick at animation rate.
     pub fn animating(&self) -> bool {
         self.transport.playing()
+            // The modulator tiles' plots and cursors move while a graph exists, and routing mode flashes.
+            || self.state.mod_routing.is_some()
+            || self.state.mod_editor.is_some()
+            || self.state.mod_add_slot.is_some()
+            || !self.state.modulation.is_empty()
             || matches!(self.drag, Some(Drag::SongPosHold { .. }))
             || self.state.monitor.active()
             || self.state.mixer.meters.iter().any(|m| m.active())
@@ -4426,7 +4499,8 @@ impl App {
             {
                 self.transport.update(&crate::rack::play_project(&self.state));
                 // The modulation graph reaches playback the same way (M1b); an unchanged one is not sent again.
-                self.transport.set_modulation(crate::modulation::engine_spec(&self.state, &self.plugins));
+                let (spec, snapshot) = crate::modulation::engine_spec(&self.state, &self.plugins);
+                self.transport.set_modulation(spec, snapshot);
             }
         }
         self.playback_damage();
@@ -6291,6 +6365,31 @@ impl App {
                     let v = (v0 - (y - y0) as f64 * 0.005).clamp(0.0, 1.0);
                     crate::device_rack::set_param_value(self, key, id, v);
                 }
+                Drag::ModDepth { id, target, path, y0, depth, before } => {
+                    // Pull the control up / down: the depth (not the base) follows. The preview edits the graph live, so
+                    // the sound and the arc move under the pointer; the release turns it into one undo step.
+                    let depth = (depth + (y0 - y) * 0.01).clamp(-1.0, 1.0);
+                    if let Some(m) = self.state.modulation.get_mut(id) {
+                        if let Some(t) = m.targets.iter_mut().find(|t| t.path == path) {
+                            *t = t.with_depth(depth);
+                        } else {
+                            m.targets.push(os_model::modulation::ModTarget::new(path).with_depth(depth));
+                        }
+                    }
+                    self.drag = Some(Drag::ModDepth { id, target, path, y0: y, depth, before });
+                    crate::modulation::sync(self);
+                    self.invalidate();
+                }
+                Drag::ModKnob { id, field, y0, v0, src0, .. } => {
+                    let v = (v0 - (y - y0) * 0.005).clamp(0.0, 1.0);
+                    let src = crate::modulation::with_knob(src0, field, v);
+                    if let Some(m) = self.state.modulation.get_mut(id) {
+                        m.source = src;
+                    }
+                    self.drag = Some(Drag::ModKnob { id, field, y0: y, v0, src0, src_now: src });
+                    crate::modulation::sync(self);
+                    self.invalidate();
+                }
                 Drag::RackStrip { row, which, y0, v0 } => {
                     // A header knob: the same 0.005 of the range per px as a tile's dials, and a redraw every move so
                     // the knob turns under the pointer (the channel edit alone asks for no paint).
@@ -7011,6 +7110,14 @@ impl App {
                 }
                 return self.invalidate();
             }
+            // Right-click a modulator slot: its menu (Enable / Reroll seed / Clear routings / Remove). The tile's
+            // plain click opens the editor, so the menu is the right button's only job.
+            Some(Action::Mod(crate::modulation::ModAct::Open(id))) => {
+                self.state.mod_menu = Some(*id);
+                self.state.mod_editor = None;
+                self.state.mod_add_slot = None;
+                return self.invalidate();
+            }
             // Right-click on a device tile (header, body or a row): its device menu (Pop out / Remove / ...).
             // The launcher's clip editor takes the rack's panel while it is out (`launcher::Panel`), so the
             // rack's tiles answer only while it is the rack there.
@@ -7236,6 +7343,24 @@ impl App {
             self.drop_modulator(id);
             return;
         }
+        if let Some(Drag::ModDepth { id, target, depth, before, .. }) = self.drag.clone() {
+            self.drag = None;
+            // Undo the preview, then apply the final depth as the one undo step (a click with no drag still assigns).
+            self.state.modulation = before;
+            let depth = if depth.abs() < 0.01 { os_model::modulation::ModTarget::DEPTH_DEFAULT } else { depth };
+            crate::modulation::run(self, crate::modulation::ModCmd::AssignDepth(id, target, depth));
+            self.invalidate();
+            return;
+        }
+        if let Some(Drag::ModKnob { id, src0, src_now, .. }) = self.drag.clone() {
+            self.drag = None;
+            if let Some(m) = self.state.modulation.get_mut(id) {
+                m.source = src0;
+            }
+            crate::modulation::run(self, crate::modulation::ModCmd::SetSource(id, src_now));
+            self.invalidate();
+            return;
+        }
         if let Some(Drag::Browser { item, started, .. }) = self.drag.clone() {
             self.drag = None;
             return self.browser_drop(item, started);
@@ -7264,7 +7389,7 @@ impl App {
             Some(Drag::BrowserSplit { .. }) => crate::browser::save_width(self.state.browser_w),
             // The rack's height is session state so far (the project state lands with M8); nothing to save.
             Some(Drag::DeviceRackSplit { .. }) => {}
-            Some(Drag::DeviceRackParam { .. }) | Some(Drag::RackStrip { .. }) => {}
+            Some(Drag::DeviceRackParam { .. }) | Some(Drag::RackStrip { .. }) | Some(Drag::ModDepth { .. }) | Some(Drag::ModKnob { .. }) => {}
             Some(Drag::DeviceRackTile { kind, .. }) => {
                 let x = self.mouse.0;
                 crate::device_rack::tile_drop(self, kind, x);
@@ -8219,6 +8344,16 @@ impl App {
             }),
             Key::Named(NamedKey::Escape) if self.state.settings.open && self.state.settings.picker.is_some() => self.picker_close(),
             Key::Named(NamedKey::Escape) if self.state.settings.open => self.state.settings.open = false,
+            // Routing mode and the modulator UI: Esc cancels the mode / closes the editor / abandons a drag (§4.1, §11).
+            Key::Named(NamedKey::Escape)
+                if self.state.mod_routing.is_some()
+                    || self.state.mod_editor.is_some()
+                    || self.state.mod_menu.is_some()
+                    || self.state.mod_add_slot.is_some()
+                    || matches!(self.drag, Some(Drag::ModDepth { .. } | Drag::ModKnob { .. })) =>
+            {
+                self.mod_escape()
+            }
             Key::Named(NamedKey::Escape) => {
                 self.state.menu_open = None;
                 self.state.menu_sub = None;
@@ -8911,6 +9046,15 @@ impl App {
             let step = self.bar(t).map_or(48.0, |b| (b.view / 8.0).max(18.0).round());
             return self.eased(|app| app.scroll_set(t, app.scroll_get(t) + dir as f32 * step));
         }
+        // Routing mode (handoff §4): a press on a tinted control starts a depth drag instead of moving the base.
+        if let Some(id) = self.state.mod_routing {
+            if let Some((target, _, _)) = self.automation_target(&a) {
+                if crate::modulation::is_modulatable(&self.state, target) {
+                    crate::modulation::begin_routing_drag(self, id, target);
+                    return;
+                }
+            }
+        }
         self.note_host_tweak(&a);
         if self.playlist_act(&a, false) {
             return;
@@ -8924,6 +9068,9 @@ impl App {
         }
         if let Action::DeviceRack(ra) = a {
             return crate::device_rack::run(self, ra);
+        }
+        if let Action::Mod(ma) = a {
+            return crate::modulation::act(self, ma);
         }
         if self.rack_act(&a) {
             return;
@@ -8954,6 +9101,12 @@ impl App {
                 self.state.message = Some(m);
             }
             self.invalidate();
+            return;
+        }
+        // The modulator UI's actions edit the graph and the editor state themselves (they need the whole App, for the
+        // transport), so they are taken before the state borrow below.
+        if let Action::Mod(a) = &a {
+            crate::modulation::act(self, *a);
             return;
         }
         let s = &mut self.state;
@@ -9445,7 +9598,8 @@ impl App {
             | Action::DeviceRack(_)
             | Action::Launcher(_)
             | Action::ToggleLauncher
-            | Action::PianoCmd(_) => {}
+            | Action::PianoCmd(_)
+            | Action::Mod(_) => {}
         }
     }
 
@@ -20514,7 +20668,7 @@ mod tests {
         assert!(s.browser_open.contains(&project_root()) && s.browser_open.contains(&pats) && !s.browser_open.contains(&gens));
         app.menu_item(VIEW, index(VIEW, "Effects in use"));
         let open: Vec<(String, Option<bool>)> = rows(&app.state).into_iter().filter(|r| r.depth == 1).map(|r| (r.label, r.open)).collect();
-        assert_eq!(open, [("History".into(), Some(false)), ("Patterns".into(), Some(false)), ("Effects".into(), Some(true)), ("Generators".into(), Some(false)), ("Remote control".into(), Some(false)), ("Samples".into(), Some(false))]);
+        assert_eq!(open, [("History".into(), Some(false)), ("Patterns".into(), Some(false)), ("Effects".into(), Some(true)), ("Generators".into(), Some(false)), ("Modulation".into(), Some(false)), ("Remote control".into(), Some(false)), ("Samples".into(), Some(false))]);
         assert_eq!(app.state.browser_sel.as_ref(), Some(&fx));
         app.menu_item(VIEW, index(VIEW, "Instruments in use"));
         assert_eq!(app.state.browser_sel.as_ref(), Some(&gens));

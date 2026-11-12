@@ -139,6 +139,19 @@ impl ModulatorId {
     }
 }
 
+/// A seed for a new random modulator: its id mixed with the wall clock, so two modulators made together still draw
+/// different sequences. Once drawn it is saved, and every render of the project repeats it exactly.
+pub fn fresh_seed(id: ModulatorId) -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64);
+    let mut x = nanos ^ u64::from(id.0).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+    x ^= x >> 33;
+    x | 1
+}
+
 /// An LFO's waveform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LfoShape {
@@ -172,13 +185,148 @@ impl Default for Timebase {
 }
 
 /// A low-frequency oscillator.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Lfo {
     pub shape: LfoShape,
     /// One cycle's length.
     pub period: Timebase,
     /// Where in the cycle it starts, `0..=1` (`1` wraps to `0`).
     pub phase: f32,
+    /// A constant shift added to the output, `-1..=1` of the depth ("Offset" in the handoff).
+    pub offset: f32,
+    /// The output gain, `0..=1` ("Amount" in the handoff; the assignment's own depth is separate).
+    pub amount: f32,
+    /// `true` swings around zero, `false` runs from zero up. Mirrors [`Polarity`] so a source can carry its own
+    /// shape while each assignment still chooses how it drives a parameter.
+    pub bipolar: bool,
+}
+
+impl Default for Lfo {
+    fn default() -> Self {
+        Lfo { shape: LfoShape::Sine, period: Timebase::Free(1.0), phase: 0.0, offset: 0.0, amount: 1.0, bipolar: true }
+    }
+}
+
+/// A deterministic random source: one value each period, from a seed stored with the project.
+///
+/// The value is a pure function of `(seed, cycle)`, so an offline render and live playback agree bit for bit and a
+/// seek lands on the value that cycle would have had. Smoothing is applied from the previous cycle's value over the
+/// first `smooth` fraction of the cycle, which is also stateless and therefore seek-safe.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Random {
+    pub period: Timebase,
+    /// The output gain, `0..=1`.
+    pub amount: f32,
+    pub distribution: Distribution,
+    /// `0` = hard steps, `1` = the whole cycle glides from the previous value.
+    pub smooth: f32,
+    /// `true`: linear interpolation across the whole cycle. `false`: sample and hold (with `smooth` as a slew).
+    pub interpolate: bool,
+    /// Deterministic seed, generated on creation and saved with the project ("reroll seed" changes it).
+    pub seed: u64,
+    pub bipolar: bool,
+}
+
+impl Default for Random {
+    fn default() -> Self {
+        Random {
+            period: Timebase::Sync(4),
+            amount: 1.0,
+            distribution: Distribution::Uniform,
+            smooth: 0.0,
+            interpolate: false,
+            seed: 0,
+            bipolar: true,
+        }
+    }
+}
+
+/// How a [`Random`] draws its value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Distribution {
+    /// Equal chance across the range.
+    #[default]
+    Uniform,
+    /// Centred on zero, most values near the middle.
+    Gaussian,
+}
+
+/// Where an [`AudioFollower`] reads its signal. v1 ships the master only; the enum is the scope field that lets
+/// track sources arrive later without changing an assignment's format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FollowerSource {
+    /// The master output after effects and the main volume (the handoff's recommendation).
+    #[default]
+    Master,
+}
+
+/// How an [`AudioFollower`] turns signal into a level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Detection {
+    #[default]
+    Rms,
+    Peak,
+}
+
+/// The band of the signal an [`AudioFollower`] detects, applied **before** level detection (the handoff's critical
+/// rule). `Custom` carries log-scaled low/high edges in hertz.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Band {
+    Full,
+    Low,
+    Mid,
+    High,
+    Custom { low: f32, high: f32 },
+}
+
+impl Default for Band {
+    fn default() -> Self {
+        Band::Full
+    }
+}
+
+impl Band {
+    /// The band's (low, high) edges in hertz; `None` for the full spectrum.
+    pub fn edges(self) -> Option<(f32, f32)> {
+        match self {
+            Band::Full => None,
+            Band::Low => Some((20.0, 200.0)),
+            Band::Mid => Some((200.0, 4000.0)),
+            Band::High => Some((4000.0, 20000.0)),
+            Band::Custom { low, high } => Some((low.clamp(20.0, 20000.0), high.clamp(20.0, 20000.0))),
+        }
+    }
+}
+
+/// A follower that turns the master's level into a modulation source. The detection is a cheap RMS/peak detector with
+/// attack/release and a band filter before it; no FFT is involved on the audio thread.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AudioFollower {
+    pub source: FollowerSource,
+    /// The output gain, `0..=1`.
+    pub amount: f32,
+    /// Seconds to rise to a louder signal.
+    pub attack: f32,
+    /// Seconds to fall to a quieter one.
+    pub release: f32,
+    /// Detector gain in decibels (`-24..=+24`).
+    pub gain_db: f32,
+    pub detection: Detection,
+    pub band: Band,
+}
+
+impl Default for AudioFollower {
+    fn default() -> Self {
+        AudioFollower {
+            source: FollowerSource::Master,
+            amount: 1.0,
+            attack: 0.01,
+            release: 0.2,
+            gain_db: 0.0,
+            detection: Detection::Rms,
+            band: Band::Full,
+        }
+    }
 }
 
 /// A step sequence: sixteen held values, one every `period`.
@@ -211,11 +359,16 @@ pub struct Envelope {
 }
 
 /// What drives a modulator.
+///
+/// `Steps` and `Envelope` predate the project-level slots (M1) and stay in the format so old projects load. The eight
+/// project slots offer the handoff's three sources: [`Lfo`], [`Random`] and [`AudioFollower`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ModSource {
     Lfo(Lfo),
     Steps(Steps),
     Envelope(Envelope),
+    Random(Random),
+    AudioFollower(AudioFollower),
 }
 
 impl Default for ModSource {
@@ -256,6 +409,8 @@ pub struct ModTarget {
     pub depth: f32,
     pub curve: Curve,
     pub polarity: Polarity,
+    /// Off keeps the assignment (and its depth) but contributes nothing. Set per routing from the browser.
+    pub enabled: bool,
 }
 
 impl ModTarget {
@@ -264,9 +419,9 @@ impl ModTarget {
     /// What an assignment gets before the user moves it: a quarter of the range, so a new target is audible.
     pub const DEPTH_DEFAULT: f32 = 0.25;
 
-    /// A target at [`ModTarget::DEPTH_DEFAULT`], linear, bipolar.
+    /// A target at [`ModTarget::DEPTH_DEFAULT`], linear, bipolar, on.
     pub fn new(path: ParameterPath) -> Self {
-        ModTarget { path, depth: Self::DEPTH_DEFAULT, curve: Curve::Linear, polarity: Polarity::Bipolar }
+        ModTarget { path, depth: Self::DEPTH_DEFAULT, curve: Curve::Linear, polarity: Polarity::Bipolar, enabled: true }
     }
 
     /// With its depth set and clamped to `-DEPTH_MAX..=DEPTH_MAX` (a value that is not a number is 0).
@@ -276,7 +431,7 @@ impl ModTarget {
     }
 }
 
-/// One modulator: its source and the parameters it drives.
+/// One modulator: its source, its project slot, and the parameters it drives.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Modulator {
     pub id: ModulatorId,
@@ -287,7 +442,15 @@ pub struct Modulator {
     pub targets: Vec<ModTarget>,
     /// Off keeps the assignments and drives nothing.
     pub enabled: bool,
+    /// The project slot (`0..PROJECT_SLOTS`), or [`NO_SLOT`] for a modulator made before slots existed. Slots are
+    /// fixed: removing a modulator leaves its slot empty rather than shifting the others.
+    pub slot: u8,
 }
+
+/// The project's eight modulator slots.
+pub const PROJECT_SLOTS: usize = 8;
+/// A modulator with no project slot (legacy M1 data, or a graph fuller than eight).
+pub const NO_SLOT: u8 = 255;
 
 /// The project's modulation graph: every modulator, in creation order, and the counter that mints ids.
 ///
@@ -307,12 +470,47 @@ impl ModGraph {
         self.modulators.is_empty()
     }
 
-    /// Adds a modulator with a fresh id and no targets yet.
+    /// Adds a modulator with a fresh id, the lowest free project slot (or [`NO_SLOT`] when all eight are taken) and
+    /// no targets yet.
     pub fn add(&mut self, source: ModSource) -> ModulatorId {
+        let slot = self.free_slot().unwrap_or(NO_SLOT);
+        self.add_with_slot(source, slot)
+    }
+
+    /// Adds a modulator into project slot `slot` (`0..PROJECT_SLOTS`). `None` for a slot out of range or already
+    /// taken: a slot is a fixed place, not a list position.
+    pub fn add_in_slot(&mut self, slot: u8, source: ModSource) -> Option<ModulatorId> {
+        if usize::from(slot) >= PROJECT_SLOTS || self.modulator_at_slot(slot).is_some() {
+            return None;
+        }
+        Some(self.add_with_slot(source, slot))
+    }
+
+    fn add_with_slot(&mut self, source: ModSource, slot: u8) -> ModulatorId {
         let id = ModulatorId(self.next.max(1));
         self.next = id.0 + 1;
-        self.modulators.push(Modulator { id, name: String::new(), source, targets: Vec::new(), enabled: true });
+        let seed = if let ModSource::Random(r) = source { r.seed } else { 0 };
+        let source = match source {
+            // A seed of zero means "not drawn yet": give a new random modulator its own, saved with the project.
+            ModSource::Random(r) if seed == 0 => ModSource::Random(Random { seed: fresh_seed(id), ..r }),
+            other => other,
+        };
+        self.modulators.push(Modulator { id, name: String::new(), source, targets: Vec::new(), enabled: true, slot });
         id
+    }
+
+    /// The first free project slot, if any.
+    pub fn free_slot(&self) -> Option<u8> {
+        (0..PROJECT_SLOTS as u8).find(|s| self.modulator_at_slot(*s).is_none())
+    }
+
+    /// The modulator in project slot `slot`.
+    pub fn modulator_at_slot(&self, slot: u8) -> Option<&Modulator> {
+        self.modulators.iter().find(|m| m.slot == slot)
+    }
+
+    pub fn modulator_at_slot_mut(&mut self, slot: u8) -> Option<&mut Modulator> {
+        self.modulators.iter_mut().find(|m| m.slot == slot)
     }
 
     pub fn get(&self, id: ModulatorId) -> Option<&Modulator> {
@@ -550,6 +748,71 @@ mod tests {
         assert!(g.unassign(a, path));
         assert!(!g.unassign(a, path), "removing what is not assigned does nothing");
         assert_eq!(g.targets_on(path).len(), 1);
+    }
+
+    /// The eight project slots are fixed places: a modulator takes one, removing it leaves the slot empty, and a
+    /// ninth modulator has no slot. Switching tracks cannot move them because the graph is project state.
+    #[test]
+    fn eight_project_slots_are_fixed_places() {
+        assert_eq!(PROJECT_SLOTS, 8);
+        let mut g = ModGraph::default();
+        let a = g.add_in_slot(3, ModSource::Lfo(Lfo::default())).expect("slot 3 is free");
+        assert_eq!(g.get(a).map(|m| m.slot), Some(3));
+        assert!(g.add_in_slot(3, ModSource::default()).is_none(), "a taken slot is not reused");
+        assert_eq!(g.modulator_at_slot(3).map(|m| m.id), Some(a));
+        // `add` fills the lowest free slot, never one that is taken.
+        let b = g.add(ModSource::default());
+        assert_eq!(g.get(b).map(|m| m.slot), Some(0));
+        for _ in 0..6 {
+            g.add(ModSource::default());
+        }
+        assert_eq!(g.free_slot(), None);
+        let ninth = g.add(ModSource::default());
+        assert_eq!(g.get(ninth).map(|m| m.slot), Some(NO_SLOT), "a ninth modulator has no slot");
+        // Removing frees exactly that slot, and no other modulator moves.
+        g.remove(a);
+        assert_eq!(g.free_slot(), Some(3));
+        assert_eq!(g.get(b).map(|m| m.slot), Some(0));
+    }
+
+    /// A random modulator always carries a nonzero seed, saved with the graph; the same seed is kept on a reload.
+    #[test]
+    fn a_random_modulator_gets_a_persistent_seed() {
+        let mut g = ModGraph::default();
+        let id = g.add(ModSource::Random(Random::default()));
+        let seed = match g.get(id).map(|m| m.source) {
+            Some(ModSource::Random(r)) => r.seed,
+            _ => panic!("a random source"),
+        };
+        assert_ne!(seed, 0, "zero means no seed drawn yet");
+        let other = g.add(ModSource::Random(Random::default()));
+        let other_seed = match g.get(other).map(|m| m.source) {
+            Some(ModSource::Random(r)) => r.seed,
+            _ => panic!(),
+        };
+        assert_ne!(seed, other_seed, "two random modulators do not share a sequence");
+    }
+
+    /// A routing keeps its own enable switch: off is still assigned, and turning it back on restores the depth.
+    #[test]
+    fn a_routing_can_be_disabled_without_losing_its_depth() {
+        let path = track_path(0x0100);
+        let mut t = ModTarget::new(path).with_depth(0.5);
+        assert!(t.enabled);
+        t.enabled = false;
+        assert_eq!((t.depth, t.enabled), (0.5, false));
+        t.enabled = true;
+        assert_eq!(t.with_depth(t.depth).depth, 0.5);
+    }
+
+    /// The follower's band edges are the handoff's presets, and a custom band is clamped into the audible range.
+    #[test]
+    fn follower_bands_have_edges() {
+        assert_eq!(Band::Full.edges(), None);
+        assert_eq!(Band::Low.edges(), Some((20.0, 200.0)));
+        assert_eq!(Band::Mid.edges(), Some((200.0, 4000.0)));
+        assert_eq!(Band::High.edges(), Some((4000.0, 20000.0)));
+        assert_eq!(Band::Custom { low: 1.0, high: 99999.0 }.edges(), Some((20.0, 20000.0)));
     }
 
     #[test]

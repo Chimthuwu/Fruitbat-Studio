@@ -56,6 +56,7 @@ const PROJECT: &[(&str, Icon)] = &[
     ("Patterns", Icon::Note),
     ("Effects", Icon::Speaker),
     ("Generators", Icon::Plug),
+    ("Modulation", Icon::Wave),
     (REMOTE_CONTROL, Icon::MidiControl),
     (INITIALIZED_CONTROLS, Icon::Slide),
     (PROJECT_DATA, Icon::Folder),
@@ -112,6 +113,9 @@ pub enum Item {
     /// An entry of the undo history, 0 = "Last reset" (`History::entries`): a click goes back or forward to it; not
     /// draggable.
     History(usize),
+    /// One project-modulation routing (the handoff §7): its modulator, the assignment's persistent path, its depth and
+    /// whether that routing is on. The row carries its own state so the list needs no re-resolution to paint.
+    ModRouting(os_model::modulation::ModulatorId, os_model::modulation::ParameterPath, f32, bool),
     /// A plugin preset file (any `presets::IMPORT_EXTS` type) or factory preset path: dropped, it loads (spec:
     /// plugins/presets.md "Drag and drop").
     Preset(String),
@@ -434,6 +438,47 @@ fn project_rows(s: &State, root: &str, cat: u8, out: &mut Vec<Row>) {
                 }
             }
             // Hosted plugins open into their parameters (spec: plugins/plugin-parameters.md §6).
+            // The project's modulation graph, by modulator (the handoff §7). Every assignment is one row, carrying its
+            // own depth and switch so the inline controls edit it without resolving anything.
+            "Modulation" => {
+                for m in &s.modulation.modulators {
+                    let gkey = format!("{parent}/{}", m.id.0);
+                    let open = is_open(s, &gkey);
+                    let icon = if open { Icon::FolderOpen } else { Icon::Folder };
+                    out.push(Row {
+                        key: gkey.clone(),
+                        depth: 2,
+                        label: format!("{} ({})", crate::modulation::name_of(m), m.targets.len()),
+                        icon,
+                        cat,
+                        open: Some(open),
+                        bright: open,
+                        item: Item::None,
+                        path: None,
+                    });
+                    if !open {
+                        continue;
+                    }
+                    for t in &m.targets {
+                        let pk = match t.path.parameter {
+                            os_model::modulation::ParameterKey::LegacyPluginIndex(i) => u32::from(i),
+                            os_model::modulation::ParameterKey::PluginNativeId(n) => n,
+                            os_model::modulation::ParameterKey::HostParameterCode(c) => u32::from(c),
+                        };
+                        out.push(Row {
+                            key: format!("{gkey}/{}/{pk}", t.path.owner.0),
+                            depth: 3,
+                            label: crate::modulation::path_label(s, t.path),
+                            icon: Icon::Slide,
+                            cat,
+                            open: None,
+                            bright: t.enabled && m.enabled,
+                            item: Item::ModRouting(m.id, t.path, t.depth, t.enabled),
+                            path: None,
+                        });
+                    }
+                }
+            }
             "Generators" => {
                 for i in 0..p.channels.len() {
                     let label = channel_label(s, i).unwrap_or_default();
@@ -891,7 +936,26 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
             let sc = if hov || sel == Some(row.key.as_str()) { t.glyph } else { t.text_dim };
             icons::draw(ui.c, Icon::Star, Rect::new(bw - 19.0, y + 5.0, 13.0, 13.0), sc);
         }
-        let (f, w) = (os_ui::Font::new(17), bw - 1.0 - x - 27.0 - if fav { 16.0 } else { 0.0 });
+        // A routing row's inline controls (the handoff §7): depth (drag it), the routing's switch and its x.
+        let mod_row = match row.item {
+            Item::ModRouting(id, path, depth, enabled) => Some((id, path, depth, enabled)),
+            _ => None,
+        };
+        let reserve = if mod_row.is_some() { 104.0 } else { 27.0 + if fav { 16.0 } else { 0.0 } };
+        if let Some((id, path, depth, enabled)) = mod_row {
+            let dr = Rect::new(bw - 86.0, y, 42.0, ROW_H);
+            let dh = ui.hit(dr, Action::Mod(crate::modulation::ModAct::DepthDragPath(id, path)), "Drag up / down to set the depth");
+            let dc = if dh { t.glyph } else { t.text_dim };
+            ui.c.text_clip(os_ui::Font::new(14), dr.x, y + 2.0, dr.w, dc, &format!("{:+.0}%", depth * 100.0));
+            let cb = Rect::new(bw - 34.0, y + 4.0, 11.0, 11.0);
+            let ch = ui.hit(cb, Action::Mod(crate::modulation::ModAct::TargetEnabled(id, path, !enabled)), "Enable / disable this routing");
+            ui.c.fill_rrect(cb, 2.0, if enabled { Color::rgb(0x4a9eff).with_alpha(200) } else { t.sunken });
+            ui.c.stroke_rrect(cb, 2.0, 1.0, if ch { t.glyph } else { t.splitter_dark });
+            let xr = Rect::new(bw - 18.0, y + 1.0, 14.0, 14.0);
+            let xh = ui.hit(xr, Action::Mod(crate::modulation::ModAct::RemovePath(id, path)), "Remove this routing");
+            ui.c.text_clip(os_ui::Font::new(15), xr.x + 3.0, y, 12.0, if xh { t.glyph } else { t.text_faint }, "x");
+        }
+        let (f, w) = (os_ui::Font::new(17), bw - 1.0 - x - reserve);
         let over = ui.c.text_width(f, &row.label) - w;
         // Hovered, a label that does not fit scrolls (§9) rather than being cut.
         if hov && over > 0.0 {

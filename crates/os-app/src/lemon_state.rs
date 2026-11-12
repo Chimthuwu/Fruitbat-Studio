@@ -26,7 +26,9 @@ use os_model::modulation::{
 use std::collections::BTreeMap;
 
 /// The payload layout written (the first byte of each event). A reader ignores an event with a layout it does not know.
-const LAYOUT: u8 = 1;
+const LAYOUT: u8 = 2;
+/// The layout written before project slots, random follow shape edits and per-routing enable. Still read.
+const LAYOUT_1: u8 = 1;
 
 /// Icon owner kinds in [`lemon::ICONS`].
 const CHANNEL: u8 = 0;
@@ -178,6 +180,7 @@ fn write_graph(g: &ModGraph) -> Vec<u8> {
     for m in &g.modulators {
         b.extend_from_slice(&m.id.0.to_le_bytes());
         b.push(u8::from(m.enabled));
+        b.push(m.slot);
         let name = &m.name.as_bytes()[..m.name.len().min(usize::from(u16::MAX))];
         b.extend_from_slice(&(name.len() as u16).to_le_bytes());
         b.extend_from_slice(name);
@@ -187,6 +190,9 @@ fn write_graph(g: &ModGraph) -> Vec<u8> {
                 b.push(lfo_code(l.shape));
                 write_timebase(&mut b, l.period);
                 b.extend_from_slice(&l.phase.to_le_bytes());
+                b.extend_from_slice(&l.offset.to_le_bytes());
+                b.extend_from_slice(&l.amount.to_le_bytes());
+                b.push(u8::from(l.bipolar));
             }
             ModSource::Steps(st) => {
                 b.push(STEPS);
@@ -198,6 +204,37 @@ fn write_graph(g: &ModGraph) -> Vec<u8> {
                 b.push(ENVELOPE);
                 for v in [e.attack, e.decay, e.sustain, e.release] {
                     b.extend_from_slice(&v.to_le_bytes());
+                }
+            }
+            ModSource::Random(r) => {
+                b.push(RANDOM);
+                write_timebase(&mut b, r.period);
+                b.extend_from_slice(&r.amount.to_le_bytes());
+                b.push(u8::from(r.distribution == os_model::modulation::Distribution::Gaussian));
+                b.extend_from_slice(&r.smooth.to_le_bytes());
+                b.push(u8::from(r.interpolate));
+                b.push(u8::from(r.bipolar));
+                b.extend_from_slice(&r.seed.to_le_bytes());
+            }
+            ModSource::AudioFollower(f) => {
+                b.push(FOLLOWER);
+                // v1 has one source (master); the byte is the scope field for later track sources.
+                b.push(0);
+                for v in [f.amount, f.attack, f.release, f.gain_db] {
+                    b.extend_from_slice(&v.to_le_bytes());
+                }
+                b.push(u8::from(f.detection == os_model::modulation::Detection::Peak));
+                let (kind, low, high) = match f.band {
+                    os_model::modulation::Band::Full => (0u8, 0.0f32, 0.0f32),
+                    os_model::modulation::Band::Low => (1, 0.0, 0.0),
+                    os_model::modulation::Band::Mid => (2, 0.0, 0.0),
+                    os_model::modulation::Band::High => (3, 0.0, 0.0),
+                    os_model::modulation::Band::Custom { low, high } => (4, low, high),
+                };
+                b.push(kind);
+                if kind == 4 {
+                    b.extend_from_slice(&low.to_le_bytes());
+                    b.extend_from_slice(&high.to_le_bytes());
                 }
             }
         }
@@ -221,6 +258,7 @@ fn write_graph(g: &ModGraph) -> Vec<u8> {
             b.extend_from_slice(&t.depth.to_le_bytes());
             b.push(curve_code(t.curve));
             b.push(polarity_code(t.polarity));
+            b.push(u8::from(t.enabled));
         }
     }
     b
@@ -230,6 +268,8 @@ fn write_graph(g: &ModGraph) -> Vec<u8> {
 const LFO: u8 = 0;
 const STEPS: u8 = 1;
 const ENVELOPE: u8 = 2;
+const RANDOM: u8 = 3;
+const FOLLOWER: u8 = 4;
 
 /// A [`Timebase`] kind in [`write_graph`]: 0 hertz (f32), 1 synced (u16 sixteenths).
 const FREE: u8 = 0;
@@ -322,29 +362,40 @@ fn read_timebase(r: &mut Reader) -> Option<Timebase> {
 /// left out); `None` for an unrecognized layout or one too short to hold the counter.
 fn read_graph(d: &[u8]) -> Option<ModGraph> {
     let mut r = Reader(d);
-    if r.u8()? != LAYOUT {
+    let layout = r.u8()?;
+    if layout != LAYOUT && layout != LAYOUT_1 {
         return None;
     }
     let count = r.u32()? as usize;
     let next = r.u32()?;
-    let mut modulators = Vec::new();
-    for _ in 0..count {
-        let (Some(id), Some(enabled), Some(len)) = (r.u32(), r.u8(), r.u16()) else { break };
+    let mut modulators: Vec<Modulator> = Vec::new();
+    for index in 0..count {
+        let (Some(id), Some(enabled)) = (r.u32(), r.u8()) else { break };
+        // Layout 2 stores the fixed project slot; layout 1 had no slots, so the creation order is the only place it had.
+        let slot = if layout >= 2 {
+            let Some(slot) = r.u8() else { break };
+            slot
+        } else if index < os_model::modulation::PROJECT_SLOTS {
+            index as u8
+        } else {
+            os_model::modulation::NO_SLOT
+        };
+        let Some(len) = r.u16() else { break };
         let Some(name) = r.take(usize::from(len)) else { break };
         let Some(kind) = r.u8() else { break };
-        let Some(source) = read_source(&mut r, kind) else { break };
+        let Some(source) = read_source(&mut r, kind, layout) else { break };
         let Some(tcount) = r.u16() else { break };
         let mut targets = Vec::new();
         let mut cut = false;
         for _ in 0..tcount {
-            let Some(t) = read_target(&mut r) else {
+            let Some(t) = read_target(&mut r, layout) else {
                 cut = true;
                 break;
             };
             targets.push(t);
         }
         let name = String::from_utf8_lossy(name).into_owned();
-        modulators.push(Modulator { id: ModulatorId(id), name, source, targets, enabled: enabled != 0 });
+        modulators.push(Modulator { id: ModulatorId(id), name, source, targets, enabled: enabled != 0, slot });
         if cut {
             break;
         }
@@ -352,9 +403,16 @@ fn read_graph(d: &[u8]) -> Option<ModGraph> {
     Some(ModGraph { modulators, next })
 }
 
-fn read_source(r: &mut Reader, kind: u8) -> Option<ModSource> {
+fn read_source(r: &mut Reader, kind: u8, layout: u8) -> Option<ModSource> {
     Some(match kind {
-        LFO => ModSource::Lfo(Lfo { shape: lfo_shape(r.u8()?)?, period: read_timebase(r)?, phase: r.f32()? }),
+        LFO => {
+            let shape = lfo_shape(r.u8()?)?;
+            let period = read_timebase(r)?;
+            let phase = r.f32()?;
+            // Layout 1 ended the LFO here: it had no amount, offset or polarity of its own.
+            let (offset, amount, bipolar) = if layout >= 2 { (r.f32()?, r.f32()?, r.u8()? != 0) } else { (0.0, 1.0, true) };
+            ModSource::Lfo(Lfo { shape, period, phase, offset, amount, bipolar })
+        }
         STEPS => {
             let period = read_timebase(r)?;
             let smooth = r.u8()? != 0;
@@ -367,11 +425,38 @@ fn read_source(r: &mut Reader, kind: u8) -> Option<ModSource> {
         ENVELOPE => {
             ModSource::Envelope(Envelope { attack: r.f32()?, decay: r.f32()?, sustain: r.f32()?, release: r.f32()? })
         }
+        RANDOM => {
+            let period = read_timebase(r)?;
+            let amount = r.f32()?;
+            let distribution = if r.u8()? != 0 { os_model::modulation::Distribution::Gaussian } else { os_model::modulation::Distribution::Uniform };
+            let smooth = r.f32()?;
+            let interpolate = r.u8()? != 0;
+            let bipolar = r.u8()? != 0;
+            let seed = r.u64()?;
+            ModSource::Random(os_model::modulation::Random { period, amount, distribution, smooth, interpolate, seed, bipolar })
+        }
+        FOLLOWER => {
+            let _source = r.u8()?;
+            let amount = r.f32()?;
+            let attack = r.f32()?;
+            let release = r.f32()?;
+            let gain_db = r.f32()?;
+            let detection = if r.u8()? != 0 { os_model::modulation::Detection::Peak } else { os_model::modulation::Detection::Rms };
+            let band = match r.u8()? {
+                0 => os_model::modulation::Band::Full,
+                1 => os_model::modulation::Band::Low,
+                2 => os_model::modulation::Band::Mid,
+                3 => os_model::modulation::Band::High,
+                4 => os_model::modulation::Band::Custom { low: r.f32()?, high: r.f32()? },
+                _ => return None,
+            };
+            ModSource::AudioFollower(os_model::modulation::AudioFollower { source: os_model::modulation::FollowerSource::Master, amount, attack, release, gain_db, detection, band })
+        }
         _ => return None,
     })
 }
 
-fn read_target(r: &mut Reader) -> Option<ModTarget> {
+fn read_target(r: &mut Reader, layout: u8) -> Option<ModTarget> {
     let owner = PersistentObjectId(r.u32()?);
     let parameter = match r.u8()? {
         NATIVE_ID => ParameterKey::PluginNativeId(r.u32()?),
@@ -382,7 +467,9 @@ fn read_target(r: &mut Reader) -> Option<ModTarget> {
     let depth = r.f32()?;
     let curve = curve_of(r.u8()?)?;
     let polarity = polarity_of(r.u8()?)?;
-    Some(ModTarget { path: ParameterPath { owner, parameter }, depth, curve, polarity })
+    // A routing's own switch arrived in layout 2; before that every routing was on.
+    let enabled = if layout >= 2 { r.u8()? != 0 } else { true };
+    Some(ModTarget { path: ParameterPath { owner, parameter }, depth, curve, polarity, enabled })
 }
 
 /// Puts the state a `.lemon` file holds into `s` and `plugins` (a project just opened, its ids given). An FLP has
@@ -812,6 +899,10 @@ impl<'a> Reader<'a> {
         self.take(4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
 
+    fn u64(&mut self) -> Option<u64> {
+        self.take(8).map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
+    }
+
     fn f32(&mut self) -> Option<f32> {
         self.take(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
@@ -1170,7 +1261,8 @@ mod tests {
         app.save_to(path.clone());
         let mut file = os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap();
         let future = Event::new(240, Value::var([7, 7]));
-        let later = Event::new(lemon::PERFORMANCE, Value::var([2, 0]));
+        // A layout after this version's is left unread.
+        let later = Event::new(lemon::PERFORMANCE, Value::var([LAYOUT + 1, 0]));
         lemon::to_lemon(&mut file, &[future.clone(), later]).unwrap();
         std::fs::write(&path, file.to_bytes().unwrap()).unwrap();
         let mut back = App::new(None);
@@ -1251,7 +1343,7 @@ mod modulation_graph_tests {
     /// sequence driving a legacy positional parameter, and an envelope (off) driving a native plugin parameter.
     fn graph() -> ModGraph {
         let mut g = ModGraph::default();
-        let lfo = g.add(ModSource::Lfo(Lfo { shape: LfoShape::Triangle, period: Timebase::Sync(16), phase: 0.25 }));
+        let lfo = g.add(ModSource::Lfo(Lfo { shape: LfoShape::Triangle, period: Timebase::Sync(16), phase: 0.25, ..Lfo::default() }));
         g.get_mut(lfo).unwrap().name = "Wobble".into();
         g.assign(
             lfo,
@@ -1260,6 +1352,7 @@ mod modulation_graph_tests {
                 depth: -0.5,
                 curve: Curve::Exp,
                 polarity: Polarity::Unipolar,
+                enabled: true,
             },
         );
         let mut values = [0i8; 16];
@@ -1274,6 +1367,61 @@ mod modulation_graph_tests {
         g
     }
 
+    /// A layout-1 payload (before project slots, source amount/offset and per-routing enable) still loads: its
+    /// modulators take slots by creation order, every routing is on, and the LFO gets the old defaults.
+    #[test]
+    fn a_layout_one_graph_still_loads() {
+        // A payload written by layout 1: no slot byte, and the LFO without amount, offset or polarity.
+        let mut b = vec![LAYOUT_1];
+        b.extend_from_slice(&1u32.to_le_bytes()); // count
+        b.extend_from_slice(&2u32.to_le_bytes()); // next
+        b.extend_from_slice(&7u32.to_le_bytes()); // id
+        b.push(1); // enabled
+        b.extend_from_slice(&3u16.to_le_bytes());
+        b.extend_from_slice(b"Old");
+        b.push(LFO);
+        b.push(1); // triangle
+        write_timebase(&mut b, Timebase::Sync(4));
+        b.extend_from_slice(&0.25f32.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes()); // one target
+        b.extend_from_slice(&9u32.to_le_bytes()); // owner
+        b.push(HOST_CODE);
+        b.extend_from_slice(&0x0100u16.to_le_bytes());
+        b.extend_from_slice(&(-0.5f32).to_le_bytes());
+        b.push(0); // curve
+        b.push(1); // unipolar
+        let g = read_graph(&b).expect("layout 1 reads");
+        let m = g.get(ModulatorId(7)).expect("the modulator");
+        assert_eq!(m.slot, 0, "creation order is the only slot a layout-1 file had");
+        assert!(m.targets[0].enabled, "every routing was on before layout 2");
+        assert!(matches!(m.source, ModSource::Lfo(Lfo { offset: 0.0, amount, bipolar: true, .. }) if amount == 1.0));
+    }
+
+    /// Random and Audio Follower sources travel with their seed, distribution and band.
+    #[test]
+    fn the_new_sources_round_trip() {
+        let mut g = ModGraph::default();
+        let r = g.add(ModSource::Random(os_model::modulation::Random {
+            seed: 0xDEAD_BEEF_1234_5678,
+            distribution: os_model::modulation::Distribution::Gaussian,
+            smooth: 0.4,
+            interpolate: true,
+            ..os_model::modulation::Random::default()
+        }));
+        let f = g.add(ModSource::AudioFollower(os_model::modulation::AudioFollower {
+            attack: 0.02,
+            release: 0.3,
+            gain_db: 6.0,
+            detection: os_model::modulation::Detection::Peak,
+            band: os_model::modulation::Band::Custom { low: 120.0, high: 3500.0 },
+            ..os_model::modulation::AudioFollower::default()
+        }));
+        let back = read_graph(&write_graph(&g)).expect("round trip");
+        assert_eq!(back, g);
+        assert!(matches!(back.get(r).map(|m| m.source), Some(ModSource::Random(os_model::modulation::Random { seed: 0xDEAD_BEEF_1234_5678, .. }))));
+        assert!(back.get(f).is_some());
+    }
+
     /// The graph's event payload is its exact round trip; a layout this version does not know is ignored, and a
     /// payload cut anywhere still reads the modulators before the cut instead of panicking.
     #[test]
@@ -1283,7 +1431,7 @@ mod modulation_graph_tests {
         assert_eq!(read_graph(&bytes), Some(g.clone()));
         assert_eq!(lemon::MODULATION, 207, "after the identity registry's 206 (K.3)");
         assert!(read_graph(&[]).is_none());
-        assert!(read_graph(&[2, 0, 0, 0, 0]).is_none(), "a later layout is not read");
+        assert!(read_graph(&[3, 0, 0, 0, 0]).is_none(), "a later layout is not read");
         for n in 1..bytes.len() {
             if let Some(part) = read_graph(&bytes[..n]) {
                 assert!(part.modulators.len() <= 3, "a cut payload keeps at most what it held");

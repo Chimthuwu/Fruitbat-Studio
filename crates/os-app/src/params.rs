@@ -341,6 +341,28 @@ fn parameter_items(s: &State, param: Option<(usize, usize)>, create: Option<(u32
         link.mark = Mark::Check(linked);
     }
     v.extend(remote);
+    // The parameter side of the handoff's removal (§4.5): every project modulator driving this control, each with its
+    // own x. Removing one leaves the others alone. The section is absent on a control nothing drives.
+    if let Some((key, index)) = param {
+        if let Some(target) = target_of(s, key, index) {
+            let routings = crate::modulation::routings_on(s, target);
+            if !routings.is_empty() {
+                v.push(PItem::sep());
+                v.push(PItem::head("Modulation routings"));
+                for (id, depth, enabled) in routings {
+                    let name = s
+                        .modulation
+                        .get(id)
+                        .map(crate::modulation::name_of)
+                        .unwrap_or_else(|| format!("Modulator {}", id.0));
+                    v.push(
+                        PItem::new(format!("x {name}  {:+.0}%", depth * 100.0), Cmd::Mod(crate::modulation::ModCmd::Unassign(id, target)))
+                            .mark(Mark::Check(enabled)),
+                    );
+                }
+            }
+        }
+    }
     v.extend([
         PItem::head("Value"),
         copy,

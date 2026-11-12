@@ -466,6 +466,8 @@ fn chip_label(m: &os_model::modulation::Modulator) -> String {
         ModSource::Lfo(l) => crate::modulation::rate_text(l.period),
         ModSource::Steps(st) => crate::modulation::rate_text(st.period),
         ModSource::Envelope(_) => "env".to_string(),
+        ModSource::Random(r) => crate::modulation::rate_text(r.period),
+        ModSource::AudioFollower(_) => "follow".to_string(),
     };
     format!("{} · {short}", crate::modulation::name_of(m))
 }
@@ -1816,7 +1818,7 @@ mod tests {
         app.mouse_move(pan.cx(), pan.cy());
         app.mouse_up();
         assert_eq!(app.state.modulation.get(id).map(|m| m.targets.len()), Some(1), "dropped on the pan knob");
-        let heard = crate::modulation::engine_spec(&app.state, &app.plugins)[0].targets[0].target;
+        let heard = crate::modulation::engine_spec(&app.state, &app.plugins).0[0].targets[0].target;
         assert_eq!(heard, os_model::target::decode(os_model::target::mixer(2, os_model::target::MIXER_PAN)));
         // One step back takes the assignment away; the modulator stays.
         crate::playlist::run(&mut app, crate::playlist::Cmd::Undo);
