@@ -455,30 +455,34 @@ fn shade(c: Color, k: f32) -> Color {
 fn meter_body(ui: &mut Ui, s: &State, n: u16, meter: Rect, lemon: bool, ly: Option<&Ly>) {
     // Clicking the meter is clicking the strip; its right-click menu holds the scale and waveform options (§9).
     ui.hit(meter, Action::Mix(crate::mixer::MHit::Meter(n)), "Level meter (right click for its scale and waveforms)");
+    // The bars fill the slot, whatever width the layout gives it: the two channels split the inner width between
+    // them, so a wider lane is wider bars (and a narrower strip still shows both sides).
+    let inner = Rect::new(meter.x + 2.0, meter.y + 2.0, (meter.w - 4.0).max(4.0), meter.h - 4.0);
     if lemon {
         ui.c.fill_rrect(meter, lk::r_small(ui.t), ui.t.s(0x191d1e));
-        ui.c.fill_rrect(Rect::new(meter.x + 2.0, meter.y + 2.0, 12.0, meter.h - 4.0), 2.5, ui.t.s(0x232729));
+        ui.c.fill_rrect(inner, 2.5, ui.t.s(0x232729));
     } else {
         ui.c.fill_rrect(meter, 2.0, ui.t.s(0x191d1e));
-        ui.c.fill_rect(Rect::new(meter.x + 2.0, meter.y + 2.0, 11.0, meter.h - 4.0), ui.t.s(0x232729));
+        ui.c.fill_rect(inner, ui.t.s(0x232729));
     }
     if let Some(ly) = ly {
         for y in [181.0, 230.0, 278.0, 327.0, 375.0, 423.0] {
-            ui.c.fill_rect(Rect::new(meter.x + 3.0, ly.y(y), 9.0, 1.0), ui.t.s(0x111315));
+            ui.c.fill_rect(Rect::new(meter.x + 3.0, ly.y(y), (meter.w - 6.0).max(3.0), 1.0), ui.t.s(0x111315));
         }
     }
-    // Per-track peak meter (spec: ui/mixer.md §9): two 6 px bars on the same scale as the "C" column.
+    // Per-track peak meter (spec: ui/mixer.md §9): two bars on the same scale as the "C" column.
     ui.live(Live::Meter, meter);
     if s.mixer.waveforms {
-        wave(ui, s, n, Rect::new(meter.x + 2.0, meter.y + 2.0, 12.0, meter.h - 4.0));
+        wave(ui, s, n, inner);
     } else if let Some(m) = s.mixer.meters.get(usize::from(n)) {
         let cfg = &s.mixer.meter_cfg;
         let (top, bot) = (meter.y + 2.0, meter.bottom() - 2.0);
         let floor = cfg.v[meters::k::FLOOR_DB];
         let alt = crate::prefs::check(&crate::prefs::ALTERNATE_METER_SCALE);
         let ys = |db: f32| bot - meters::frac(db, floor, alt) * (bot - top);
+        let bw = ((inner.w - 1.0) / 2.0).max(2.0);
         for i in 0..2 {
-            meter_bar(ui, meter.x + 2.0 + 6.0 * i as f32, 6.0, bot, m.db[i], m.hold[i], cfg, &ys);
+            meter_bar(ui, inner.x + (bw + 1.0) * i as f32, bw, bot, m.db[i], m.hold[i], cfg, &ys);
         }
     }
 }
@@ -551,23 +555,114 @@ fn meter_bar(ui: &mut Ui, x: f32, w: f32, bottom: f32, db: f32, hold: f32, cfg: 
     }
 }
 
-/// Extra large (layout 7): one strip's plugin list, its ten effect slots as rows. A row opens its slot: the plugin's
-/// own window when it holds one, the palette when it is empty (the Michael Lane Edition's column). The rows share the
-/// room they are given, so all ten slots stay legible down to the mute / pan row.
+/// The effect rack's parts in a column `r`: the equaliser's graph at the top (when the column has the room for it — the
+/// tall Extra large rack does, a squeezed one does not) and the ten slot rows under it. Split out so the layout is
+/// testable without a canvas.
+fn rack_rows(r: Rect) -> (Option<Rect>, Vec<Rect>) {
+    let room = (r.h - 10.0).max(0.0);
+    // Ten rows at least 19 px tall come first; the graph only takes what is left over, so no slot is lost to it. Its
+    // height is fixed, not a share of the column, so Extra large and V2 start their slots at the same place.
+    let graph_h = if r.w >= 44.0 && room >= 234.0 { 56.0 } else { 0.0 };
+    let graph = (graph_h > 0.0).then(|| Rect::new(r.x + 2.0, r.y + 5.0, r.w - 4.0, graph_h));
+    let top = r.y + 5.0 + if graph_h > 0.0 { graph_h + 5.0 } else { 0.0 };
+    let rh = ((r.bottom() - 5.0 - top) / 10.0).clamp(15.0, 54.0);
+    let rows = (0..10).map(|i| Rect::new(r.x + 2.0, top + rh * i as f32, r.w - 4.0, rh - 2.0)).collect();
+    (graph, rows)
+}
+
+/// The strip's equaliser, drawn: the three bands' summed response over the frequency knob's range (10 Hz .. 16 kHz,
+/// ±18 dB) with a dot on each band's own frequency and gain. It is the same response the inspector's larger graph
+/// shows, computed from the track's real settings (`os_dsp::mixer::eq_response_db`), so a strip's tone reads without
+/// opening anything.
+fn eq_chart(ui: &mut Ui, s: &State, n: u16, r: Rect) {
+    let ink = ui.t.tx(0xc9cfd3);
+    ui.c.fill_rrect(r, 2.0, ui.t.s(0x101315));
+    ui.c.stroke_rrect(r, 2.0, 0.8, ui.t.s(0x2a2f31));
+    for k in [0.25, 0.75] {
+        let y = r.y + r.h * k;
+        ui.c.line(r.x + 1.0, y, r.right() - 1.0, y, 0.5, ui.t.s(0x23282b));
+    }
+    let zero = r.cy();
+    ui.c.line(r.x + 1.0, zero, r.right() - 1.0, zero, 0.8, ui.t.s(0x3a4145));
+    let Some(track) = s.project.mixer.iter().find(|m| m.index == n) else { return };
+    // The graph is a control, not a picture: a press grabs the band nearest the cursor and drags its gain and
+    // frequency (`MHit::StripEq`), the same drag the inspector's larger graph takes.
+    let hov = ui.hit(r.inset(1.0), Action::Mix(MHit::StripEq(n)), "Track equaliser: drag a band's dot to set its frequency and gain");
+    let settings = track.eq;
+    let half = (r.h / 2.0 - 2.0).max(1.0);
+    let steps = ((r.w - 2.0) as usize).clamp(8, 160);
+    let y_of = |db: f32| zero - (db / 18.0).clamp(-1.0, 1.0) * half;
+    let pts: Vec<(f32, f32)> = (0..=steps)
+        .map(|i| {
+            let p = i as f32 / steps as f32;
+            let hz = os_dsp::mixer::eq_frequency((p * 65536.0).round() as i32);
+            let db = os_dsp::mixer::eq_response_db(settings, 44100, f64::from(hz)) as f32;
+            (r.x + 1.0 + p * (r.w - 2.0), y_of(db))
+        })
+        .collect();
+    ui.c.push_clip(r.inset(1.0));
+    ui.c.polyline(&pts, 1.6, ink);
+    ui.c.pop_clip();
+    // A dot per band, where its own frequency and gain put it: the graph's three handles, without the handles.
+    for band in 0..3 {
+        let p = (settings[band][1].clamp(0, 65536) as f32 / 65536.0).clamp(0.0, 1.0);
+        let db = settings[band][0] as f32 / 100.0;
+        let (x, y) = (r.x + 1.0 + p * (r.w - 2.0), y_of(db));
+        // The dot under the cursor is the one a press would grab, so it lights up first.
+        let hot = hov && (ui.mouse.0 - x).abs() < 7.0;
+        ui.c.fill_circle(x, y, if hot { 3.6 } else { 2.2 }, ui.t.s(0x101315));
+        ui.c.fill_circle(x, y, if hot { 2.8 } else { 1.5 }, if hot { ui.t.tx(0xffffff) } else { ui.t.accent });
+    }
+}
+
+/// Extra large (layout 7): one strip's effect rack — the track's equaliser at the top, then its ten slots as rows in a
+/// recessed bay. A filled row carries the plugin's colour, its name (without the house's "Lemon" prefix, so a native
+/// effect fits) and its LED; an empty one is an intentional `+ Add effect` button that opens the palette for that slot.
 fn plugin_list(ui: &mut Ui, s: &State, n: u16, r: Rect) {
-    let rh = (r.h / 10.0).clamp(19.0, 60.0);
-    let rows = ((r.h / rh).round() as usize).clamp(1, 10);
-    for i in 0..rows {
+    if r.h < 22.0 {
+        return;
+    }
+    ui.c.fill_rrect(r, 3.0, ui.t.s(0x141719));
+    ui.c.stroke_rrect(r, 3.0, 1.0, ui.t.s(0x272b2d));
+    let track = s.project.mixer.iter().find(|m| m.index == n);
+    let (graph, slots) = rack_rows(r);
+    if let Some(g) = graph {
+        eq_chart(ui, s, n, g);
+    }
+    for (i, b) in slots.iter().copied().enumerate() {
         let k = i as u8;
-        let b = Rect::new(r.x, r.y + rh * i as f32, r.w, rh - 2.0);
-        let name = mx::slot_name(s, n, k).unwrap_or_else(|| format!("Slot {}", i + 1));
-        ui.c.fill_rrect(b, 2.0, ui.t.s(0x1f2224));
+        let filled = mx::slot_name(s, n, k);
+        let name = filled.as_deref().map(crate::plugins::slot_short).unwrap_or_else(|| "Add effect".to_string());
+        let hov = ui.hovering(b);
+        let hint = match &filled {
+            Some(full) => format!("{full}  (click for its window)"),
+            None => format!("Add an effect to slot {}", i + 1),
+        };
+        let face = if hov { ui.t.s(0x262b2d) } else if filled.is_some() { ui.t.s(0x1e2224) } else { ui.t.s(0x181b1d) };
+        ui.c.fill_rrect(b, 2.0, face);
         if let Some(c) = mx::slot_color(s, n, k) {
             ui.c.fill_rect(Rect::new(b.x + 2.0, b.y + 3.0, 2.0, b.h - 6.0), super::rgb(c));
         }
-        let f = if rh >= 25.0 { Font::new(12) } else { Font::new(11) };
-        ui.c.text_clip(f, b.x + 6.0, b.y + ((b.h - 13.0) * 0.5).max(2.0), b.w - 9.0, ui.t.tx(0xc9d0d4), &name);
-        ui.hit(b, Action::Mix(MHit::TrackSlot(n, k)), name);
+        let text_x = b.x + 7.0;
+        let text_w = (b.w - 20.0).max(8.0);
+        if filled.is_some() {
+            ui.c.stroke_rrect(b, 2.0, 0.8, ui.t.s(0x353a3c));
+            let f = if b.h >= 23.0 { Font::new(12) } else { Font::new(11) };
+            ui.c.text_clip(f, text_x, b.y + ((b.h - 13.0) * 0.5).max(1.0), text_w, ui.t.tx(0xc9d0d4), &name);
+            // Its LED at the row's right: on while the slot is on (the slot's own switch is in the inspector).
+            let on = track.is_none_or(|m| m.slot_on[i]);
+            ui.c.fill_circle(b.right() - 6.0, b.cy(), 2.2, if on { ui.t.h(0x8ec63a) } else { ui.t.s(0x2f3436) });
+        } else {
+            // A dashed bay with its plus: an empty slot reads as a place to put an effect.
+            ui.c.stroke_rrect(b, 2.0, 0.8, ui.t.h(0xf09a28).with_alpha(if hov { 160 } else { 55 }));
+            let mut g = Glyph::new();
+            let (px, py) = (b.x + 10.0, b.cy());
+            g.rect(px - 4.0, py - 0.7, 8.0, 1.4).rect(px - 0.7, py - 4.0, 1.4, 8.0);
+            ui.c.glyph(if hov { ui.t.tx(0xffffff) } else { ui.t.h(0xf09a28) }, &g);
+            let f = if b.h >= 23.0 { Font::new(11) } else { Font::new(10) };
+            ui.c.text_clip(f, text_x + 7.0, b.y + ((b.h - 12.0) * 0.5).max(1.0), text_w - 7.0, ui.t.s(0x8c9498), &name);
+        }
+        ui.hit(b, Action::Mix(MHit::TrackSlot(n, k)), hint);
     }
 }
 
@@ -644,43 +739,88 @@ fn console_label(ui: &mut Ui, row: Rect, frac: f32, span: f32, text: &str, ink: 
     ui.c.text_center(Font::new(9), Rect::new(row.x + row.w * frac, row.y + 2.0, row.w * span, 11.0), ink, text);
 }
 
-/// A section's knob: the chosen style's knob where a finish is on (`views::mixer_finish`), else Lemon's flat coloured
-/// cap with its cream pointer; `frac` across the row, its value written under it when the row is tall enough ("OUT" at
-/// zero, as the Edition reads).
+/// The mixer's knob family: a machined cap in a recessed well, a ring of graduations, a cream pointer and the value's
+/// arc around the rim in the control's own ink. One drawing for every parameter, so the console, the pan and the
+/// effect racks feel like the same hardware; `bipolar` arcs from twelve o'clock (pan, separation), `ink` distinguishes
+/// a section's control from its neighbours'.
+fn analog_knob(ui: &mut Ui, cx: f32, cy: f32, r: f32, value: f32, bipolar: bool, ink: Color, hov: bool) {
+    let t = ui.t;
+    let v = value.clamp(0.0, 1.0);
+    let start = 0.75 * PI;
+    let sweep = 1.5 * PI;
+    let a = start + sweep * v;
+    let (a0, a1) = if bipolar { (start + sweep / 2.0, a) } else { (start, a) };
+    // The well: a dark recess with a lit lower edge, so the cap sits in something.
+    ui.c.fill_circle(cx, cy + 0.9, r + 2.4, t.s(0x0b0d0e));
+    ui.c.fill_circle(cx, cy, r + 2.0, t.s(if hov { 0x22262a } else { 0x1c2023 }));
+    // Graduations around the sweep: ends brighter than the middle, as on a hardware scale.
+    let ticks = if r >= 9.0 { 11 } else { 7 };
+    for i in 0..ticks {
+        let ang = start + sweep * (i as f32 / (ticks - 1) as f32);
+        let (r0, r1) = (r + 0.6, r + 2.0);
+        let end = i == 0 || i + 1 == ticks;
+        let c = if end { t.s(0x6a7276) } else { t.s(0x454b4f) };
+        ui.c.line(cx + ang.cos() * r0, cy + ang.sin() * r0, cx + ang.cos() * r1, cy + ang.sin() * r1, 1.0, c);
+    }
+    // The cap: a dark disc with a brushed highlight along its top-left and a shadow under its edge.
+    ui.c.fill_circle(cx, cy, r, t.s(0x23272a));
+    ui.c.fill_circle(cx, cy - 0.6, (r - 1.0).max(1.0), if hov { t.s(0x52575a) } else { t.s(0x43484b) });
+    ui.c.fill_circle(cx, cy + r * 0.28, (r - 1.0).max(1.0), t.s(0x2c3033).with_alpha(120));
+    ui.c.arc(cx, cy, (r - 1.4).max(1.0), 1.15 * PI, 0.7 * PI, (r * 0.16).clamp(1.0, 2.2), t.tx(0xffffff).with_alpha(30));
+    // The pointer: cream, from a quarter of the cap to its edge.
+    let p0 = r * 0.28;
+    let p1 = (r - 1.5).max(1.0);
+    ui.c.line(cx + p0 * a.cos(), cy + p0 * a.sin(), cx + p1 * a.cos(), cy + p1 * a.sin(), (r * 0.22).clamp(1.2, 2.6), t.tx(0xf5efdc));
+    // The value's arc just outside the graduations, in the control's ink.
+    if (a1 - a0).abs() > 0.02 {
+        ui.c.arc(cx, cy, r + 2.6, a0.min(a1), (a1 - a0).abs(), 1.8, ink);
+    }
+}
+
+/// A thin ring just outside a knob showing how far the modulation graph drives it: the arc spans the depth either side
+/// of the knob's own value, so a driven control reads as driven without the knob itself pretending to move. Nothing is
+/// drawn for a control no enabled modulator drives (the ring is the graph's depth, not a decoration).
+fn mod_ring(ui: &mut Ui, cx: f32, cy: f32, r: f32, value: f32, depth: f32) {
+    let d = depth.abs().clamp(0.0, 1.0);
+    if d <= 0.001 {
+        return;
+    }
+    let start = 0.75 * PI;
+    let sweep = 1.5 * PI;
+    let a = start + sweep * value.clamp(0.0, 1.0);
+    let (lo, hi) = ((a - sweep * d).max(start), (a + sweep * d).min(start + sweep));
+    if hi - lo < 0.02 {
+        return;
+    }
+    ui.c.arc(cx, cy, r + 4.2, lo, hi - lo, 1.4, Color::rgb(0x5fb6f0).with_alpha(210));
+}
+
+/// A section's knob: the analog family's cap in its well, at the largest size its row allows; `frac` across the row,
+/// its value written under it when the row is tall enough ("OUT" at zero, as the Edition reads).
 fn console_knob(ui: &mut Ui, s: &State, row: Rect, frac: f32, id: KnobId, ink: Color, values: bool) {
-    let radius = (row.h * 0.22).min((row.h - 13.0) * 0.5).min(row.w * 0.19).clamp(3.0, 11.0);
+    let radius = (row.h * 0.32).min((row.h - 14.0) * 0.5).min(row.w * 0.26).clamp(4.0, 15.0);
     let cx = row.x + row.w * frac;
-    let cy = row.y + 10.0 + (row.h - 12.0) * 0.45;
+    let cy = row.y + 11.0 + (row.h - 13.0) * 0.46;
     ui.hit(
-        Rect::new(cx - radius - 3.0, row.y + 10.0, 2.0 * radius + 6.0, (row.h - 12.0).max(1.0)),
+        Rect::new(cx - radius - 4.0, row.y + 9.0, 2.0 * radius + 8.0, (row.h - 10.0).max(1.0)),
         Action::Knob(id),
         s.knob_text(id),
     );
-    let hov = ui.hovering(Rect::new(cx - radius, cy - radius, 2.0 * radius, 2.0 * radius));
+    let hov = ui.hovering(Rect::new(cx - radius - 2.0, cy - radius - 2.0, 2.0 * radius + 4.0, 2.0 * radius + 4.0));
     let value = s.knob(id);
     if crate::views::mixer_finish::Finish::current().on() {
         mixer_knob(ui, cx, cy, radius, radius + 2.5, value, Some(false));
     } else {
-        ui.c.fill_circle(cx, cy + 1.0, radius + 1.5, ui.t.s(0x141718));
-        ui.c.fill_circle(cx, cy, radius + 0.5, ink.mix(ui.t.s(0x202627), 0.35));
-        ui.c.fill_circle(cx, cy - 0.7, (radius - 1.2).max(1.0), ink.mix(ui.t.s(if hov { 0x6b7068 } else { 0x515550 }), 0.24));
-        let angle = (-225.0 + 270.0 * value) * PI / 180.0;
-        let tip = (cx + angle.cos() * (radius - 1.4), cy + angle.sin() * (radius - 1.4));
-        ui.c.polyline(
-            &[(cx + angle.cos() * radius * 0.25, cy + angle.sin() * radius * 0.25), tip],
-            1.8,
-            ui.t.tx(0xf3edd9),
-        );
+        analog_knob(ui, cx, cy, radius, value, false, ink, hov);
     }
-    if values && row.h >= 46.0 {
+    if values && row.h >= 40.0 {
         let text = s.knob_text(id);
         let read = if value == 0.0 { "OUT".to_string() } else { text.split(": ").nth(1).unwrap_or("").to_string() };
-        // The readout sits in its knob's half of the row, so it fits too in a narrow column (Extra large keeps the
-        // console in the strip's 55 px control column, where a fixed 36 px box would run over its neighbour).
-        let bw = (row.w * 0.5 - 2.0).min(36.0);
+        // The readout sits in its knob's half of the row, so it fits too in a narrow column.
+        let bw = (row.w * 0.5 - 2.0).min(40.0);
         let bx = (cx - bw * 0.5).clamp(row.x, row.right() - bw);
         let f = if bw < 30.0 { Font::new(8) } else { Font::new(9) };
-        ui.c.text_center(f, Rect::new(bx, row.y + row.h - 13.0, bw, 10.0), ui.t.tx(0xd7d4c6), &read);
+        ui.c.text_center(f, Rect::new(bx, row.y + row.h - 12.0, bw, 10.0), ui.t.tx(0xd7d4c6), &read);
     }
 }
 
@@ -1055,7 +1195,7 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
     let console = shown;
     let v2 = s.mixer.layout >= crate::mixer::EXTRA_LARGE_V2;
     let track_y1 = bottom - 99.0;
-    let meter = Rect::new(mx - 7.5, ly.y(METER_Y0), 16.0, ly.y(METER_Y1) - ly.y(METER_Y0));
+    let meter = Rect::new(mx - 8.5, ly.y(METER_Y0), 18.0, ly.y(METER_Y1) - ly.y(METER_Y0));
     if console {
         // Extra large keeps its plugin list column on the right, so the console takes the strip's 44 px control column.
         // Wide 2, Wide 3 and Wide alt are wide enough to keep the meter beside the console, as their narrow relatives
@@ -1063,10 +1203,12 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
         // gives it the whole strip.
         let beside = !extra
             && matches!(s.mixer.layout, crate::mixer::WIDE_2 | crate::mixer::WIDE_3 | crate::mixer::WIDE_ALT);
-        let sw = if extra { 55.0 } else { w - 2.0 - if beside { 18.0 } else { 0.0 } };
+        // Extra large's console gets a real control width — its section labels, keys and value readouts need it — and
+        // its plugin rack a column beside it; the wide layouts yield 20 px to the meter at the strip's right edge.
+        let sw = if extra { if v2 { 55.0 } else { 76.0_f32.min(w - 56.0) } } else { w - 3.0 - if beside { 20.0 } else { 0.0 } };
         console_panel(ui, s, n, Rect::new(left + 1.0, ly.y(PANEL_Y0) + 2.0, sw, (ly.y(METER_Y1) - ly.y(PANEL_Y0) - 4.0).max(24.0)));
         if beside {
-            let m = Rect::new(left + w - 17.0, ly.y(PANEL_Y0) + 2.0, 16.0, (ly.y(METER_Y1) - ly.y(PANEL_Y0) - 4.0).max(24.0));
+            let m = Rect::new(left + w - 21.0, ly.y(PANEL_Y0) + 2.0, 20.0, (ly.y(METER_Y1) - ly.y(PANEL_Y0) - 4.0).max(24.0));
             meter_body(ui, s, n, m, lemon, Some(ly));
         }
         // The console takes the meter's column, but a wide strip has room for the level elsewhere: Extra large puts it
@@ -1074,11 +1216,11 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
         // the list used to be.
         if extra {
             if v2 {
-                let m = Rect::new(left + 57.0, ly.y(PANEL_Y0) + 4.0, 16.0, (ly.y(METER_Y1) - ly.y(PANEL_Y0) - 8.0).max(24.0));
+                let m = Rect::new(left + 57.0, ly.y(PANEL_Y0) + 4.0, 20.0, (ly.y(METER_Y1) - ly.y(PANEL_Y0) - 8.0).max(24.0));
                 meter_body(ui, s, n, m, lemon, Some(ly));
             } else {
                 let top = ly.y(TRACK_Y0);
-                meter_body(ui, s, n, Rect::new(mx + 12.0, top, 16.0, (track_y1 - top).max(24.0)), lemon, None);
+                meter_body(ui, s, n, Rect::new(mx + 13.0, top, 22.0, (track_y1 - top).max(24.0)), lemon, None);
             }
         }
     } else {
@@ -1121,8 +1263,8 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
             let top = ly.y(PANEL_Y0) + 4.0;
             (top, (ly.y(LED_Y) - 12.0 - top).max(19.0))
         };
-        let (x, width) = if v2 { (left + 76.0, w - 80.0) } else { (left + 57.0, w - 61.0) };
-        plugin_list(ui, s, n, Rect::new(x, top, width.max(20.0), h));
+        let (x, width) = (left + 79.0, (w - 82.0).max(18.0));
+        plugin_list(ui, s, n, Rect::new(x, top, width, h));
     }
 
     let enabled = track.is_none_or(|m| m.enabled);
@@ -1131,6 +1273,9 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
     let pan = KnobId::MixPan(n);
     ui.hit(Rect::new(kx - 14.0, ly.y(PAN_Y) - 14.0, 28.0, 28.0), Action::Knob(pan), s.knob_text(pan));
     mixer_knob(ui, kx, ly.y(PAN_Y), 10.5, 15.0, s.knob(pan), Some(true));
+    if let Some(d) = crate::modulation::depth_on(s, os_model::target::mixer(n, os_model::target::MIXER_PAN)) {
+        mod_ring(ui, kx, ly.y(PAN_Y), 10.5, s.knob(pan), d);
+    }
 
     // Reverse polarity (⇕) and swap left / right (⇔) buttons, lit when on, then the separation knob (§4).
     // They keep their size and spacing below the fader's top at any mixer height (FL's short mixer stacks them the
@@ -1156,21 +1301,23 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
         let sep = KnobId::MixSep(n);
         ui.hit(Rect::new(sx - 9.0, ring_y - 9.0, 18.0, 18.0), Action::Knob(sep), s.knob_text(sep));
         mixer_knob(ui, sx, ring_y, 6.0, 9.5, s.knob(sep), Some(true));
+        if let Some(d) = crate::modulation::depth_on(s, os_model::target::mixer(n, os_model::target::MIXER_SEPARATION)) {
+            mod_ring(ui, sx, ring_y, 6.0, s.knob(sep), d);
+        }
     }
 
-    // Fader: track, gain marks, handle (green on the selected strip, with the track lit below it).
-    if lemon {
-        ui.c.fill_rrect(Rect::new(mx - 2.0, ly.y(TRACK_Y0), 4.0, track_y1 - ly.y(TRACK_Y0)), 2.0, ui.t.s(0x141618));
-    } else {
-        ui.c.fill_rect(Rect::new(mx - 1.5, ly.y(TRACK_Y0), 3.0, track_y1 - ly.y(TRACK_Y0)), ui.t.s(0x141618));
-    }
+    // Fader: a recessed 6 px channel with a darker groove down its middle, gain marks, and a handle that stands off
+    // the strip (green on the selected strip, with the track lit below it).
+    let track_y0 = ly.y(TRACK_Y0);
+    ui.c.fill_rrect(Rect::new(mx - 3.0, track_y0, 6.0, track_y1 - track_y0), 3.0, ui.t.s(0x101213));
+    ui.c.fill_rect(Rect::new(mx - 1.0, track_y0 + 2.0, 2.0, (track_y1 - track_y0 - 4.0).max(0.0)), ui.t.s(0x191b1d));
     fader_marks(ui, mx, track_y1, ly);
     let v = track.and_then(|m| m.volume).unwrap_or(0.8) as f32;
     // max/min, not clamp: a very short window gives track_y1 < ly.y(TRACK_Y0) (clamp would panic).
     let hy = (ly.y(HANDLE_0DB + (0.8 - v) * 440.0)).min(track_y1 - 5.0).max(ly.y(TRACK_Y0) + 5.0);
     if selected {
         if lemon {
-            ui.c.fill_rrect(Rect::new(mx - 1.5, hy, 3.0, track_y1 - hy), 1.5, t.accent);
+            ui.c.fill_rrect(Rect::new(mx - 1.25, hy, 2.5, track_y1 - hy), 1.25, t.accent);
         } else {
             ui.c.fill_rect(Rect::new(mx - 1.0, hy, 2.0, track_y1 - hy), ui.t.a(0x8ec63a));
         }
@@ -1259,15 +1406,15 @@ fn mixer_knob(ui: &mut Ui, cx: f32, cy: f32, r: f32, halo: f32, value: f32, arc:
     if finish.on() {
         return crate::views::mixer_finish::knob(ui, cx, cy, r, value, arc.unwrap_or(false), hov);
     }
-    let look = os_ui::kit::KnobLook::Mixer { halo, arc: arc.is_some() };
-    os_ui::kit::knob(ui.c, ui.t, cx, cy, r, value, arc.unwrap_or(false), look, os_ui::kit::State::hover(hov));
+    let _ = halo;
+    analog_knob(ui, cx, cy, r, value, arc.unwrap_or(false), ui.t.accent, hov);
 }
 
 /// Gain marks beside a fader track (spec: ui/mixer.md §5, measured from FL): 6 px ticks on both sides at 0, −6, −12 and
 /// −18 dB (2 px clear of the track), and faint 4 px rails between consecutive ticks (1 px clear of each tick). They
 /// belong to the track: the handle covers them as it moves.
 fn fader_marks(ui: &mut Ui, mx: f32, track_y1: f32, ly: &Ly) {
-    let ys: Vec<f32> = [0.0, -6.0, -12.0, -18.0]
+    let ys: Vec<f32> = [0.0, -3.0, -6.0, -9.0, -12.0, -15.0, -18.0, -24.0]
         .iter()
         .map(|&db| ly.y(HANDLE_0DB + (0.8 - fader_value(db)) * 440.0).floor())
         .filter(|&y| y < track_y1 - 1.0)
@@ -1291,12 +1438,29 @@ fn fader_value(db: f32) -> f32 {
     0.8 * (10.0 * 10f32.powf(db / 20.0) + 1.0).ln() / 11f32.ln()
 }
 
-/// Fader handle centred on (cx, cy): 14 × 23.
+/// Fader handle centred on (cx, cy): a 19 × 26 cap with three milled grooves and a centre line, seated in a recess —
+/// a physical fader's cap rather than a small slider. Green on the selected strip.
 fn fader_handle(ui: &mut Ui, cx: f32, cy: f32, selected: bool, hov: bool) {
     if crate::views::mixer_finish::Finish::current().on() {
         return crate::views::mixer_finish::fader(ui, cx, cy, selected, hov);
     }
-    os_ui::kit::fader_handle(ui.c, ui.t, cx, cy, selected, os_ui::kit::State::hover(hov));
+    let t = ui.t;
+    let h = Rect::new(cx - 9.0, cy - 12.5, 18.0, 25.0);
+    ui.c.fill_rrect(h.outset(1.5), 4.0, t.s(0x0c0e0f));
+    let (top, mid, low) = if selected {
+        (Color::rgb(0xc8f56e), Color::rgb(0x8fd236), Color::rgb(0x3f7a10))
+    } else if hov {
+        (t.s(0x7a7e81), t.s(0x55595c), t.s(0x2a2d30))
+    } else {
+        (t.s(0x6a6e71), t.s(0x46494c), t.s(0x222528))
+    };
+    ui.c.fill_rect_gradient(Rect::new(h.x, h.y, h.w, 12.0), top, mid, 3.0);
+    ui.c.fill_rect_gradient(Rect::new(h.x, h.y + 12.0, h.w, 13.0), mid.shade(-0.25), low, 3.0);
+    let groove = mid.shade(-0.45);
+    for k in 0..3 {
+        ui.c.fill_rect(Rect::new(h.x + 3.0, h.y + 4.5 + 3.5 * k as f32, h.w - 6.0, 1.0), groove);
+    }
+    ui.c.fill_rect(Rect::new(h.x, cy, h.w, 1.5), if selected { t.s(0x1f3d08) } else { t.s(0x151719) });
 }
 
 fn slot_panel(ui: &mut Ui, s: &State, r: Rect) {
@@ -1377,9 +1541,12 @@ fn slot_panel(ui: &mut Ui, s: &State, r: Rect) {
             ui.c.fill_rect(Rect::new(row.x + 3.0, row.y + 4.0 * kp, 3.0, row.h - 8.0 * kp), super::rgb(c));
         }
         chevron(ui, row.x + 10.0, row.cy(), true, if ha { ui.t.tx(0xffffff) } else { ui.t.tx(0xc4ccd0) });
+        // An empty slot asks for an effect: its whole row is the add button (the palette opens for that slot), so it
+        // says so instead of naming a blank, and its mix knob and LED stay out of the way until it holds something.
+        let empty = plugin.is_none();
         let (f, name, ink) = match &plugin {
-            Some(p) => (Font::new(fs), p.to_string(), ui.t.tx(0xc9d0d4)),
-            None => (Font::new(fs).italic(), format!("Slot {}", i + 1), ui.t.s(0x50575b)),
+            Some(p) => (Font::new(fs), crate::plugins::slot_short(p), ui.t.tx(0xc9d0d4)),
+            None => (Font::new(fs), "+  Add effect".to_string(), ui.t.s(0x7d858a)),
         };
         // Lemon centres the name's capitals on the row, level with the chevron, knob and LED: the baseline sits half a
         // cap height (the face's is about 0.72 of its size) under the middle, measured on the face drawn (the italic
@@ -1393,12 +1560,14 @@ fn slot_panel(ui: &mut Ui, s: &State, r: Rect) {
         }
         let lead = if icon.is_some() { (16.0 * kp.max(0.62)).round() } else { 0.0 };
         ui.c.text_clip(f, row.x + 19.0 + lead, ty, 140.0 - lead, ink, &name);
-        let mix = KnobId::SlotMix(n, k);
-        ui.hit(Rect::new(row.right() - 46.0, row.y, 26.0, row.h), Action::Knob(mix), s.knob_text(mix));
-        mixer_knob(ui, row.right() - 33.0, row.cy(), 10.5 * q, 12.0 * q, s.knob(mix), Some(false));
-        ui.c.stroke_circle(row.right() - 33.0, row.cy(), 11.8 * q, 1.5, ui.t.s(0x55595c));
-        ui.hit(Rect::new(row.right() - 18.0, row.y, 18.0, row.h), Action::Mix(MHit::SlotLed(k)), "Mute / solo  (ctrl)0..9");
-        led(ui, row.right() - 10.0, row.cy(), track.is_none_or(|m| m.slot_on[i]));
+        if !empty {
+            let mix = KnobId::SlotMix(n, k);
+            ui.hit(Rect::new(row.right() - 46.0, row.y, 26.0, row.h), Action::Knob(mix), s.knob_text(mix));
+            mixer_knob(ui, row.right() - 33.0, row.cy(), 10.5 * q, 12.0 * q, s.knob(mix), Some(false));
+            ui.c.stroke_circle(row.right() - 33.0, row.cy(), 11.8 * q, 1.5, ui.t.s(0x55595c));
+            ui.hit(Rect::new(row.right() - 18.0, row.y, 18.0, row.h), Action::Mix(MHit::SlotLed(k)), "Mute / solo  (ctrl)0..9");
+            led(ui, row.right() - 10.0, row.cy(), track.is_none_or(|m| m.slot_on[i]));
+        }
     }
     let sep = r.y + 61.0 + 330.0 * kp;
     ui.c.fill_rect(Rect::new(r.x, sep, r.w, 1.0), ui.t.s(0x1f2224));
@@ -1656,10 +1825,53 @@ mod tests {
             let m = rect(&app, Action::Mix(MHit::Meter(2))).expect("the strip's meter");
             let strip = rect(&app, Action::Mix(MHit::Strip(2))).expect("the strip");
             let console = rect(&app, Action::Mix(MHit::StripPower(2))).expect("the console");
-            assert_eq!(m.w, 16.0);
+            assert_eq!(m.w, 20.0);
             assert!((m.right() - (strip.right() - 1.0)).abs() < 2.0, "at the strip's right edge: {m:?} in {strip:?}");
             assert!(console.right() < m.x, "the console leaves it room: {console:?} {m:?}");
         }
+    }
+
+    /// Extra large's effect rack: every slot is a button of its own whether it holds a plugin or not, so an empty
+    /// channel always offers the add target — and a full ten-slot chain does not lose it.
+    #[test]
+    fn extra_large_slots_offer_the_add_button() {
+        let mut app = app();
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let ws = &mut app.state.wins[crate::app::Win::Mixer.slot().unwrap()];
+        (ws.maxed, ws.rect) = (false, os_ui::Rect::new(100.0, 83.0, 1400.0, 900.0));
+        app.state.z = vec![crate::app::Win::Mixer];
+        let has = |a: &App, want: Action| a.hits.iter().any(|h| h.action == want);
+        app.state.mixer.layout = crate::mixer::EXTRA_LARGE;
+        app.paint(&mut c, None);
+        for k in 0..10u8 {
+            assert!(has(&app, Action::Mix(MHit::TrackSlot(2, k))), "slot {} is a target", k + 1);
+        }
+        // The rows are not just targets: they are laid out down the strip, not stacked on one another.
+        let row = |k: u8| app.hits.iter().find(|h| h.action == Action::Mix(MHit::TrackSlot(2, k))).map(|h| h.rect).expect("a slot row");
+        assert!(row(0).y < row(1).y && row(1).y < row(9).y, "the slots follow one another");
+        assert!(row(0).h >= 15.0, "and each is tall enough to read and click: {}", row(0).h);
+        // The rack's equaliser is a control too: a press grabs the band nearest the cursor, and it is that strip's own
+        // bands (the first band is the low end, at the graph's left).
+        let graph = app.hits.iter().find(|h| h.action == Action::Mix(MHit::StripEq(2))).map(|h| h.rect).expect("the rack's equaliser");
+        assert!(graph.h >= 24.0, "with room to be dragged: {graph:?}");
+        assert_eq!(crate::mixer::eq_band_of(&app.state, 2, graph, graph.x + 2.0), 0);
+        assert_eq!(crate::mixer::eq_band_of(&app.state, 2, graph, graph.right() - 2.0), 2);
+    }
+
+    /// The effect rack gives its top to the track's equaliser and keeps all ten slots under it; a column too short for
+    /// both keeps the slots and drops the graph rather than squeezing a slot away.
+    #[test]
+    fn the_effect_rack_puts_its_eq_graph_above_the_slots() {
+        let tall = Rect::new(0.0, 0.0, 50.0, 430.0);
+        let (graph, rows) = rack_rows(tall);
+        let g = graph.expect("a tall column shows the equaliser");
+        assert_eq!(rows.len(), 10);
+        assert!(rows[0].y > g.bottom(), "the slots start under the graph");
+        assert!(rows[9].bottom() <= tall.bottom(), "and all ten still fit: {:?}", rows[9]);
+        let short = Rect::new(0.0, 0.0, 50.0, 210.0);
+        let (graph, rows) = rack_rows(short);
+        assert!(graph.is_none(), "no room for the graph");
+        assert!(rows.iter().all(|b| b.h >= 15.0));
     }
 
     /// The two Extra large layouts share their columns and both keep the plugin list up beside the console. V2 puts the

@@ -2089,6 +2089,13 @@ pub fn slot_label(name: &str) -> &str {
     }
 }
 
+/// What a mixer insert shows when its column is narrow: [`slot_label`] without the house prefix, so a native effect
+/// reads as "Parametric EQ" or "Delay" instead of "Lemon Parametric EQ" (the strip's rows fit a real name that way).
+pub fn slot_short(name: &str) -> String {
+    let label = slot_label(name);
+    label.strip_prefix("Lemon ").unwrap_or(label).to_string()
+}
+
 /// A new slot for effect `name`: what the project stores (Lemon Parametric EQ as the file's EQ with its default
 /// state, Pulp Filter as the file's Love Philter and Press as the file's Maximus with their starting states, so the file
 /// opens elsewhere; other effects by name).
@@ -3781,6 +3788,10 @@ mod tests {
         }
         assert!((peak - 0.398).abs() < 0.03, "+12 dB at the band (peak {peak})");
         assert_eq!(slot_label(EQ_FILE_NAME), LEMON_EQ);
+        // A mixer insert drops the house prefix, so a native effect's name fits the strip's row.
+        assert_eq!(slot_short(EQ_FILE_NAME), "Parametric EQ");
+        assert_eq!(slot_short("Lemon Delay"), "Delay");
+        assert_eq!(slot_short(TESLA), TESLA, "a name without the prefix is left alone");
         assert_eq!(new_slot(LEMON_EQ).name, EQ_FILE_NAME);
         assert_eq!(slot_label(LOVE_PHILTER_FILE_NAME), PULP_FILTER);
         assert_eq!(new_slot(PULP_FILTER).name, LOVE_PHILTER_FILE_NAME);

@@ -488,7 +488,8 @@ impl Engine {
                                 // A route without a level record is at unity (spec: flp/engine-events.md "The mixer").
                                 let level = m.send_levels.iter().find(|(d, _)| *d == r).map(|&(_, l)| l);
                                 let gain = level.map_or(1.0, |l| os_dsp::mixer::send_gain((l * 16000.0).round() as i32));
-                                Route { dest: usize::from(r), gain, glide: Glide::new(gain), pad: pdc::Pad::default() }
+                                let level = level.map_or(0.8, |l| l as f32);
+                                Route { dest: usize::from(r), level, gain, mod_level: None, glide: Glide::new(gain), pad: pdc::Pad::default() }
                             })
                             .collect()
                     };
@@ -503,6 +504,7 @@ impl Engine {
                         slots_enabled: m.slots_enabled,
                         threaded: m.threaded,
                         eq: os_dsp::mixer::TrackEq::new(m.eq, rate),
+                        eq_own: m.eq,
                         strip: os_dsp::strip::Strip::new(m.strip, m.strip_bypassed),
                         glitch: os_dsp::glitch::Glitch::new(os_dsp::glitch::Pattern { steps: m.glitch, amount: m.glitch_amount }),
                         glitch_style: m.glitch_style,
@@ -1843,16 +1845,17 @@ impl Engine {
             Target::MixerEq(t, band, field) => {
                 if let Some(m) = self.tracks.get_mut(usize::from(t)) {
                     let value = if field == 0 { ((2.0 * v - 1.0) * 1800.0).round_ties_even() } else { (65536.0 * v).round_ties_even() };
-                    m.eq.set(usize::from(band), usize::from(field), value as i32);
+                    m.set_eq(usize::from(band), usize::from(field), value as i32);
                 }
             }
             // A send's gain curve(single(v * 1.25)), gliding like the fader's gains. Only routes the project has
             // carry sound, so a value for a send without a route does nothing.
             Target::MixerSend(t, d) => {
                 if let Some(route) = self.tracks.get_mut(usize::from(t)).and_then(|m| m.routes.iter_mut().find(|r| r.dest == usize::from(d))) {
+                    route.level = v as f32;
                     route.gain = os_dsp::mixer::send_gain_auto(v);
                     if len == 0 {
-                        route.glide = Glide::new(route.gain);
+                        route.glide = Glide::new(route.effective());
                     }
                 }
             }
@@ -6751,7 +6754,7 @@ mod tests {
     #[test]
     fn a_tracks_inputs_count_in_track_order() {
         let mut tracks: Vec<MixTrack> = (0..5).map(|_| MixTrack::unity()).collect();
-        let route = |dest| Route { dest, gain: 0.0, glide: Glide::new(0.0), pad: pdc::Pad::default() };
+        let route = |dest| Route { dest, level: 0.0, gain: 0.0, mod_level: None, glide: Glide::new(0.0), pad: pdc::Pad::default() };
         tracks[4].routes = vec![route(1)];
         tracks[2].routes = vec![route(0), route(1)];
         assert_eq!([1, 2, 3].map(|k| input(&tracks, 1, k)), [Some(2), Some(4), Some(4)]);

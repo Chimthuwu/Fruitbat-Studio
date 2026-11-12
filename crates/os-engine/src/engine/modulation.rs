@@ -14,9 +14,11 @@
 //! [`DEFAULT_BASE`] halfway when nothing has. So a modulated knob still follows its automation, and a clip and a
 //! modulator on one parameter compose instead of fighting. Several modulators on one parameter add up.
 //!
-//! **What is driven.** Plugin parameters today — a channel's instrument ([`Target::ChannelParam`]) and a mixer slot's
-//! hosted effect ([`Target::SlotParam`]). A host parameter (a track's volume, pan, EQ or a send) decodes to a different
-//! `Target` and is left alone until the mixer path takes modulated values (the next slice).
+//! **What is driven.** Plugin parameters — a channel's instrument ([`Target::ChannelParam`]) and a mixer slot's hosted
+//! effect ([`Target::SlotParam`]) — through the parameter-event path, and a track's own mixer values (fader, pan,
+//! separation, equaliser, sends, a slot's mix level) through [`Engine::run_host_modulation`], each in the units the
+//! mixer reads it in. None of them loses its authored value: a modulation moves the base, so it never builds on itself
+//! and gives the value back when it goes.
 //!
 //! **Time.** A source follows the transport: `Sync` periods count the project's own sixteenths, `Free` ones seconds.
 //! The random LFO is a hash of its cycle number, so a render equals live playback and a seek lands on the same value.
@@ -204,7 +206,7 @@ pub(super) fn step_values(params: &mut ParamAuto, mods: &mut Modulation, pos: f6
     }
 }
 
-/// A mixer track's host parameters slice 2 drives.
+/// A mixer track's host parameters the mixer path drives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum HostParam {
     /// The fader, stored 0..16000 (unity 12800).
@@ -213,15 +215,23 @@ pub(super) enum HostParam {
     Pan,
     /// Stereo separation, stored -64..64.
     Separation,
+    /// Equaliser band and field: gain is stored ±1800, frequency and width 0..65536.
+    Eq(u8, u8),
+    /// A send's destination track; its level is 0..1 as automation speaks it (0.8 unity).
+    Send(u16),
+    /// A slot's mix level, stored 0..12800 (full wet).
+    SlotMix(u8),
 }
 
-/// The track and host parameter a target names, for the three the mixer path drives (a track's EQ, its sends and a
-/// slot's mix level are still to come).
+/// The track and host parameter a target names, or `None` for a target this path does not drive (a plugin parameter).
 fn host_target(target: Target) -> Option<(usize, HostParam)> {
     Some(match target {
         Target::MixerVolume(t) => (usize::from(t), HostParam::Volume),
         Target::MixerPan(t) => (usize::from(t), HostParam::Pan),
         Target::MixerSeparation(t) => (usize::from(t), HostParam::Separation),
+        Target::MixerEq(t, band, field) => (usize::from(t), HostParam::Eq(band, field)),
+        Target::MixerSend(t, d) => (usize::from(t), HostParam::Send(d)),
+        Target::SlotMix(t, k) => (usize::from(t), HostParam::SlotMix(k)),
         _ => return None,
     })
 }
@@ -237,6 +247,8 @@ impl Engine {
             if released {
                 m.matrix = m.compute_matrix();
             }
+            // The equaliser, the slots' mix levels and the sends go back to their authored values too.
+            m.release_modulation();
         }
     }
 
@@ -270,21 +282,21 @@ impl Engine {
                 (f64::from(m.pan) + 6400.0) / 12800.0,
                 (f64::from(m.sep) + 64.0) / 128.0,
             ];
+            let driven = |param: HostParam| offsets.iter().find(|(t, p, _)| *t == track && *p == param).map(|(_, _, by)| *by);
             let mut changed = false;
             for (i, param) in [HostParam::Volume, HostParam::Pan, HostParam::Separation].into_iter().enumerate() {
-                let driven = offsets.iter().find(|(t, p, _)| *t == track && *p == param).map(|(_, _, by)| *by);
-                let want = driven.map(|by| {
+                let want = driven(param).map(|by| {
                     let v = (base[i] + by).clamp(0.0, 1.0);
                     match param {
                         HostParam::Volume => (v * 16000.0).round() as i32,
                         HostParam::Pan => (v * 12800.0 - 6400.0).round() as i32,
-                        HostParam::Separation => (v * 128.0 - 64.0).round() as i32,
+                        _ => (v * 128.0 - 64.0).round() as i32,
                     }
                 });
                 let slot = match param {
                     HostParam::Volume => &mut m.mod_vol,
                     HostParam::Pan => &mut m.mod_pan,
-                    HostParam::Separation => &mut m.mod_sep,
+                    _ => &mut m.mod_sep,
                 };
                 if *slot != want {
                     *slot = want;
@@ -293,6 +305,48 @@ impl Engine {
             }
             if changed {
                 m.matrix = m.compute_matrix();
+            }
+            // The equaliser's nine fields, in the units the equaliser is stored in (the same encoding the automation
+            // path writes: gain ±1800, frequency and width 0..65536).
+            let mut eq_changed = false;
+            for band in 0..3usize {
+                for field in 0..3usize {
+                    let want = driven(HostParam::Eq(band as u8, field as u8)).map(|by| {
+                        let own = f64::from(m.eq_own[band][field]);
+                        let base = if field == 0 { (own / 1800.0 + 1.0) / 2.0 } else { own / 65536.0 };
+                        let v = (base + by).clamp(0.0, 1.0);
+                        if field == 0 { ((2.0 * v - 1.0) * 1800.0).round() as i32 } else { (65536.0 * v).round() as i32 }
+                    });
+                    if m.mod_eq[band][field] != want {
+                        m.mod_eq[band][field] = want;
+                        eq_changed = true;
+                    }
+                }
+            }
+            if eq_changed {
+                for band in 0..3 {
+                    for field in 0..3 {
+                        m.sync_eq(band, field);
+                    }
+                }
+            }
+            // A slot's mix level (0..12800): the effect keeps the value it reads, the authored one stays in `slot_mix`.
+            for k in 0..10usize {
+                let want = driven(HostParam::SlotMix(k as u8)).map(|by| {
+                    ((f64::from(m.slot_mix[k]) / 12800.0 + by).clamp(0.0, 1.0) * 12800.0).round() as i32
+                });
+                if m.mod_slot_mix[k] != want {
+                    m.mod_slot_mix[k] = want;
+                    let mix = want.unwrap_or(m.slot_mix[k]);
+                    for fx in m.effects.iter_mut().filter(|f| f.slot == k) {
+                        fx.mix = mix;
+                    }
+                }
+            }
+            // A send's level, in the 0..1 domain automation writes (0.8 is unity); its gain follows from it.
+            for route in &mut m.routes {
+                let by = driven(HostParam::Send(route.dest as u16));
+                route.mod_level = by.map(|by| (f64::from(route.level) + by).clamp(0.0, 1.0) as f32);
             }
         }
     }
@@ -617,5 +671,42 @@ mod tests {
         assert_eq!(e.tracks[1].mod_sep, Some(32), "and a twenty-eighth merged");
         assert_eq!((e.tracks[1].pan, e.tracks[1].sep), (0, 0), "the stored values stay");
         assert_eq!(e.tracks[2].mod_pan, None);
+    }
+
+    /// The equaliser, a send and a slot's mix level are host parameters too, each moved in its own stored units and
+    /// each giving its authored value back when the graph goes.
+    #[test]
+    fn modulation_drives_the_eq_a_send_and_a_slots_mix() {
+        let mut p = project(0);
+        p.mixer[1].routes.push(2);
+        p.mixer[1].send_levels.push((2, 0.4));
+        p.mixer[1].slot_mix[0] = 0.5;
+        let mut e = Engine::new(&p, &mut SampleLibrary::new(None), 48000, PlayMode::Pattern(1));
+        let steps = Steps { values: [100; 16], period: Timebase::Sync(1), smooth: false };
+        let target = |target| ModTarget { target, depth: 0.5, curve: Curve::Linear, polarity: Polarity::Bipolar };
+        e.set_modulation(vec![Modulator {
+            id: 1,
+            source: ModSource::Steps(steps),
+            enabled: true,
+            targets: vec![target(Target::MixerEq(1, 0, 0)), target(Target::MixerSend(1, 2)), target(Target::SlotMix(1, 0))],
+        }]);
+        run(&mut e, 1000, 1000);
+        assert_eq!(e.tracks[1].eq.settings(0)[0], 1800, "0 dB plus half the gain range is the top");
+        assert_eq!(e.tracks[1].eq_own[0][0], 0, "the authored gain is still the base");
+        assert_eq!(e.tracks[1].mod_slot_mix[0], Some(12800), "half wet plus half the range is full wet");
+        assert_eq!(e.tracks[1].slot_mix[0], 6400, "the stored mix level stays");
+        // A track always routes to the master; the send to track 2 is the second route.
+        let send = e.tracks[1].routes.iter().find(|r| r.dest == 2).expect("the send to track 2");
+        let level = send.mod_level.expect("the send is driven");
+        assert!((level - 0.9).abs() < 1e-6, "0.4 plus half the level range: {level}");
+        assert_eq!(send.level, 0.4, "the authored send level stays the base");
+        assert_eq!(e.tracks[1].routes[0].mod_level, None, "the master route is not driven");
+        assert_eq!(e.tracks[2].eq.settings(0)[0], 0, "another track's EQ is untouched");
+        // The graph goes: every one of them is back where it was.
+        e.set_modulation(Vec::new());
+        run(&mut e, 1000, 1000);
+        assert_eq!(e.tracks[1].eq.settings(0)[0], 0);
+        assert_eq!(e.tracks[1].mod_slot_mix[0], None);
+        assert_eq!(e.tracks[1].routes.iter().find(|r| r.dest == 2).and_then(|r| r.mod_level), None);
     }
 }

@@ -319,7 +319,7 @@ pub(crate) fn mix_track(lane: Lane, cx: &multicore::MixCx, s: &mut multicore::Mi
     }
     // Sends glide like the matrix gains; a route at 0 passes nothing.
     for route in &mut track.routes {
-        let mut ramp = route.glide.block(route.gain, frames, limit);
+        let mut ramp = route.glide.block(route.effective(), frames, limit);
         if route.pad.len() > 0 {
             // Delay compensation: the send's level, then its pad, which runs every tick (also at level 0).
             let padded = out.put(multicore::Dest::Track(route.dest));

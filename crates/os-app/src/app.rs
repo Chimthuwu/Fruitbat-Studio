@@ -5872,7 +5872,7 @@ impl App {
     /// Repaints the current track's equaliser: graph, faders and knobs (a change to one moves the others).
     fn damage_eq(&mut self) {
         use crate::{knobs::KnobId, mixer::MHit};
-        let eq = |a: &Action| matches!(a, Action::Knob(KnobId::Eq(..)) | Action::Mix(MHit::EqGraph));
+        let eq = |a: &Action| matches!(a, Action::Knob(KnobId::Eq(..)) | Action::Mix(MHit::EqGraph | MHit::StripEq(_)));
         match self.hits.iter().filter(|h| eq(&h.action)).map(|h| h.rect).reduce(|a, b| a.union(&b)) {
             Some(r) => self.damage_rect(r.outset(8.0)),
             None => self.invalidate(),
@@ -6332,6 +6332,9 @@ impl App {
         }
         if let (Some(Action::Mix(crate::mixer::MHit::EqGraph)), Some(g)) = (&hover, rect) {
             hint = Cow::Owned(crate::mixer::eq_graph_hint(&self.state, g, x));
+        }
+        if let (Some(Action::Mix(crate::mixer::MHit::StripEq(n))), Some(g)) = (&hover, rect) {
+            hint = Cow::Owned(crate::mixer::eq_hint_of(&self.state, *n, g, x));
         }
         let resize = matches!(hover, Some(Action::PianoNote(_)))
             && matches!(self.state.piano.tool, Tool::Draw | Tool::Paint | Tool::Select)
@@ -9160,6 +9163,18 @@ impl App {
                 }
             }
             Action::SongInfo => self.close_song_info(),
+            // A strip's own equaliser graph (the top of the Extra large rack): the same drag as the inspector's graph,
+            // on that strip's track and bands.
+            Action::Mix(crate::mixer::MHit::StripEq(n)) => {
+                if let Some(g) = self.top_hit(self.mouse.0, self.mouse.1).map(|h| h.rect) {
+                    let band = crate::mixer::eq_band_of(&self.state, n, g, self.mouse.0);
+                    crate::mixer::select(&mut self.state, n, false);
+                    crate::control::edit_press(&mut self.state, "Mixer track equalizer", crate::control::command::Region::Track(n));
+                    self.drag = Some(Drag::EqGraph { track: n, band, g });
+                    crate::mixer::eq_graph_drag(&mut self.state, n, band, g, self.mouse);
+                    self.damage_eq();
+                }
+            }
             Action::Mix(crate::mixer::MHit::EqGraph) => {
                 if let Some(g) = self.top_hit(self.mouse.0, self.mouse.1).map(|h| h.rect) {
                     let (track, band) = (self.state.selected_mixer, crate::mixer::eq_band_at(&self.state, g, self.mouse.0));

@@ -139,6 +139,10 @@ const OTT_MID: f32 = 2_500.0;
 /// The level the OTT works around, and how far its upward half lifts at the depth's full setting.
 const OTT_THRESHOLD: f32 = -30.0;
 const OTT_LIFT: f32 = 18.0;
+/// The soft knee around the threshold, in dB: nothing 3 dB under it, the full ratio 3 dB over.
+const OTT_KNEE: f32 = 6.0;
+/// The most one band is ever taken down, in dB, even at the knob's full setting: OTT's dirt without its damage.
+const OTT_DROP: f32 = 12.0;
 
 /// Each band's share of the depth: the mids and highs carry OTT's character, the low end only a little.
 const OTT_WEIGHT: [f32; 3] = [0.6, 1.0, 0.85];
@@ -148,8 +152,10 @@ const OTT_WEIGHT: [f32; 3] = [0.6, 1.0, 0.85];
 ///
 /// The signal is split at 250 Hz and 2.5 kHz by cascaded one-poles, so the three bands add back up to what came in. Each
 /// band's level is followed on the mean power of both channels (5 ms in, 120 ms out) and given one gain: above -30 dB it
-/// goes down 8:1, below it comes up 4:1 and no further than +18 dB. The depth scales all of it and doubles as the dry /
-/// wet mix, so a small setting only leans on the signal. Word 3 is the depth (0 = off) and glides over 20 ms both ways.
+/// goes down 8:1, below it comes up 5:1 and no further than +18 dB. The depth scales all of it at once, so a small
+/// setting only leans on the signal and the bottom of the range is a true bypass rather than a dry / wet mix; the
+/// downward half also carries a 12 dB ceiling so the section stays musical at 100 %. Word 3 is the depth (0 = off) and
+/// glides over 20 ms both ways.
 pub struct Ott {
     /// Per channel the two crossovers' one-pole states, `[low × 2, mid × 2]`.
     lp: [[f32; 4]; 2],
@@ -238,19 +244,25 @@ impl Ott {
             self.env[i] += (power - self.env[i]) * coef;
             let db = 10.0 * (self.env[i] + 1e-20).log10();
             let over = db - OTT_THRESHOLD;
-            // OTT's two halves: 8:1 down above the threshold, 4:1 up below it, and the up side has a ceiling.
-            let down = over.max(0.0) * 0.875;
-            let up = ((-over).max(0.0) * 0.75).min(OTT_LIFT);
+            // A soft knee around the threshold: none of the ratio reaches 3 dB under the line, all of it 3 dB over,
+            // so the section leans on a mix instead of biting at the corner.
+            let soft = {
+                let x = ((over + OTT_KNEE * 0.5) / OTT_KNEE).clamp(0.0, 1.0);
+                x * x * (3.0 - 2.0 * x)
+            };
+            // OTT's two halves: 8:1 down above the threshold, 5:1 up below it, each with its own ceiling.
+            let down = (over.max(0.0) * 0.875 * soft).min(OTT_DROP);
+            let up = ((-over).max(0.0) * 0.8).min(OTT_LIFT);
             let wanted = 10f32.powf((up - down) * OTT_WEIGHT[i] * amount / 20.0);
             let g = &mut self.gain[i];
             let response = if wanted < *g { b.attack } else { b.release };
             *g += (wanted - *g) * response;
         }
+        // All of the signal is the processed one: the amount is not a dry / wet mix, it is the depth of both halves
+        // in dB. At zero every gain lands on 1, so the section is sample-for-sample transparent on its own.
         let mut out = [0.0; 2];
         for ch in 0..2 {
-            let dry = input[ch];
-            let wet = bands[ch][0] * self.gain[0] + bands[ch][1] * self.gain[1] + bands[ch][2] * self.gain[2];
-            out[ch] = dry + (wet - dry) * amount;
+            out[ch] = bands[ch][0] * self.gain[0] + bands[ch][1] * self.gain[1] + bands[ch][2] * self.gain[2];
         }
         out
     }
@@ -1359,6 +1371,35 @@ mod tests {
         };
         let (a, b) = (level(0.3), level(1.0));
         assert!(b > a, "more depth lifts more: {b} of {a}");
+    }
+
+    /// A small amount only leans on the signal: the bottom of the knob's range is a gentle setting, not an on / off
+    /// switch, and what it does is still the compressor's own gain, not a level trim.
+    #[test]
+    fn a_small_ott_amount_leaves_the_signal_nearly_alone() {
+        let dry = sine(1_000.0, BLOCK * 2 * 40);
+        let level = rms(&dry[dry.len() - BLOCK * 2..]);
+        let mut s = ott_strip(0.05);
+        let mut buf = dry.clone();
+        run(&mut s, &mut buf);
+        let out = rms(&buf[buf.len() - BLOCK * 2..]);
+        let db = 20.0 * (out / level).log10();
+        assert!(db.abs() < 1.0, "within a dB of the input: {db} dB");
+        assert!(buf.iter().all(|x| x.is_finite()));
+    }
+
+    /// The downward half carries a ceiling, so the knob's full setting presses on a band without crushing it flat.
+    #[test]
+    fn the_ott_never_takes_a_band_down_more_than_its_ceiling() {
+        let dry = sine(1_000.0, BLOCK * 2 * 40);
+        let level = rms(&dry[dry.len() - BLOCK * 2..]);
+        let mut s = ott_strip(1.0);
+        let mut buf = dry.clone();
+        run(&mut s, &mut buf);
+        let out = rms(&buf[buf.len() - BLOCK * 2..]);
+        let db = 20.0 * (out / level).log10();
+        assert!(db < -3.0, "it does compress: {db} dB");
+        assert!(db > -14.0, "but not into the floor: {db} dB");
     }
 
     /// The drive's words and their values round trip.

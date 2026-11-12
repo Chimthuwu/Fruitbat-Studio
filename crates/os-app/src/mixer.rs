@@ -76,6 +76,9 @@ pub enum MHit {
     Scale,
     /// The current track's equaliser graph: a press grabs the band nearest the cursor's frequency.
     EqGraph,
+    /// A strip's own equaliser graph (the one at the top of the Extra large rack, `.0`: the track): the same drag as
+    /// the inspector's graph, on that strip's own bands.
+    StripEq(u16),
     /// The current track's record-source icon, input combo and output combo (spec: audio/track-io.md §1.1).
     RecSource,
     Input,
@@ -952,7 +955,7 @@ pub fn hit(app: &mut App, h: MHit) -> Option<String> {
             }
             None
         }
-        MHit::Scale | MHit::EqGraph => None,
+        MHit::Scale | MHit::EqGraph | MHit::StripEq(_) => None,
     }
 }
 
@@ -1182,17 +1185,28 @@ pub fn eq_graph_db(g: os_ui::Rect, y: f32) -> f32 {
     ((g.cy() - y) / (g.h / 2.0 - 4.0) * 18.0).clamp(-18.0, 18.0)
 }
 
-/// The band of the current track a press at `x` tweaks: the one whose frequency is nearest.
-pub fn eq_band_at(s: &State, g: os_ui::Rect, x: f32) -> u8 {
-    let (t, p) = (s.selected_mixer, eq_graph_pos(g, x));
+/// The band of track `t` a press at `x` tweaks: the one whose frequency is nearest. A strip's own graph passes its
+/// track, so it drags that strip's bands and not the selected track's.
+pub fn eq_band_of(s: &State, t: u16, g: os_ui::Rect, x: f32) -> u8 {
+    let p = eq_graph_pos(g, x);
     let dist = |b: u8| (s.knob(KnobId::Eq(t, b, 1)) - p).abs();
     (0..3).min_by(|&a, &b| dist(a).total_cmp(&dist(b))).unwrap_or(0)
 }
 
-/// The graph's hint at `x`: "1278Hz  Tweak band 2" (spec: ui/mixer.md §8).
-pub fn eq_graph_hint(s: &State, g: os_ui::Rect, x: f32) -> String {
+/// The band of the current track a press at `x` tweaks: the one whose frequency is nearest.
+pub fn eq_band_at(s: &State, g: os_ui::Rect, x: f32) -> u8 {
+    eq_band_of(s, s.selected_mixer, g, x)
+}
+
+/// Track `t`'s graph hint at `x`: "1278Hz  Tweak band 2" (spec: ui/mixer.md §8).
+pub fn eq_hint_of(s: &State, t: u16, g: os_ui::Rect, x: f32) -> String {
     let hz = os_dsp::mixer::eq_frequency((eq_graph_pos(g, x) * 65536.0).round() as i32);
-    format!("{hz:.0}Hz  Tweak band {}", eq_band_at(s, g, x) + 1)
+    format!("{hz:.0}Hz  Tweak band {}", eq_band_of(s, t, g, x) + 1)
+}
+
+/// The graph's hint at `x`, for the current track.
+pub fn eq_graph_hint(s: &State, g: os_ui::Rect, x: f32) -> String {
+    eq_hint_of(s, s.selected_mixer, g, x)
 }
 
 /// Dragging on the graph: band `band` of track `t` moves to the cursor, its frequency across and its gain up and down.

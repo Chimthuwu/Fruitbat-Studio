@@ -21,6 +21,13 @@ pub(crate) struct MixTrack {
     pub(crate) mod_vol: Option<i32>,
     pub(crate) mod_pan: Option<i32>,
     pub(crate) mod_sep: Option<i32>,
+    /// The equaliser's authored (or automated) settings and what modulation holds each field at, in the EQ's stored
+    /// units (gain ±1800, frequency and width 0..65536): the EQ runs at the modulated value while one is set and at
+    /// the authored one again when it is not (M1b, slice 2b).
+    pub(crate) eq_own: [[i32; 3]; 3],
+    pub(crate) mod_eq: [[Option<i32>; 3]; 3],
+    /// What modulation holds each slot's mix level (0..12800) at; `None` leaves the authored level.
+    pub(crate) mod_slot_mix: [Option<i32>; 10],
     pub(crate) on: bool,
     /// The project's panning law (event 23), for the pan in the matrix.
     pub(crate) law: laws::PanLaw,
@@ -120,7 +127,11 @@ pub(crate) struct Stored {
 /// A send to another track: its gain and the gain as it glides there (spec: audio/mixer.md "Sends", "Gains ramp").
 pub(crate) struct Route {
     pub(crate) dest: usize,
+    /// The authored (or automated) level, 0..1 in the domain automation speaks (0.8 is unity), and the gain it makes.
+    pub(crate) level: f32,
     pub(crate) gain: f32,
+    /// The level modulation holds it at; the send reads [`Route::effective`], so the authored level stays the base.
+    pub(crate) mod_level: Option<f32>,
     pub(crate) glide: Glide,
     /// Delay compensation: the send, after its level, waits here for the latest path into `dest`.
     pub(crate) pad: pdc::Pad,
@@ -155,6 +166,16 @@ pub(crate) struct FxSlot {
     pub(crate) ports: [usize; 2],
     pub(crate) main: Option<usize>,
     pub(crate) main_pad: pdc::Pad,
+}
+
+impl Route {
+    /// The gain the send runs at: the modulated level while the graph drives it, the authored one otherwise.
+    pub(crate) fn effective(&self) -> f32 {
+        match self.mod_level {
+            Some(l) => os_dsp::mixer::send_gain_auto(f64::from(l)),
+            None => self.gain,
+        }
+    }
 }
 
 impl FxSlot {
@@ -212,6 +233,9 @@ impl MixTrack {
             mod_vol: None,
             mod_pan: None,
             mod_sep: None,
+            eq_own: os_dsp::mixer::EQ_DEFAULT,
+            mod_eq: [[None; 3]; 3],
+            mod_slot_mix: [None; 10],
             on: true,
             law: laws::PanLaw::Circular,
             swap: false,
@@ -258,7 +282,7 @@ impl MixTrack {
             eq: [0, 1, 2].map(|b| self.eq.settings(b)),
             slot_on: self.slot_on,
             slot_mix: self.slot_mix,
-            sends: self.routes.iter().map(|r| r.gain).collect(),
+            sends: self.routes.iter().map(|r| r.level).collect(),
         };
     }
 
@@ -270,10 +294,12 @@ impl MixTrack {
         (self.vol, self.pan, self.sep) = (s.vol, s.pan, s.sep);
         // A modulation is not one of the stored settings: it is worked out again from where playback starts.
         (self.mod_vol, self.mod_pan, self.mod_sep) = (None, None, None);
+        self.mod_eq = [[None; 3]; 3];
+        self.mod_slot_mix = [None; 10];
         for (b, band) in s.eq.iter().enumerate() {
             for (f, &v) in band.iter().enumerate() {
-                if self.eq.settings(b)[f] != v {
-                    self.eq.set(b, f, v);
+                if self.eq_own[b][f] != v {
+                    self.set_eq(b, f, v);
                 }
             }
         }
@@ -281,8 +307,10 @@ impl MixTrack {
             self.set_slot_on(k, s.slot_on[k]);
             self.set_slot_mix(k, s.slot_mix[k]);
         }
-        for (r, &g) in self.routes.iter_mut().zip(&s.sends) {
-            r.gain = g;
+        for (r, &l) in self.routes.iter_mut().zip(&s.sends) {
+            r.level = l;
+            r.gain = os_dsp::mixer::send_gain_auto(f64::from(l));
+            r.mod_level = None;
         }
         self.matrix = self.compute_matrix();
         if settle {
@@ -297,7 +325,7 @@ impl MixTrack {
             fx.dry = Glide::new(os_dsp::mixer::dry_level(fx.mix));
         }
         for r in &mut self.routes {
-            r.glide = Glide::new(r.gain);
+            r.glide = Glide::new(r.effective());
         }
     }
 
@@ -314,10 +342,55 @@ impl MixTrack {
 
     /// Slot `slot`'s stored mix level (0..12800); its dry level glides there.
     pub(crate) fn set_slot_mix(&mut self, slot: usize, mix: i32) {
-        let Some(m) = self.slot_mix.get_mut(slot) else { return };
-        *m = mix;
+        let Some(authored) = self.slot_mix.get_mut(slot) else { return };
+        *authored = mix;
+        let effective = self.mod_slot_mix.get(slot).copied().flatten().unwrap_or(mix);
         for fx in self.effects.iter_mut().filter(|f| f.slot == slot) {
-            fx.mix = mix;
+            fx.mix = effective;
+        }
+    }
+
+    /// Band `band`'s field `field` as authored / automated: the base a modulation moves from. The equaliser then runs
+    /// at the modulated value for that field while there is one (M1b, slice 2b).
+    pub(crate) fn set_eq(&mut self, band: usize, field: usize, value: i32) {
+        let Some(own) = self.eq_own.get_mut(band).and_then(|b| b.get_mut(field)) else { return };
+        *own = value;
+        self.sync_eq(band, field);
+    }
+
+    /// Writes band `band`'s field `field` into the equaliser at its effective value: the modulated one while the graph
+    /// drives it, the authored one otherwise.
+    pub(crate) fn sync_eq(&mut self, band: usize, field: usize) {
+        let Some(base) = self.eq_own.get(band).and_then(|b| b.get(field)).copied() else { return };
+        let value = self.mod_eq.get(band).and_then(|b| b.get(field)).copied().flatten().unwrap_or(base);
+        if self.eq.settings(band)[field] != value {
+            self.eq.set(band, field, value);
+        }
+    }
+
+    /// Gives every host parameter modulation touched back to its authored value (the graph went, or playback starts
+    /// elsewhere): the EQ writes its own settings again, the slots their stored mix levels, the sends their levels.
+    pub(crate) fn release_modulation(&mut self) {
+        let (eq, slots, sends) = (self.mod_eq, self.mod_slot_mix, self.routes.iter().any(|r| r.mod_level.is_some()));
+        self.mod_eq = [[None; 3]; 3];
+        if eq.iter().flatten().any(Option::is_some) {
+            for band in 0..3 {
+                for field in 0..3 {
+                    self.sync_eq(band, field);
+                }
+            }
+        }
+        self.mod_slot_mix = [None; 10];
+        if slots.iter().any(Option::is_some) {
+            let mixes = self.slot_mix;
+            for (k, &mix) in mixes.iter().enumerate() {
+                self.set_slot_mix(k, mix);
+            }
+        }
+        if sends {
+            for r in &mut self.routes {
+                r.mod_level = None;
+            }
         }
     }
 
