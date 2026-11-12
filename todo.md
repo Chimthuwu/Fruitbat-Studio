@@ -82,8 +82,14 @@
       up. No FLP `Target` byte changes. Tests: shapes and curves, envelope, steps, random repeatability, an LFO swinging
       a parameter between 0 and 1, a modulator riding an automation ramp, and a disabled modulator or a host-parameter
       target sending nothing (os-engine 380 + os-app 1199 green).
-- [ ] **M1b, slice 2 — host parameters**: a track's volume, pan, EQ and sends (`Target::MixerVolume` and friends) are
-      decoded but not driven yet; the mixer path needs to take the modulated value where it takes the fader's.
+- [x] **M1b, slice 2 — host parameters: a track's fader, pan and separation** (2026-11-12): `Engine::run_host_modulation`
+      samples an enabled modulator once a tick for `Target::MixerVolume` / `MixerPan` / `MixerSeparation` and holds the
+      result in `MixTrack::mod_vol` / `mod_pan` / `mod_sep`; the authored (or automated) value stays the base, the fader
+      matrix is recomputed only when a value changes, and a track the graph stops driving gets its own value back
+      (`Engine::set_modulation` releases every track). Tests: a step source lifting a track's fader to the top while
+      another track stays at its own value, and the fader returning when the graph goes.
+- [ ] **M1b, slice 2b — a track's EQ bands, its sends and a slot's wet level**: the same run writes those where the mixer
+      reads them (`TrackEq`, `Route::gain`, `slot_mix`), each with the mixer's own units.
 - [ ] **M1b, slice 3 — the UI**: create a modulator, pick its source, drag an assignment onto a knob, show the depth
       ring; the graph edits go through the control plane (one undo step each) and `Transport::set_modulation` follows.
 

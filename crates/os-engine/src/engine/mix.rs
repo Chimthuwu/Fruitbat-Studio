@@ -15,6 +15,12 @@ pub(crate) struct MixTrack {
     pub(crate) vol: i32,
     pub(crate) pan: i32,
     pub(crate) sep: i32,
+    /// The value modulation holds each of the three at, in the stored units (M1b, `Engine::run_host_modulation`):
+    /// the three above stay as authored (or automated), so a modulation has a base to move and gives it back when it
+    /// stops. `None`: nothing drives it.
+    pub(crate) mod_vol: Option<i32>,
+    pub(crate) mod_pan: Option<i32>,
+    pub(crate) mod_sep: Option<i32>,
     pub(crate) on: bool,
     /// The project's panning law (event 23), for the pan in the matrix.
     pub(crate) law: laws::PanLaw,
@@ -203,6 +209,9 @@ impl MixTrack {
             vol: 12800,
             pan: 0,
             sep: 0,
+            mod_vol: None,
+            mod_pan: None,
+            mod_sep: None,
             on: true,
             law: laws::PanLaw::Circular,
             swap: false,
@@ -259,6 +268,8 @@ impl MixTrack {
     pub(crate) fn restore(&mut self, settle: bool) {
         let s = self.stored.clone();
         (self.vol, self.pan, self.sep) = (s.vol, s.pan, s.sep);
+        // A modulation is not one of the stored settings: it is worked out again from where playback starts.
+        (self.mod_vol, self.mod_pan, self.mod_sep) = (None, None, None);
         for (b, band) in s.eq.iter().enumerate() {
             for (f, &v) in band.iter().enumerate() {
                 if self.eq.settings(b)[f] != v {
@@ -314,7 +325,8 @@ impl MixTrack {
     /// "Fader matrix", audio/gain-laws.md "Panning law: Triangular") with swap and polarity on top, as
     /// `[[L←L, L←R], [R←L, R←R]]`.
     pub(crate) fn compute_matrix(&self) -> [[f32; 2]; 2] {
-        let [ll, rl, rr, lr] = os_dsp::mixer::fader_matrix_law(self.vol, self.pan, self.sep, self.on, self.law);
+        let (vol, pan, sep) = (self.mod_vol.unwrap_or(self.vol), self.mod_pan.unwrap_or(self.pan), self.mod_sep.unwrap_or(self.sep));
+        let [ll, rl, rr, lr] = os_dsp::mixer::fader_matrix_law(vol, pan, sep, self.on, self.law);
         let mut m = [[ll, rl], [lr, rr]];
         // Swap exchanges the two outputs after pan and separation, not the inputs: (LL, RR, RL, LR) become
         // (LR, RL, RR, LL).

@@ -204,11 +204,97 @@ pub(super) fn step_values(params: &mut ParamAuto, mods: &mut Modulation, pos: f6
     }
 }
 
+/// A mixer track's host parameters slice 2 drives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum HostParam {
+    /// The fader, stored 0..16000 (unity 12800).
+    Volume,
+    /// Pan, stored -6400..6400.
+    Pan,
+    /// Stereo separation, stored -64..64.
+    Separation,
+}
+
+/// The track and host parameter a target names, for the three the mixer path drives (a track's EQ, its sends and a
+/// slot's mix level are still to come).
+fn host_target(target: Target) -> Option<(usize, HostParam)> {
+    Some(match target {
+        Target::MixerVolume(t) => (usize::from(t), HostParam::Volume),
+        Target::MixerPan(t) => (usize::from(t), HostParam::Pan),
+        Target::MixerSeparation(t) => (usize::from(t), HostParam::Separation),
+        _ => return None,
+    })
+}
+
 impl Engine {
-    /// Installs the modulation graph (an empty one: no modulation). Values are sent again from scratch.
+    /// Installs the modulation graph (an empty one: no modulation). Values are sent again from scratch, and every
+    /// track gives its host parameters back.
     pub fn set_modulation(&mut self, modulators: Vec<Modulator>) {
         self.mods.set(modulators);
         self.params.forget();
+        for m in &mut self.tracks {
+            let released = m.mod_vol.take().is_some() || m.mod_pan.take().is_some() || m.mod_sep.take().is_some();
+            if released {
+                m.matrix = m.compute_matrix();
+            }
+        }
+    }
+
+    /// The tick's modulated mixer values: a track's fader, pan and separation, sampled once a tick (a fader value is
+    /// read by the mixer, not handed to a plugin) and held in `MixTrack::mod_*`, so the authored (or automated) value
+    /// stays the base. A track the graph no longer drives gets its own value back.
+    pub(super) fn run_host_modulation(&mut self) {
+        if self.mods.is_empty() {
+            return;
+        }
+        let now = self.tick as f64;
+        let ppq = f64::from(self.ppq.max(1));
+        let secs_per_tick = self.tick_len() as f64 / f64::from(self.rate.max(1));
+        let (beats, secs) = (now / ppq, now * secs_per_tick);
+        let mut offsets: Vec<(usize, HostParam, f64)> = Vec::new();
+        for m in self.mods.modulators.iter().filter(|m| m.enabled) {
+            let u = source_value(&m.source, m.id, beats, secs);
+            for t in &m.targets {
+                let Some((track, param)) = host_target(t.target) else { continue };
+                let by = offset(t, u);
+                match offsets.iter_mut().find(|(x, p, _)| *x == track && *p == param) {
+                    Some((_, _, v)) => *v += by,
+                    None => offsets.push((track, param, by)),
+                }
+            }
+        }
+        for (track, m) in self.tracks.iter_mut().enumerate() {
+            // The authored values are the base, so a modulation never builds on its own last value.
+            let base = [
+                f64::from(m.vol) / 16000.0,
+                (f64::from(m.pan) + 6400.0) / 12800.0,
+                (f64::from(m.sep) + 64.0) / 128.0,
+            ];
+            let mut changed = false;
+            for (i, param) in [HostParam::Volume, HostParam::Pan, HostParam::Separation].into_iter().enumerate() {
+                let driven = offsets.iter().find(|(t, p, _)| *t == track && *p == param).map(|(_, _, by)| *by);
+                let want = driven.map(|by| {
+                    let v = (base[i] + by).clamp(0.0, 1.0);
+                    match param {
+                        HostParam::Volume => (v * 16000.0).round() as i32,
+                        HostParam::Pan => (v * 12800.0 - 6400.0).round() as i32,
+                        HostParam::Separation => (v * 128.0 - 64.0).round() as i32,
+                    }
+                });
+                let slot = match param {
+                    HostParam::Volume => &mut m.mod_vol,
+                    HostParam::Pan => &mut m.mod_pan,
+                    HostParam::Separation => &mut m.mod_sep,
+                };
+                if *slot != want {
+                    *slot = want;
+                    changed = true;
+                }
+            }
+            if changed {
+                m.matrix = m.compute_matrix();
+            }
+        }
     }
 
     /// Samples every modulator over the `frames` frames of the tick starting now: the path when no clip drives a
@@ -481,5 +567,55 @@ mod tests {
         // A depth past the range still lands the parameter inside 0..1.
         let t = ModTarget { depth: 3.0, ..t(Curve::Linear, Polarity::Bipolar) };
         assert_eq!((0.9 + offset(&t, 1.0)).clamp(0.0, 1.0), 1.0);
+    }
+
+    /// A track's fader is a host parameter: a step source at its top, bipolar, half the range, takes the fader of a
+    /// unity track (0.8 of its range) to the top, leaves the other tracks alone, and its fader matrix follows; with
+    /// the graph gone the track has its own value and matrix back.
+    #[test]
+    fn modulation_drives_a_mixer_tracks_fader_and_gives_it_back() {
+        let p = project(0);
+        let mut e = Engine::new(&p, &mut SampleLibrary::new(None), 48000, PlayMode::Pattern(1));
+        let steps = Steps { values: [100; 16], period: Timebase::Sync(1), smooth: false };
+        e.set_modulation(vec![Modulator {
+            id: 1,
+            source: ModSource::Steps(steps),
+            enabled: true,
+            targets: vec![ModTarget { target: Target::MixerVolume(1), depth: 0.5, curve: Curve::Linear, polarity: Polarity::Bipolar }],
+        }]);
+        run(&mut e, 1000, 1000);
+        assert_eq!(e.tracks[1].mod_vol, Some(16000), "unity plus half the range is the top");
+        assert_eq!(e.tracks[1].vol, 12800, "the authored fader is still the base");
+        assert_eq!(e.tracks[0].mod_vol, None, "another track keeps its own value");
+        assert_ne!(e.tracks[1].matrix, e.tracks[0].matrix, "the fader matrix follows the modulated value");
+        // The graph goes: every track is released to its own values.
+        e.set_modulation(Vec::new());
+        run(&mut e, 1000, 1000);
+        assert_eq!(e.tracks[1].mod_vol, None);
+        assert_eq!(e.tracks[1].matrix, e.tracks[0].matrix);
+    }
+
+    /// Pan and separation are driven in their own stored units: bipolar around the middle (0) and unipolar above the
+    /// middle; a separation of 32 merges a quarter of the way.
+    #[test]
+    fn a_modulated_pan_and_separation_use_the_mixers_units() {
+        let p = project(0);
+        let mut e = Engine::new(&p, &mut SampleLibrary::new(None), 48000, PlayMode::Pattern(1));
+        let steps = Steps { values: [100; 16], period: Timebase::Sync(1), smooth: false };
+        let target = |target, depth, polarity| ModTarget { target, depth, curve: Curve::Linear, polarity };
+        e.set_modulation(vec![Modulator {
+            id: 1,
+            source: ModSource::Steps(steps),
+            enabled: true,
+            targets: vec![
+                target(Target::MixerPan(1), 0.25, Polarity::Unipolar),
+                target(Target::MixerSeparation(1), 0.25, Polarity::Unipolar),
+            ],
+        }]);
+        run(&mut e, 1000, 1000);
+        assert_eq!(e.tracks[1].mod_pan, Some(3200), "a quarter right of the middle");
+        assert_eq!(e.tracks[1].mod_sep, Some(32), "and a twenty-eighth merged");
+        assert_eq!((e.tracks[1].pan, e.tracks[1].sep), (0, 0), "the stored values stay");
+        assert_eq!(e.tracks[2].mod_pan, None);
     }
 }

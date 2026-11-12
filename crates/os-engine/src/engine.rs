@@ -2159,6 +2159,7 @@ impl Engine {
         self.run_controls(len);
         self.run_automation(len);
         self.run_param_automation(len);
+        self.run_host_modulation();
         self.run_controllers(len);
         for b in &mut self.bus {
             b.clear();
