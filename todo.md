@@ -119,8 +119,18 @@
       `Transport::set_modulation` gets the new spec at once, so the LFO is heard without stopping. Tests: the target
       round-trips for a channel, a track's host parameter and a slot's plugin; a new modulator drives the knob and the
       engine spec carries it; unassigning leaves it driving nothing; removing it undoes back (os-app 1203 green).
-- [ ] **M1b, slice 3b — the rest of the UI**: choose and edit a modulator's source and rate (the graph has LFO, steps and
-      envelope; none has an editor yet), show the depth ring on a driven knob, and drag an assignment onto a knob.
+- [x] **M1b, slice 3b, the modulator editor** (2026-11-12): the knob's Modulation part opens an **Edit <name>** submenu
+      for the modulator that drives it — on / off, kind (LFO / Steps / Envelope, keeping the rate across a switch), the
+      LFO's six shapes, the step patterns (clear, stairs up / down, alternating, scatter), glide, the envelope shapes
+      (pluck, organ, pad, tick), the rate (six synced, 1/16 … 2 bars, and six free, 0.25 … 8 Hz), and for this control
+      its depth (±5 … ±100 %), curve (linear / exp / log / S) and polarity. `ModCmd::SetSource` / `SetKind` / `SetDepth` /
+      `SetCurve` / `SetPolarity` / `SetEnabled` run through `control::edit_app`, one undo step each, and push the new spec
+      to playback at once. A driven pan or separation knob wears a thin ring spanning its depth either side of its value
+      (`modulation::depth_on`, `views::mixer::mod_ring`). Tests: a kind switch keeps the rate and lays a pattern that is
+      heard; the editor's entries are all live and its edits reach the engine, the ring follows enabled modulators alone,
+      and an undo puts it back (os-app 1205 green).
+- [ ] **M1b, slice 3b, the rest**: drag an assignment from the rack onto a knob, and a list of every control one
+      modulator drives.
 
 This file tracks the open/executed state of the todo items. The canonical priority plan is in `docs/roadmap-2026-11-10.md` — reference that doc for the full rationale, audit findings, and ordering.
 

@@ -3423,6 +3423,11 @@ pub fn knob_menu(s: &State, auto: Option<(u32, String, f64)>, typein: Option<cra
                     crate::modulation::ModCmd::Assign(m.id, tgt)
                 };
                 items.push(PItem::new(name, Cmd::Mod(cmd)).mark(Mark::Check(on)));
+                // The one that drives this control opens its editor in place, so shaping a modulator is never more than
+                // a submenu away from the knob it was made for.
+                if on {
+                    items.extend(crate::modulation::editor_menu(s, m.id, tgt));
+                }
             }
             if !s.modulation.modulators.is_empty() {
                 let remove = s
