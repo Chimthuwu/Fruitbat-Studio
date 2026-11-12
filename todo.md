@@ -13,7 +13,10 @@
       menu: Strip style, Amount, Clear grid. `KnobId::Glitch` is scriptable as `glitch:<track>`.
 - [ ] **Mixing modules from both strips in one custom strip** (asked for with the glitcher): needs a module list per
       track rather than a style switch — plan it after the two consoles settle.
-- [ ] **A playhead on the grid**: `Glitch::step(rate)` already gives it; the app has no per-track engine readback yet.
+- [x] **A playhead on the grid, and painting it**: the feeder publishes each track's step (`Engine::glitch_steps`),
+      `MixerUi::steps` carries it and the active cell is ringed in cream, repainting only the grid (`Live::Glitch`).
+      Holding a cell down drags its module across the cells the pointer crosses (`App::Drag::GlitchPaint`,
+      `glitch_at` reading the grid from any cell's rect), in the press's one undo step.
 
 ## ✅ DONE 2026-11-12 — strip channel: gate → OTT; piano roll resizes
 - [x] **The strip's gate is a one-knob OTT** (`962b8418`): three bands at 250 Hz / 2.5 kHz, 8:1 down above -30 dB, 4:1

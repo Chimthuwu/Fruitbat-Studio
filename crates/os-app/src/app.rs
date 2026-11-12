@@ -564,6 +564,8 @@ pub enum Live {
     Sounding,
     /// Mixer peak meters.
     Meter,
+    /// The glitch consoles' step grids, whose playhead moves with the audio.
+    Glitch,
 }
 
 /// The playback state the frame shows. Taken in `App::tick`, where the damage for playheads is worked out, so a paint
@@ -909,6 +911,9 @@ pub enum Drag {
     PlPan { id: crate::knobs::KnobId, r: Rect },
     /// A press on a track's equaliser graph `g`: band `band` follows the cursor.
     EqGraph { track: u16, band: u8, g: Rect },
+    /// A glitch grid's cell held (painted at `cell`, step `step`): the cells the pointer crosses take its `module`,
+    /// so a stroke lays a pattern down.
+    GlitchPaint { track: u16, step: u8, cell: Rect, module: u8 },
     /// The Limit dialog's keys held (either button): the key under the mouse becomes the green key; its name strip held:
     /// range end `high` (else the low one) follows; its scroll bar's handle held `dx` px right of its left edge (spec:
     /// ui/piano-limit.md §1, §5).
@@ -4374,6 +4379,11 @@ impl App {
         if crate::mixer::feed_meters(&mut self.state, &peaks) && self.state.shown(Win::Mixer) {
             self.damage_live(Live::Meter);
         }
+        // The glitch consoles' playheads (spec: ui/mixer.md §10): the grid's step as the audio thread rendered it.
+        let steps = self.transport.glitch_steps();
+        if crate::mixer::feed_steps(&mut self.state, &steps) && self.state.shown(Win::Mixer) {
+            self.damage_live(Live::Glitch);
+        }
         // Audio clips follow their channel's stretch, pitch and the tempo (ui/playlist.md §9c). The lengths are worked
         // out, not edited: the saved copy gets them too, so a fit alone (an opened FL project) is not an unsaved change.
         if let Some(fits) = crate::playlist::audio_fits(&self.state) {
@@ -6214,6 +6224,12 @@ impl App {
                     self.hint = Cow::Owned(crate::mixer::eq_graph_hint(&self.state, g, x));
                     self.damage_eq();
                     self.damage_band(HINT_RECT);
+                }
+                Drag::GlitchPaint { track, step, cell, module } => {
+                    let at = views::mixer::glitch_at(cell, step, (x, y));
+                    if crate::mixer::glitch_paint(&mut self.state, track, at, module) {
+                        self.damage_live(Live::Glitch);
+                    }
                 }
                 Drag::MonParam(i) => {
                     self.set_mon_param(i, x);
@@ -9146,6 +9162,14 @@ impl App {
                 let plain_strip = matches!(h, crate::mixer::MHit::Strip(_)) && !self.ctrl && !self.shift;
                 if let Some(m) = crate::mixer::hit(self, h) {
                     self.state.message = Some(m);
+                }
+                // A glitch grid's cell held down paints: the click above placed this step's module, and the cells the
+                // pointer crosses while the button is down take the same one (one undo step, as the click's).
+                if let crate::mixer::MHit::GlitchCell(n, step) = h {
+                    let module = crate::mixer::track(&self.state, n).map_or(1, |m| m.glitch[usize::from(step)]);
+                    if let Some(r) = self.top_hit(self.mouse.0, self.mouse.1).map(|h| h.rect) {
+                        self.drag = Some(Drag::GlitchPaint { track: n, step, cell: r, module });
+                    }
                 }
                 if plain_strip {
                     self.drag = Some(Drag::MixSelect);

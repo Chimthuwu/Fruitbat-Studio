@@ -904,6 +904,15 @@ impl Engine {
         }
     }
 
+    /// The glitch grid's step on each mixer track as of this call, `None` where the track is not running the glitcher
+    /// (or has it off and faded out): a console draws a playhead only where one moves.
+    pub fn glitch_steps(&self, out: &mut Vec<Option<u8>>) {
+        out.clear();
+        out.extend(self.tracks.iter().map(|t| {
+            (t.glitch_style && !t.glitch.idle()).then(|| t.glitch.step(self.rate).min(os_dsp::glitch::STEPS - 1) as u8)
+        }));
+    }
+
     /// True when the channel is played by an attached instrument.
     /// A controller message for `channel` (spec: ui/midi-settings.md §4): an instrument channel's plugin gets it on the
     /// next tick as it came; a channel without one takes pitch bend (0xE0) as a bend of ±`bend_cents` from the centre

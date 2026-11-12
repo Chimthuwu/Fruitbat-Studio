@@ -310,6 +310,9 @@ pub struct MixerUi {
     pub pending: Vec<FxReq>,
     /// Meter state per track (`meters::Meter`), fed by `feed_meters`.
     pub meters: Vec<crate::meters::Meter>,
+    /// The glitch grid's step per track, fed by `feed_steps` from the audio thread (`Engine::glitch_steps`); `None`
+    /// where the track is not running the glitcher, or nothing plays.
+    pub steps: Vec<Option<u8>>,
     /// Meter ballistics and look.
     pub meter_cfg: crate::meters::Settings,
     /// When the meters last advanced.
@@ -337,6 +340,7 @@ pub const WAVE_LEN: usize = 600;
 impl Default for MixerUi {
     fn default() -> Self {
         MixerUi { sel: Vec::new(), layout: WIDE, slot_names: HashMap::new(), slot_colors: HashMap::new(), pending: Vec::new(), meters: Vec::new(),
+            steps: Vec::new(),
             meter_cfg: Default::default(), meter_at: None, solo: None, wheel_grab: None, waveforms: false, waves: Vec::new(),
             console: HashMap::new(), extra: true }
     }
@@ -2896,6 +2900,34 @@ pub fn key(app: &mut App, key: &winit::keyboard::Key, ctrl: bool, alt: bool) -> 
 
 /// New peaks from the audio thread: meters rise, fall and hold by elapsed time (`meters::step`). True while any meter
 /// is still moving.
+/// The glitch consoles' playheads: the step each grid is on, from the audio thread's last render. True when one moved.
+pub fn feed_steps(s: &mut State, steps: &[Option<u8>]) -> bool {
+    if s.mixer.steps.as_slice() == steps {
+        return false;
+    }
+    s.mixer.steps.clear();
+    s.mixer.steps.extend_from_slice(steps);
+    true
+}
+
+/// Paints step `step` of track `t` with `module` while a drag crosses the grid (the press opened the undo step). True
+/// when the step changed: the same as a click's `MCmd::GlitchStep`, but without a history step of its own.
+pub fn glitch_paint(s: &mut State, t: u16, step: u8, module: u8) -> bool {
+    let Some(m) = track_mut(s, t) else { return false };
+    let at = usize::from(step.min((os_dsp::glitch::STEPS - 1) as u8));
+    let module = module.min((os_dsp::glitch::MODULES.len() - 1) as u8);
+    if m.glitch[at] == module {
+        return false;
+    }
+    m.glitch[at] = module;
+    m.glitch_style = true;
+    if m.glitch_amount == 0 {
+        m.glitch_amount = os_dsp::glitch::glitch_word(0.7);
+    }
+    changed(s);
+    true
+}
+
 pub fn feed_meters(s: &mut State, peaks: &[[f32; 2]]) -> bool {
     let now = std::time::Instant::now();
     // Long gaps (the app was idle) count as one frame, so a meter does not vanish in a single step.
@@ -4331,6 +4363,18 @@ mod tests {
         let style = items.iter().find(|i| i.label == "Strip style").expect("the style menu");
         assert!(style.children.iter().any(|c| c.label == "Glitch strip"));
         assert!(items.iter().any(|i| i.label == "Clear grid"));
+        // A drag paints: the module the press placed is laid on the cells it crosses, one undo step for the stroke.
+        crate::history::undo(&mut a.state);
+        let steps = a.state.history.at();
+        assert!(glitch_paint(&mut a.state, 2, 9, 3));
+        assert!(!glitch_paint(&mut a.state, 2, 9, 3), "the same module again changes nothing");
+        assert_eq!(g(&a).glitch[9], 3);
+        assert_eq!(a.state.history.at(), steps, "the stroke joins the press's step");
+        // The playheads: `feed_steps` holds what the audio thread rendered and says when it moved.
+        assert!(feed_steps(&mut a.state, &[None, Some(4)]));
+        assert_eq!(a.state.mixer.steps, vec![None, Some(4)]);
+        assert!(!feed_steps(&mut a.state, &[None, Some(4)]));
+        assert!(feed_steps(&mut a.state, &[]));
     }
 
     /// plan v3 Milestone 1: the Analog Channel Strip's switch and low cut are the track's own state, one undo step

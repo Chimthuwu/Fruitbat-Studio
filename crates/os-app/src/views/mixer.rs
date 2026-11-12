@@ -718,6 +718,25 @@ fn glitch_ink(ui: &Ui, module: usize) -> Color {
     }
 }
 
+/// The glitch grid's area in a console body `r` and one cell's size: the amount row's 26 px and a 3 px gap, then the
+/// 4×4. `glitch_panel` draws from it, so a drag's `glitch_at` finds the cells it sees.
+fn glitch_area(r: Rect) -> (Rect, f32, f32) {
+    let grid = Rect::new(r.x, r.y + 29.0, r.w, (r.bottom() - r.y - 29.0).max(24.0));
+    let cw = grid.w / 4.0;
+    let ch = (grid.h / 4.0).min(cw * 1.5).max(9.0);
+    (grid, cw, ch)
+}
+
+/// The step under `at`, given the grid cell painted for step `step` (a hit rect, so the grid is known by any of its
+/// cells): a drag paints the cells the pointer crosses. A point outside the grid takes the nearest cell in it.
+pub fn glitch_at(cell: Rect, step: u8, (x, y): (f32, f32)) -> u8 {
+    let (cw, ch) = (cell.w + 1.0, cell.h + 1.0);
+    let (ox, oy) = (cell.x - cw * f32::from(step % 4), cell.y - ch * f32::from(step / 4));
+    let col = ((x - ox) / cw).floor().clamp(0.0, 3.0) as u8;
+    let row = ((y - oy) / ch).floor().clamp(0.0, 3.0) as u8;
+    row * 4 + col
+}
+
 /// The glitch console: the grid's amount over the sixteen steps as a 4×4 grid. A cell carries its module's two letters
 /// in that module's colour and is filled in when the step fires, so a bar reads at a glance; a click cycles it
 /// (`MCmd::GlitchStep`), which is the whole editor — there is no knob per module, and no menu behind it.
@@ -726,18 +745,23 @@ fn glitch_panel(ui: &mut Ui, s: &State, n: u16, m: &os_model::MixerTrack, r: Rec
     let amount = Rect::new(r.x, r.y, r.w, 26.0);
     console_plate(ui, amount, &st);
     console_knob(ui, s, amount, 0.5, KnobId::Glitch(n), st.ds, r.w >= 50.0);
-    let grid = Rect::new(r.x, amount.bottom() + 3.0, r.w, (r.bottom() - amount.bottom() - 3.0).max(24.0));
-    let cw = grid.w / 4.0;
-    let ch = (grid.h / 4.0).min(cw * 1.5).max(9.0);
+    let (grid, cw, ch) = glitch_area(r);
+    // The grid's playhead: the step the audio thread rendered last (`MixerUi::steps`), its cell ringed in cream.
+    let play = s.mixer.steps.get(usize::from(n)).copied().flatten();
+    ui.live(Live::Glitch, grid);
     let count = os_dsp::glitch::MODULES.len();
     for i in 0..os_dsp::glitch::STEPS {
         let b = Rect::new(grid.x + cw * (i % 4) as f32, grid.y + ch * (i / 4) as f32, (cw - 1.0).max(4.0), (ch - 1.0).max(6.0));
         let module = usize::from(m.glitch[i]).min(count - 1);
         let ink = glitch_ink(ui, module);
         let hov = ui.hovering(b);
+        let here = play == Some(i as u8);
         ui.c.fill_rrect(b, 2.0, if module == 0 { ui.t.s(0x1a1d1f) } else { ink.mix(ui.t.s(0x14171a), 0.58) });
         if module > 0 {
-            ui.c.stroke_rrect(b, 2.0, 1.0, ink.with_alpha(if hov { 255 } else { 150 }));
+            ui.c.stroke_rrect(b, 2.0, 1.0, ink.with_alpha(if hov || here { 255 } else { 150 }));
+        }
+        if here {
+            ui.c.stroke_rrect(b, 2.0, 1.6, ui.t.tx(0xfff4d6));
         }
         ui.c.text_center(Font::new(8).bold(), b, ink, os_dsp::glitch::SHORT[module]);
         let hint = if module == 0 {
@@ -1454,6 +1478,16 @@ mod tests {
         assert!(has(&app, Action::Knob(KnobId::Glitch(3))), "the grid's amount");
         assert!(!has(&app, Action::Knob(KnobId::Strip(3, 0))), "the analog sections are away");
         assert!(has(&app, Action::Mix(MHit::GlitchMode(3))), "and the bar stays, to go back");
+        // The playhead: the audio thread's step rings its cell, and a drag over the grid finds the step under the
+        // pointer from any cell's rect (`glitch_at`), which is what paints the cells it crosses.
+        app.state.mixer.steps = vec![None, None, None, Some(5)];
+        paint(&mut app, &mut c);
+        let cell = |app: &App, i: u8| app.hits.iter().find(|h| h.action == Action::Mix(MHit::GlitchCell(3, i))).map(|h| h.rect).expect("a grid cell");
+        let five = cell(&app, 5);
+        assert_eq!(glitch_at(five, 5, (five.cx(), five.cy())), 5, "its own cell");
+        assert_eq!(glitch_at(five, 5, (five.cx() + five.w * 2.0, five.cy())), 7, "two cells to the right");
+        assert_eq!(glitch_at(five, 5, (five.cx(), five.cy() - five.h * 2.0)), 1, "a row up");
+        assert_eq!(glitch_at(five, 5, (five.cx() - five.w * 9.0, five.cy())), 4, "and a point past the left edge takes its column's first cell");
     }
 
     /// Wide 2, Wide 3 and Wide alt draw the console and the strip's own meter side by side: the console gives up the

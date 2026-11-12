@@ -119,6 +119,9 @@ pub struct Shared {
     pace: Mutex<Option<Pace>>,
     /// Peaks per mixer track (L, R) since the mixer meters last read them (`TrackPeaks`).
     tracks: Mutex<TrackPeaks>,
+    /// The glitch grid's step per mixer track, written by the feeder as it renders (`Engine::glitch_steps`), `None`
+    /// where the track is not running the glitcher.
+    steps: Mutex<Vec<Option<u8>>>,
     /// Device blocks the queue could not fill since the program started.
     underruns: AtomicU64,
     /// How far the playback and live streams render ahead of the device.
@@ -540,6 +543,15 @@ impl Transport {
     pub fn take_track_peaks(&self) -> Vec<[f32; 2]> {
         let heard = self.paced().map(|p| p.played(Instant::now()));
         self.shared.tracks.lock().map(|mut t| t.take(heard)).unwrap_or_default()
+    }
+
+    /// The glitch grid's step on each mixer track as of the last block rendered (`None`: the track is not running the
+    /// glitcher). Empty once nothing plays: the consoles then draw no playhead.
+    pub fn glitch_steps(&self) -> Vec<Option<u8>> {
+        if !self.playing() {
+            return Vec::new();
+        }
+        self.shared.steps.lock().map(|v| v.clone()).unwrap_or_default()
     }
 
     /// The sample rate streams open at (the audio settings' device and rate; what hosted plugins are activated at):
@@ -1154,6 +1166,10 @@ impl Feeder {
             }
             if let Ok(mut t) = self.shared.tracks.lock() {
                 e.take_track_peaks(&mut t.now);
+            }
+            // The glitch consoles' playheads move with the grid, so they are published as the blocks render.
+            if let Ok(mut v) = self.shared.steps.lock() {
+                e.glitch_steps(&mut v);
             }
         }
         // So does the tempo shown.
