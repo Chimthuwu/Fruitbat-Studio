@@ -120,6 +120,10 @@ pub enum MCmd {
     GlitchStep(u16, u8, u8),
     GlitchAmount(u16, u16),
     GlitchClear(u16),
+    /// Save pattern as...: the save box for the grid's sixteen steps and its amount (`crate::glitch_patterns`).
+    SaveGlitchPattern(u16),
+    /// A saved glitch pattern put on the grid (its file already has the new capture's path).
+    GlitchPattern(u16, std::path::PathBuf),
     Solo(u16),
     /// Solo with the tracks routed into it too (spec: ui/mixer-track-commands.md §5).
     AltSolo(u16),
@@ -1944,6 +1948,20 @@ fn track_items(s: &State, n: u16) -> Vec<PItem> {
                 })
                 .collect(),
         ),
+        PItem::sub(
+            "Pattern",
+            {
+                let mut v = vec![PItem::new("Save pattern as...", mx(MCmd::SaveGlitchPattern(n)))];
+                v.push(PItem::sep());
+                // The patterns in the user folder's `Glitch patterns`, by name (a grid saved over is a file of its own).
+                let saved = crate::glitch_patterns::list();
+                if saved.is_empty() {
+                    v.push(PItem::not_yet("(no saved patterns)"));
+                }
+                v.extend(saved.into_iter().map(|(name, p)| PItem::new(name, mx(MCmd::GlitchPattern(n, p)))));
+                v
+            },
+        ),
         PItem::new("Clear grid", mx(MCmd::GlitchClear(n))),
     ]
 }
@@ -2233,6 +2251,9 @@ pub fn run(app: &mut App, c: MCmd) -> Option<String> {
             Err(e) => format!("Couldn't save the mixer track state: {e}"),
         });
     }
+    if let MCmd::SaveGlitchPattern(n) = c {
+        return crate::glitch_patterns::save_as(app, n);
+    }
     if let MCmd::SlotHelp(slot) = c {
         let name = slot_name(&app.state, app.state.selected_mixer, slot).unwrap_or_default();
         return Some(match slot_help(app, slot) {
@@ -2290,6 +2311,11 @@ pub fn run(app: &mut App, c: MCmd) -> Option<String> {
     if let MCmd::StripBypass(t) | MCmd::StripLowCut(t, _) | MCmd::StripOtt(t, _) | MCmd::StripDrive(t, _) | MCmd::StripDriveType(t, _) | MCmd::StripTame(t, _) | MCmd::StripComp(t, _) | MCmd::StripCompProfile(t, _) | MCmd::StripTable(t, _) | MCmd::StripStyle(t, _) | MCmd::GlitchStep(t, _, _) | MCmd::GlitchAmount(t, _) | MCmd::GlitchClear(t) = &c {
         let t = *t;
         return crate::control::edit_app(app, "Analog channel strip", Region::Track(t), |app| run_now(app, c));
+    }
+    // A saved glitch pattern is the track's own state, one undo step ("Load glitch pattern").
+    if let MCmd::GlitchPattern(t, p) = &c {
+        let (t, p) = (*t, p.clone());
+        return crate::control::edit_app(app, crate::glitch_patterns::LOAD, Region::Track(t), move |app| run_now(app, MCmd::GlitchPattern(t, p.clone())));
     }
     if let MCmd::QuickSidechain(dst) = c {
         return crate::quick_sidechain::run(app, dst);
@@ -2557,6 +2583,7 @@ fn run_now(app: &mut App, c: MCmd) -> Option<String> {
             }
             None
         }
+        MCmd::GlitchPattern(n, p) => crate::glitch_patterns::apply(s, n, &p),
         MCmd::Dock(n, d) => {
             for t in targets(s, n).into_iter().filter(|&t| t > 0) {
                 if let Some(m) = track_mut(s, t) {
@@ -2580,7 +2607,7 @@ fn run_now(app: &mut App, c: MCmd) -> Option<String> {
             None
         }
         // Answered in `run`.
-        MCmd::SlotHelp(_) | MCmd::SlotScale(..) | MCmd::SaveState(_) => None,
+        MCmd::SlotHelp(_) | MCmd::SlotScale(..) | MCmd::SaveState(_) | MCmd::SaveGlitchPattern(_) => None,
         MCmd::OpenState(n, p) => open_state(s, n, &p, false),
         MCmd::InsertState(n, p) => {
             let n = add_track(s, Some(n.max(1)));
@@ -4375,6 +4402,44 @@ mod tests {
         assert_eq!(a.state.mixer.steps, vec![None, Some(4)]);
         assert!(!feed_steps(&mut a.state, &[None, Some(4)]));
         assert!(feed_steps(&mut a.state, &[]));
+    }
+
+    /// The grid's menu saves its pattern to a file named in the save box and lists the saved ones: taking one puts the
+    /// sixteen steps and the amount back and switches the glitcher on, as one undo step.
+    #[test]
+    fn the_grid_saves_and_loads_named_patterns() {
+        let dir = crate::glitch_patterns::dir().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = app();
+        let menu = |a: &App, n: u16| track_items(&a.state, n).into_iter().find(|i| i.label == "Pattern").expect("the Pattern submenu");
+        assert_eq!(menu(&a, 2).children[0].label.as_ref(), "Save pattern as...");
+        assert_eq!((menu(&a, 2).children[2].label.as_ref(), menu(&a, 2).children[2].enabled), ("(no saved patterns)", false));
+        let grid: [u8; 16] = std::array::from_fn(|i| (i % 6) as u8);
+        {
+            let m = track_mut(&mut a.state, 2).unwrap();
+            (m.glitch, m.glitch_amount) = (grid, 40_000);
+        }
+        let path = dir.join("Roll");
+        assert_eq!(crate::glitch_patterns::save_chosen(&mut a, 2, path.clone()).as_deref(), Some("Saved glitch pattern Roll"));
+        let file = path.with_extension(crate::glitch_patterns::EXT);
+        assert!(file.exists());
+        let listed = menu(&a, 2);
+        assert_eq!(listed.children.len(), 3, "save, a separator and the pattern");
+        assert_eq!((listed.children[2].label.as_ref(), listed.children[2].cmd.clone()), ("Roll", Cmd::Mixer(MCmd::GlitchPattern(2, file.clone()))));
+        // Taking the pattern puts the grid back, amount and all, and switches the glitcher on: one undo step.
+        {
+            let m = track_mut(&mut a.state, 2).unwrap();
+            (m.glitch, m.glitch_amount, m.glitch_style) = ([0; 16], 0, false);
+        }
+        let steps = a.state.history.at();
+        let msg = format!("{} takes the glitch pattern \"Roll\"", name(&a.state, 2));
+        assert_eq!(crate::mixer::run(&mut a, MCmd::GlitchPattern(2, file)).as_deref(), Some(msg.as_str()));
+        let m = track(&a.state, 2).unwrap();
+        assert_eq!((m.glitch, m.glitch_amount, m.glitch_style), (grid, 40_000, true));
+        assert_eq!(a.state.history.at(), steps + 1);
+        crate::history::undo(&mut a.state);
+        assert!(!track(&a.state, 2).unwrap().glitch_style, "one step back to the empty grid");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// plan v3 Milestone 1: the Analog Channel Strip's switch and low cut are the track's own state, one undo step

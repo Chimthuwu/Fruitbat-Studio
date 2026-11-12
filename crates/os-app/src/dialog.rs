@@ -84,6 +84,8 @@ pub enum Then {
     SavePreset(usize),
     /// Save channel state as... for this rack row (`crate::channel_states`).
     SaveChannelState(usize),
+    /// Save glitch pattern as... for this mixer track's grid (`crate::glitch_patterns`).
+    SaveGlitchPattern(u16),
     /// Import preset... for the plugin with this key.
     ImportPreset(usize),
     /// Rename preset... for the plugin with this key: its current preset file.

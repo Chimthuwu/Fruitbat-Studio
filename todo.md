@@ -20,6 +20,11 @@
       `MixerUi::steps` carries it and the active cell is ringed in cream, repainting only the grid (`Live::Glitch`).
       Holding a cell down drags its module across the cells the pointer crosses (`App::Drag::GlitchPaint`,
       `glitch_at` reading the grid from any cell's rect), in the press's one undo step.
+- [x] **Named patterns for the grid** (`crate::glitch_patterns`): Glitch Strip ▸ Pattern ▸ Save pattern as... writes the
+      sixteen steps and the amount to `Glitch patterns` in the user folder as `<name>.osglitch` (JSON, module numbers as
+      `MODULES` numbers them), and the submenu lists every one there by name — `(no saved patterns)` greyed when there
+      are none. Taking one puts the grid and its amount back, switches the glitcher on, and is one undo step
+      ("Load glitch pattern"); a hand-edited file loads too (a module past the list is clamped, a short one padded).
 - [x] **The five modules tuned on audio**: each measured on a 1 kHz tone at -6 dBFS (RMS, peak, the largest frame-to-frame
       jump, DC). Every step that changed module, and every stutter repeat, was a splice with no fade — its boundary stood
       up to 22 dB out of the signal's own steps, the loudest thing the grid did — so each now crossfades in over 1.5 ms

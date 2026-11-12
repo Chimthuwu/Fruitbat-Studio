@@ -2358,6 +2358,11 @@ impl App {
                     self.state.message = crate::channel_states::save_chosen(self, row, p);
                 }
             }
+            Then::SaveGlitchPattern(track) => {
+                if let Some(p) = file {
+                    self.state.message = crate::glitch_patterns::save_chosen(self, track, p);
+                }
+            }
             Then::ImportPreset(key) => {
                 if let Some(p) = file {
                     self.state.message = crate::presets::import_chosen(self, key, p);

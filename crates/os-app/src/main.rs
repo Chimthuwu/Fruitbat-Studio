@@ -147,6 +147,7 @@ mod flam;
 mod flip;
 mod levels;
 mod channel_states;
+mod glitch_patterns;
 mod chords;
 mod claw;
 mod limit;
