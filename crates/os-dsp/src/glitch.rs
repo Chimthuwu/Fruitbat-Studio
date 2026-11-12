@@ -10,6 +10,11 @@
 //! run on their own clock (an eighth of a second at any rate). A step that fires nothing passes the audio through, and
 //! the section's amount at zero is the section off (the track's audio is the buffer that arrived).
 //!
+//! Each module's own harshness, measured on a 1 kHz tone at -6 dBFS: STUT and RVRS keep the level and repeat or reverse
+//! it, CRSH's bits are 3 at the top, so it fizzes rather than buzzes, GATE leaves an eighth of each step sounding rather
+//! than most of it silent, and RING loses the 3 dB a full ring mod always does. Every step that changes module, and
+//! every stutter's repeat, is crossfaded in over 1.5 ms: the changes are attacks, not cracks.
+//!
 //! spec: docs/plans — the analog strip is plan v3 Appendix C; this is Lemon Studio's own
 
 use crate::glide::{Glide, Ramp};
@@ -80,6 +85,10 @@ pub struct Glitch {
     /// The ring mod's phase and the gate's smoothed gain.
     phase: f32,
     gate: f32,
+    /// The last frame the grid sent out: a step that switches module, or a stutter that repeats, fades from it.
+    last: [f32; 2],
+    /// The frame the grid was sending out when the fade in flight began: the fade is a crossfade away from it.
+    seam: [f32; 2],
 }
 
 /// One block's grid settings: the step's length is fixed within it and the amount glides through it.
@@ -90,6 +99,8 @@ struct Block {
     /// The rate, for the ring mod's frequency, and 1 ms for the gate's own smoothing.
     rate: f32,
     smooth: f32,
+    /// Frames a splice fades in over: every step, and every repeat of a stutter, is one.
+    declick: usize,
     /// This frame's amount, moved once and used for both channels.
     a: f32,
 }
@@ -106,6 +117,8 @@ impl Glitch {
             held: 0,
             phase: 0.0,
             gate: 1.0,
+            last: [0.0; 2],
+            seam: [0.0; 2],
         }
     }
 
@@ -128,6 +141,8 @@ impl Glitch {
         self.held = 0;
         self.phase = 0.0;
         self.gate = 1.0;
+        self.last = [0.0; 2];
+        self.seam = [0.0; 2];
     }
 
     /// The step the grid is on, for a console that draws a playhead.
@@ -154,6 +169,7 @@ impl Glitch {
             step,
             rate: ratef,
             smooth: 1.0 - (-1.0 / (ratef * 0.001)).exp(),
+            declick: ((ratef * 0.0015) as usize).max(1),
             a: 0.0,
         })
     }
@@ -164,6 +180,8 @@ impl Glitch {
         let amount = b.a;
         let pos = self.at % b.step;
         let step = (self.at / b.step).min(STEPS - 1);
+        let module = self.pattern.steps[step];
+        let before = self.pattern.steps[(step + STEPS - 1) % STEPS];
         if pos == 0 {
             // A step starts fresh: the crush holds nothing and the ring mod starts its cycle again.
             self.held = 0;
@@ -173,10 +191,10 @@ impl Glitch {
             self.ring[ch][self.write] = input[ch];
         }
         let mut out = input;
-        match self.pattern.steps[step] {
+        let span = (b.step / 4).max(1);
+        match module {
             // STUT: the step's first quarter, played four times over.
             1 => {
-                let span = (b.step / 4).max(1);
                 // Back to the start of the quarter this frame belongs in, then on through it again.
                 let back = pos - pos % span;
                 let at = (self.write + RING - back) % RING;
@@ -185,9 +203,10 @@ impl Glitch {
                     out[ch] = input[ch] + (y - input[ch]) * amount;
                 }
             }
-            // CRSH: fewer bits and a sample and hold that gets longer as the amount goes up.
+            // CRSH: fewer bits (three at the top, a fizz rather than a buzz) and a sample and hold that gets longer
+            // as the amount goes up.
             2 => {
-                let bits = 2.0 + 14.0 * (1.0 - amount);
+                let bits = 3.0 + 13.0 * (1.0 - amount);
                 if self.held == 0 {
                     let levels = 2f32.powf(bits).max(2.0);
                     self.hold = input.map(|x| (x.clamp(-1.0, 1.0) * levels).round() / levels);
@@ -207,9 +226,9 @@ impl Glitch {
                     out[ch] = input[ch] + (y - input[ch]) * amount;
                 }
             }
-            // GATE: the step opens for less and less of itself as the amount goes up.
+            // GATE: the step opens for less and less of itself as the amount goes up, down to an eighth of it.
             4 => {
-                let open = (pos as f32) < (1.0 - 0.95 * amount) * b.step as f32;
+                let open = (pos as f32) < (1.0 - 0.88 * amount) * b.step as f32;
                 self.gate += (if open { 1.0 } else { 0.0 } - self.gate) * b.smooth;
                 for ch in 0..2 {
                     out[ch] = input[ch] * self.gate;
@@ -233,6 +252,26 @@ impl Glitch {
                 }
             }
         }
+        // A step that changes module, and a stutter's repeat, are splices: the grid jumps from one thing to another
+        // with nothing in common, which is a click at every step. The first 1.5 ms of each ramps from the frame
+        // before, so the change is heard as an attack rather than a crack. A step that keeps the module it followed
+        // is no splice and is left exactly as it is — a grid that fires nothing stays a sample-exact pass-through.
+        let declick = b.declick as f32;
+        let mut t = if module == before { 1.0 } else { (pos as f32 / declick).min(1.0) };
+        if module == 1 {
+            t = t.min(((pos % span) as f32 / declick).min(1.0));
+        }
+        if t < 1.0 {
+            // The fade is a crossfade from the frame the splice interrupted, spread over its whole length: chasing
+            // the new value instead would move fastest a third of the way through, which is the click again.
+            if t == 0.0 {
+                self.seam = self.last;
+            }
+            for ch in 0..2 {
+                out[ch] = self.seam[ch] + (out[ch] - self.seam[ch]) * t;
+            }
+        }
+        self.last = out;
         self.write = (self.write + 1) % RING;
         self.at += 1;
         if self.at >= STEPS * b.step {
@@ -316,10 +355,14 @@ mod tests {
         run(&mut g, &mut buf);
         let step = step_frames(RATE);
         let quarter = step / 4;
-        // Inside one step, the second quarter is the first one played again.
-        let a = &buf[..quarter * 2];
-        let b = &buf[quarter * 2..quarter * 4];
+        // Inside one step, the second quarter is the first one played again, past the fade each repeat opens with
+        // (so a repeat is not a click).
+        let d = (RATE as f32 * 0.0015) as usize;
+        let a = &buf[d * 2..quarter * 2];
+        let b = &buf[(quarter + d) * 2..quarter * 4];
         assert_eq!(a, b, "the quarter repeats");
+        let jump = |x: &[f32]| x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        assert!(jump(&buf) < 0.01, "the seams are faded, under -40 dBFS: {}", jump(&buf));
     }
 
     /// CRSH holds frames and rounds them, so the output has far fewer values than the input.
@@ -355,9 +398,46 @@ mod tests {
         run(&mut g, &mut buf);
         let step = step_frames(RATE);
         let loud = buf[..step / 20].iter().any(|x| x.abs() > 0.1);
-        let quiet = buf[step / 4..step].iter().all(|x| x.abs() < 1e-3);
+        let quiet = buf[2 * (step / 4)..2 * step].iter().all(|x| x.abs() < 1e-3);
         assert!(loud, "the start of the step is heard");
         assert!(quiet, "the rest of it is closed");
+    }
+
+    /// GATE at full amount leaves an eighth of the step open, so a bar pumps rather than falls silent for most of it.
+    #[test]
+    fn a_gate_step_leaves_an_eighth_open() {
+        let step = step_frames(RATE);
+        let mut buf = sine(1_000.0, step * 2);
+        let mut g = grid(4, 1.0);
+        run(&mut g, &mut buf);
+        // `sine` is 0.5 at its peak, so a fifth of that is a step that is open at all.
+        let open = buf.chunks(2).filter(|w| w[0].abs() > 0.1).count() as f32 / (step * 2) as f32;
+        assert!(open > 0.07 && open < 0.2, "an eighth of each step: {open}");
+    }
+
+    /// A step that changes module is crossfaded in, so the grid changes sound at its steps without cracking; a step
+    /// that keeps its module is left alone, and a grid that fires nothing stays a sample-exact pass-through.
+    #[test]
+    fn a_step_that_changes_module_fades_in() {
+        let step = step_frames(RATE);
+        let dry = sine(1_000.0, step * STEPS);
+        let mut buf = dry.clone();
+        let mut g = Glitch::new(Pattern { steps: std::array::from_fn(|i| (1 + i % 5) as u8), amount: glitch_word(1.0) });
+        run(&mut g, &mut buf);
+        // The step's first 1.5 ms, where the fade is, against the rest of it: a module's own steps (a crush's holds,
+        // a ring mod's cycle) may be as wide as they like, but the splice into it must not be wider.
+        let d = (RATE as f32 * 0.0015) as usize;
+        let jump = |f: usize| (buf[2 * f] - buf[2 * (f - 1)]).abs();
+        let (mut seam, mut inside) = (0.0f32, 0.0f32);
+        for n in 0..STEPS {
+            for f in 1..=d {
+                seam = seam.max(jump(n * step + f));
+            }
+            for f in d + 1..step {
+                inside = inside.max(jump(n * step + f));
+            }
+        }
+        assert!(seam <= inside + 0.01, "the splices are no wider than the module's own steps: {seam} of {inside}");
     }
 
     /// The words round trip, and the amount folds the grid in: less amount, less change from the dry signal.

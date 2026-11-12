@@ -17,6 +17,16 @@
       `MixerUi::steps` carries it and the active cell is ringed in cream, repainting only the grid (`Live::Glitch`).
       Holding a cell down drags its module across the cells the pointer crosses (`App::Drag::GlitchPaint`,
       `glitch_at` reading the grid from any cell's rect), in the press's one undo step.
+- [x] **The five modules tuned on audio**: each measured on a 1 kHz tone at -6 dBFS (RMS, peak, the largest frame-to-frame
+      jump, DC). Every step that changed module, and every stutter repeat, was a splice with no fade — its boundary stood
+      up to 22 dB out of the signal's own steps, the loudest thing the grid did — so each now crossfades in over 1.5 ms
+      from the frame before (a linear crossfade, not a chase: chasing moved fastest a third of the way in). STUT's
+      repeats went from -7.6 to -29 dBFS, RVRS from -12.7 to -29.4. CRSH's top is 3 bits instead of 2 (a fizz, not a
+      buzz; its own hold steps -8.5 dBFS, down from -6.0), and GATE leaves an eighth of each step sounding instead of a
+      twentieth (-9.3 dB at full, was -13.4). RVRS and RING needed nothing beside the crossfade; RING's 3 dB at full is
+      what a ring mod does. Tests: `a_stutter_step_repeats_itself` (seams under -40 dBFS and the quarter still repeats),
+      `a_gate_step_leaves_an_eighth_open`, `a_step_that_changes_module_fades_in` (a splice is no wider than the step's
+      own module), and the empty grid still passes through sample for sample.
 
 ## ✅ DONE 2026-11-12 — strip channel: gate → OTT; piano roll resizes
 - [x] **The strip's gate is a one-knob OTT** (`962b8418`): three bands at 250 Hz / 2.5 kHz, 8:1 down above -30 dB, 4:1
