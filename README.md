@@ -8,6 +8,8 @@
 
 <h3>A free and open-source digital audio workstation, written in Rust.</h3>
 
+<p><b>LemonWig Studio</b> — Bitwig/Ableton-style workflow meets Lemon Studio.</p>
+
 <p>
   <a href="https://github.com/ItsAlphaNeon/Lemon-Studio/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/ItsAlphaNeon/Lemon-Studio/ci.yml?branch=main&style=flat-square&label=CI"></a>
   <a href="LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue?style=flat-square"></a>
@@ -18,6 +20,7 @@
 </p>
 
 <p>
+  <a href="#lemonwig-studio">LemonWig Studio</a> ·
   <a href="#overview">Overview</a> ·
   <a href="#capabilities">Capabilities</a> ·
   <a href="#getting-started">Getting started</a> ·
@@ -35,6 +38,55 @@
 </div>
 
 ---
+
+## LemonWig Studio
+
+**LemonWig Studio** is the name this repository goes by: a performance-first way of working in Lemon Studio.
+Launch clips, fire scenes, and mix on a console that behaves like hardware — the Bitwig and Ableton way of working —
+on top of Lemon Studio's engine and its FL Studio project support.
+
+### Where it comes from
+
+Two repositories, in this order:
+
+| Repository | What it is |
+|---|---|
+| [ItsAlphaNeon / Lemon-Studio](https://github.com/ItsAlphaNeon/Lemon-Studio) | The original Lemon Studio: a free, open-source DAW written in Rust by AlphaNeon. It opens and saves FL Studio projects, hosts CLAP, VST3 and VST2 plugins, and ships its own instruments and effects. Everything here starts from that code. |
+| [nyannonymous / Lemon-Studio](https://github.com/nyannonymous/Lemon-Studio) | This repository — the fork where the new workflow is built: a clip launcher, a hardware-console mixer, the glitch strip and the modulation system. |
+
+LemonWig Studio is the working name for that fork. The program, its crates and its files keep their `lemonstudio`
+and `os-*` names, so builds, project files and automation behave exactly as before.
+
+### The idea
+
+Three things, together:
+
+- **A performance workflow.** Clips and scenes you can launch, as in Bitwig and Ableton — an idea can start as a loop
+  and turn into a song later, without moving it anywhere.
+- **A mixer you already know.** Real knobs, wide faders, meters that tell the truth, and an insert rack on every
+  track. Hardware habits, on a screen.
+- **FL Studio, still.** The same project files, plugins, patterns and piano roll that Lemon Studio handles.
+
+Lemon + Bitwig: **LemonWig**.
+
+### Who made it
+
+| | |
+|---|---|
+| **[AlphaNeon](https://github.com/ItsAlphaNeon)** | Created Lemon Studio and wrote most of it: the engine, project files, plugin hosting and the interface. |
+| **Chimthuwu** | The strip as a signal chain, the glitch grid, and the modulation system — model, engine and persistence. |
+| **thacer13** | Automation reaching hosted instruments without steps, real-time audio threads, and song-position jumps. |
+| **Samrat Dutta** | Choosing the audio input device, and following the system default. |
+| **Ari Markowitz** | Plugin windows on macOS. |
+
+And everyone who reported a bug or asked for a feature. Contributors keep the copyright of their work and license it
+under the GPL, as [Contributing](#contributing) explains; every source file names its holders in its header.
+
+### Sharing it
+
+What Twitter, X, Discord, Slack and Bluesky show when this repository is linked comes from GitHub's description and
+social preview image. [docs/social.md](docs/social.md) has the description, topics, alt text and the 1280 × 640 image
+([docs/assets/social-preview.png](docs/assets/social-preview.png)) ready to paste into the repository settings.
 
 ## Overview
 
