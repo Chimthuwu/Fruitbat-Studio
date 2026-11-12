@@ -730,10 +730,14 @@ fn chain_ink(ui: &Ui, st: &ConsoleStyle, module: u8) -> Color {
     }
 }
 
-/// The glitch grid's area in a console body `r` and one cell's size: the amount row's 26 px and a 3 px gap, then the
-/// 4×4. `glitch_panel` draws from it, so a drag's `glitch_at` finds the cells it sees.
+/// The `GRID` header's height in a glitch tile: its name and the grid's two buttons.
+const GRID_HEAD: f32 = 16.0;
+
+/// The glitch grid's area in a console body `r` and one cell's size: the header, the amount row's 26 px and a 3 px
+/// gap, then the 4×4. `glitch_panel` draws from it, so a drag's `glitch_at` finds the cells it sees.
 fn glitch_area(r: Rect) -> (Rect, f32, f32) {
-    let grid = Rect::new(r.x, r.y + 29.0, r.w, (r.bottom() - r.y - 29.0).max(24.0));
+    let top = r.y + GRID_HEAD + 29.0;
+    let grid = Rect::new(r.x + 1.0, top, (r.w - 2.0).max(16.0), (r.bottom() - top).max(24.0));
     let cw = grid.w / 4.0;
     let ch = (grid.h / 4.0).min(cw * 1.5).max(9.0);
     (grid, cw, ch)
@@ -749,33 +753,86 @@ pub fn glitch_at(cell: Rect, step: u8, (x, y): (f32, f32)) -> u8 {
     row * 4 + col
 }
 
-/// The glitch console: the grid's amount over the sixteen steps as a 4×4 grid. A cell carries its module's two letters
-/// in that module's colour and is filled in when the step fires, so a bar reads at a glance; a click cycles it
-/// (`MCmd::GlitchStep`), which is the whole editor — there is no knob per module, and no menu behind it.
+/// The glitch console: a panel of its own — warm near-black, a hairline of the glitch orange and lit corner ticks,
+/// not the analog sections' plates — with its name and two buttons (`RND` a new random pattern, `CLR` an empty one)
+/// over the amount as a bar, and the sixteen steps as a 4×4. A cell that fires is filled in its module's colour with a
+/// lit top edge and its two letters; an empty one is a dark socket. A click cycles a cell (`MCmd::GlitchStep`); a drag
+/// paints; the step the audio thread rendered last is ringed in cream.
 fn glitch_panel(ui: &mut Ui, s: &State, n: u16, m: &os_model::MixerTrack, r: Rect) {
-    let st = console_style(ui);
-    let amount = Rect::new(r.x, r.y, r.w, 26.0);
-    console_plate(ui, amount, &st);
-    console_knob(ui, s, amount, 0.5, KnobId::Glitch(n), st.ds, r.w >= 50.0);
+    let ink = glitch_ink(ui, 1);
+    let surface = ui.t.s(0x171314);
+    ui.c.fill_rrect(r, 3.0, surface);
+    ui.c.stroke_rrect(r, 3.0, 1.0, ink.with_alpha(if m.strip_bypassed { 55 } else { 125 }));
+    for (x, y, dx, dy) in [
+        (r.x + 3.0, r.y + 3.0, 1.0, 1.0),
+        (r.right() - 3.0, r.y + 3.0, -1.0, 1.0),
+        (r.x + 3.0, r.bottom() - 3.0, 1.0, -1.0),
+        (r.right() - 3.0, r.bottom() - 3.0, -1.0, -1.0),
+    ] {
+        ui.c.line(x, y, x + 6.0 * dx, y, 1.0, ink.with_alpha(180));
+        ui.c.line(x, y, x, y + 6.0 * dy, 1.0, ink.with_alpha(180));
+    }
+    // The header: the grid's name, then its two buttons at the right (below 50 px a 7 px button is not clickable, so
+    // the name alone is drawn and the track menu has both).
+    ui.c.text_center(Font::new(8).bold(), Rect::new(r.x + 4.0, r.y + 3.0, 24.0, 11.0), ink, "GRID");
+    if r.w >= 50.0 {
+        let bw = ((r.w - 26.0) / 2.0).clamp(11.0, 15.0);
+        let clear = Rect::new(r.right() - 4.0 - bw, r.y + 3.0, bw, 11.0);
+        let hov = ui.hit(clear, Action::Mix(MHit::GlitchClear(n)), "Empty the grid (one undo step)");
+        ui.c.fill_rrect(clear, 2.0, if hov { ui.t.button_hi } else { ui.t.s(0x241b18) });
+        ui.c.stroke_rrect(clear, 2.0, 0.8, ink.with_alpha(150));
+        ui.c.text_center(Font::new(7).bold(), clear, ink, "CLR");
+        let rnd = Rect::new(clear.x - bw - 3.0, clear.y, bw, 11.0);
+        let hov = ui.hit(rnd, Action::Mix(MHit::GlitchRandom(n)), "A new random pattern (one undo step)");
+        ui.c.fill_rrect(rnd, 2.0, if hov { ui.t.button_hi } else { ui.t.s(0x241b18) });
+        ui.c.stroke_rrect(rnd, 2.0, 0.8, ink.with_alpha(150));
+        ui.c.text_center(Font::new(7).bold(), rnd, ink, "RND");
+    }
+    // The amount: its knob, then the bar under it, so the level is a length as well as a number.
+    let amount = Rect::new(r.x + 1.0, r.y + GRID_HEAD, r.w - 2.0, 24.0);
+    console_knob(ui, s, amount, 0.5, KnobId::Glitch(n), ink, r.w >= 50.0);
+    let level = Rect::new(amount.x + 4.0, amount.bottom() - 3.0, (amount.w - 8.0).max(11.0), 3.0);
+    let frac = os_dsp::glitch::glitch_amount(m.glitch_amount).clamp(0.0, 1.0);
+    ui.c.fill_rrect(level, 1.5, ui.t.s(0x2b2421));
+    if frac > 0.0 {
+        ui.c.fill_rrect(Rect::new(level.x, level.y, (level.w * frac).max(1.5), level.h), 1.5, ink);
+    }
     let (grid, cw, ch) = glitch_area(r);
-    // The grid's playhead: the step the audio thread rendered last (`MixerUi::steps`), its cell ringed in cream.
+    // A faint grid of its own behind the cells, so the 4×4 has a surface instead of floating on the strip.
+    for k in 1..4 {
+        let y = grid.y + grid.h * k as f32 / 4.0;
+        ui.c.line(grid.x, y, grid.right(), y, 0.5, ink.with_alpha(22));
+        let x = grid.x + grid.w * k as f32 / 4.0;
+        ui.c.line(x, grid.y, x, grid.bottom(), 0.5, ink.with_alpha(22));
+    }
+    // The playhead: the step the audio thread rendered last (`MixerUi::steps`), its cell ringed in cream.
     let play = s.mixer.steps.get(usize::from(n)).copied().flatten();
     ui.live(Live::Glitch, grid);
     let count = os_dsp::glitch::MODULES.len();
     for i in 0..os_dsp::glitch::STEPS {
-        let b = Rect::new(grid.x + cw * (i % 4) as f32, grid.y + ch * (i / 4) as f32, (cw - 1.0).max(4.0), (ch - 1.0).max(6.0));
+        let b = Rect::new(
+            grid.x + cw * (i % 4) as f32 + 0.75,
+            grid.y + ch * (i / 4) as f32 + 0.75,
+            (cw - 1.5).max(4.0),
+            (ch - 1.5).max(6.0),
+        );
         let module = usize::from(m.glitch[i]).min(count - 1);
-        let ink = glitch_ink(ui, module);
+        let cell = glitch_ink(ui, module);
         let hov = ui.hovering(b);
         let here = play == Some(i as u8);
-        ui.c.fill_rrect(b, 2.0, if module == 0 { ui.t.s(0x1a1d1f) } else { ink.mix(ui.t.s(0x14171a), 0.58) });
         if module > 0 {
-            ui.c.stroke_rrect(b, 2.0, 1.0, ink.with_alpha(if hov || here { 255 } else { 150 }));
+            ui.c.fill_rrect(b, 2.5, cell.mix(ui.t.s(0x120f10), if here { 0.3 } else { 0.58 }));
+            // A lit top edge and a soft ring: a firing step reads as a lit key, not a checked box.
+            ui.c.line(b.x + 2.0, b.y + 1.0, b.right() - 2.0, b.y + 1.0, 1.0, cell.with_alpha(220));
+            ui.c.stroke_rrect(b, 2.5, 1.0, cell.with_alpha(if hov || here { 255 } else { 165 }));
+        } else {
+            ui.c.fill_rrect(b, 2.5, ui.t.s(0x100e0f));
+            ui.c.stroke_rrect(b, 2.5, 1.0, ui.t.s(if hov { 0x4a423f } else { 0x282321 }));
         }
         if here {
-            ui.c.stroke_rrect(b, 2.0, 1.6, ui.t.tx(0xfff4d6));
+            ui.c.stroke_rrect(Rect::new(b.x - 1.0, b.y - 1.0, b.w + 2.0, b.h + 2.0), 3.5, 1.6, ui.t.tx(0xfff4d6));
         }
-        ui.c.text_center(Font::new(8).bold(), b, ink, os_dsp::glitch::SHORT[module]);
+        ui.c.text_center(Font::new(9).bold(), b, if module > 0 { cell } else { ui.t.s(0x453d39) }, os_dsp::glitch::SHORT[module]);
         let hint = if module == 0 {
             format!("Step {}: off (click to place {})", i + 1, os_dsp::glitch::MODULES[1])
         } else {
@@ -1561,6 +1618,8 @@ mod tests {
         app.paint(&mut c, None);
         assert!(has(&app, Action::Mix(MHit::GlitchCell(2, 0))), "the grid's tile");
         assert!(has(&app, Action::Mix(MHit::GlitchCell(2, 15))), "its last step");
+        assert!(has(&app, Action::Mix(MHit::GlitchRandom(2))), "its new-pattern button");
+        assert!(has(&app, Action::Mix(MHit::GlitchClear(2))), "and its clear button");
         assert!(has(&app, Action::Mix(MHit::ChainSlot(2, 7))), "its chip too");
         assert!(knob(&app, 2).is_some(), "the drive's tile stays");
         // A chip takes its module out, one undo step, and its tile goes with it.

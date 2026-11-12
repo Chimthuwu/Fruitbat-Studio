@@ -23,6 +23,13 @@
 - [ ] **P3, the chain console**: the style bar becomes a chain bar of module chips and the panel draws one tile per
       chain slot (the grid's 4×4 among them), paged when the chain is taller than four rows; a mixed chain also needs a
       chain-level bypass fade (today the bypass switch is hard on a mixed chain). The plan's §"Console" has the layout.
+- [x] **The glitch console looks like its own instrument** (2026-11-12, after "it's just a checkerboard of small squares, no
+      cool controls"): the grid tile is a warm near-black panel with a hairline of glitch orange and lit corner ticks, a
+      `GRID` header with two buttons — `RND` draws a new musical random pattern (a stutter on every beat, about two steps
+      between firing one of the five modules; seeded from the track and its current grid, so undo then the button repeats
+      it) and `CLR` empties it, one undo step each — the amount's knob over a level bar, and a faint 4×4 surface behind
+      cells that light up in their module's colour with a lit top edge and their letters; the step playing is ringed in
+      cream. Both controls are in the track menu too (`Random grid` / `Clear grid`).
 - [x] **A grid that joins a chain is heard** (2026-11-12): an empty grid fires no step, so a grid added from the Track ▸
       Modules menu, the Chain presets or the console's style bar was silent. All three now lay
       `os_dsp::glitch::DEFAULT_STEPS` (a stutter on every beat, a gate closing the bar) and a 70 % amount when the grid

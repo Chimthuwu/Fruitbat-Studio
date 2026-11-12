@@ -46,6 +46,9 @@ pub enum MHit {
     /// A chain chip in the console's chain bar (`.1`: the module): a click takes that module out of the chain, one undo
     /// step (the Modules menu puts it back and reorders).
     ChainSlot(u16, u8),
+    /// The grid tile's two buttons: a new random pattern, and an empty grid.
+    GlitchRandom(u16),
+    GlitchClear(u16),
     /// The strip's own panel button: shows or hides the console on that channel alone (`console_shown`), whatever the
     /// layout. Session state, not project data.
     StripPanel(u16),
@@ -123,6 +126,8 @@ pub enum MCmd {
     GlitchStep(u16, u8, u8),
     GlitchAmount(u16, u16),
     GlitchClear(u16),
+    /// A new random grid on track `.0` (a stutter on every beat, the steps between drawn from the five modules).
+    GlitchRandom(u16),
     /// Save pattern as...: the save box for the grid's sixteen steps and its amount (`crate::glitch_patterns`).
     SaveGlitchPattern(u16),
     /// A saved glitch pattern put on the grid (its file already has the new capture's path).
@@ -789,6 +794,31 @@ pub fn hit(app: &mut App, h: MHit) -> Option<String> {
                 } else if m.chain == os_model::CHAIN_GLITCH {
                     m.glitch_style = true;
                 }
+                changed(s);
+                Some(())
+            });
+            None
+        }
+        // The grid's two buttons: a new pattern and an empty one, one undo step each.
+        MHit::GlitchRandom(n) => {
+            select(s, n, ctrl);
+            let _ = edit(s, "Random grid", Region::Track(n), |s| {
+                let m = track_mut(s, n)?;
+                m.glitch = random_grid(n, &m.glitch);
+                m.glitch_style = true;
+                if m.glitch_amount == 0 {
+                    m.glitch_amount = os_dsp::glitch::glitch_word(0.7);
+                }
+                changed(s);
+                Some(())
+            });
+            None
+        }
+        MHit::GlitchClear(n) => {
+            select(s, n, ctrl);
+            let _ = edit(s, "Clear grid", Region::Track(n), |s| {
+                let m = track_mut(s, n)?;
+                m.glitch = [0; 16];
                 changed(s);
                 Some(())
             });
@@ -2024,6 +2054,7 @@ fn track_items(s: &State, n: u16) -> Vec<PItem> {
                 v
             },
         ),
+        PItem::new("Random grid", mx(MCmd::GlitchRandom(n))),
         PItem::new("Clear grid", mx(MCmd::GlitchClear(n))),
     ]
 }
@@ -2070,6 +2101,31 @@ fn strip_table(t: Option<&os_model::MixerTrack>) -> u16 {
 
 /// Puts a chain on track `n`, the console's style following the two whole strips (a mixed chain keeps whichever console
 /// the track had, and runs: a chain behind a bypassed strip would do nothing).
+/// A grid drawn at random, but musically: a stutter on every beat and about two of the steps between firing one of the
+/// five modules. The track and the grid it starts from seed it, so pressing the button again always gives a new bar
+/// while the same bar always gives the same next one (undo, then the button, repeats it).
+fn random_grid(track: u16, from: &[u8; 16]) -> [u8; 16] {
+    let mut seed = 0x9E37_79B9u32 ^ u32::from(track).wrapping_mul(0x85EB_CA6B);
+    for (i, &m) in from.iter().enumerate() {
+        seed = seed.rotate_left(5) ^ (u32::from(m) << (i % 24));
+    }
+    let modules = (os_dsp::glitch::MODULES.len() - 1) as u32;
+    let mut next = || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        seed >> 16
+    };
+    let mut grid = [0u8; 16];
+    for (i, step) in grid.iter_mut().enumerate() {
+        if i % 4 == 0 {
+            *step = 1;
+        } else {
+            let (chance, pick) = (next(), next());
+            *step = if chance % 5 < 2 { 1 + (pick % modules) as u8 } else { 0 };
+        }
+    }
+    grid
+}
+
 fn set_chain(s: &mut State, n: u16, chain: [u8; 8]) {
     if let Some(t) = track_mut(s, n) {
         t.chain = chain;
@@ -2453,7 +2509,7 @@ pub fn run(app: &mut App, c: MCmd) -> Option<String> {
     // A slot's sidechain input is the track's own (its slot's saved state).
     // Quick Sidechain changes the destination's chain and the source's routing in one undo step.
     // The Analog Channel Strip is the track's own state: one undo step on that track (plan v3 Milestone 0).
-    if let MCmd::StripBypass(t) | MCmd::StripLowCut(t, _) | MCmd::StripOtt(t, _) | MCmd::StripDrive(t, _) | MCmd::StripDriveType(t, _) | MCmd::StripTame(t, _) | MCmd::StripComp(t, _) | MCmd::StripCompProfile(t, _) | MCmd::StripTable(t, _) | MCmd::StripStyle(t, _) | MCmd::GlitchStep(t, _, _) | MCmd::GlitchAmount(t, _) | MCmd::GlitchClear(t) = &c {
+    if let MCmd::StripBypass(t) | MCmd::StripLowCut(t, _) | MCmd::StripOtt(t, _) | MCmd::StripDrive(t, _) | MCmd::StripDriveType(t, _) | MCmd::StripTame(t, _) | MCmd::StripComp(t, _) | MCmd::StripCompProfile(t, _) | MCmd::StripTable(t, _) | MCmd::StripStyle(t, _) | MCmd::GlitchStep(t, _, _) | MCmd::GlitchAmount(t, _) | MCmd::GlitchClear(t) | MCmd::GlitchRandom(t) = &c {
         let t = *t;
         return crate::control::edit_app(app, "Analog channel strip", Region::Track(t), |app| run_now(app, c));
     }
@@ -2738,6 +2794,17 @@ fn run_now(app: &mut App, c: MCmd) -> Option<String> {
         MCmd::GlitchClear(n) => {
             if let Some(t) = track_mut(s, n) {
                 t.glitch = [0; 16];
+                changed(s);
+            }
+            None
+        }
+        MCmd::GlitchRandom(n) => {
+            if let Some(t) = track_mut(s, n) {
+                t.glitch = random_grid(n, &t.glitch);
+                t.glitch_style = true;
+                if t.glitch_amount == 0 {
+                    t.glitch_amount = os_dsp::glitch::glitch_word(0.7);
+                }
                 changed(s);
             }
             None
@@ -4553,6 +4620,17 @@ mod tests {
         assert_eq!(g(&a).glitch, [0; 16]);
         crate::history::undo(&mut a.state);
         assert_eq!(g(&a).glitch[5], 4, "clearing is one undo step");
+        // A random grid: a stutter on every beat, a different bar each press, one undo step each.
+        let steps = a.state.history.at();
+        run(&mut a, MCmd::GlitchRandom(2));
+        let first = g(&a).glitch;
+        assert!(first.iter().step_by(4).all(|&m| m != 0), "a stutter on every beat: {first:?}");
+        assert!(g(&a).glitch_amount > 0, "and a level to hear it at");
+        run(&mut a, MCmd::GlitchRandom(2));
+        assert_ne!(g(&a).glitch, first, "a new bar each time");
+        assert_eq!(a.state.history.at(), steps + 2, "one undo step each");
+        crate::history::undo(&mut a.state);
+        assert_eq!(g(&a).glitch, first, "and undo puts the last one back");
         run(&mut a, MCmd::StripStyle(2, false));
         let items = track_items(&a.state, 2);
         let style = items.iter().find(|i| i.label == "Strip style").expect("the style menu");
