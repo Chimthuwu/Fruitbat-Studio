@@ -64,8 +64,8 @@ FruitBat Studio is a Rust workspace. Install the stable Rust toolchain with [rus
 
 ```bash
 # Clone the repository
-git clone https://github.com/Chimthuwu/Lemonwig-Studio.git
-cd Lemonwig-Studio
+git clone https://github.com/Chimthuwu/Fruitbat-Studio.git
+cd Fruitbat-Studio
 
 # Build and run the app
 cargo run -p os-app --release
