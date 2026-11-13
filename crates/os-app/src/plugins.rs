@@ -506,6 +506,9 @@ pub struct Plugins {
     /// The MIDI FX chains playing rack rows (`App::sync_note_fx`): a row's instrument as its track's MIDI FX slots
     /// make of it (spec: track-model-plan.md §9).
     pub note_fx: BTreeMap<usize, NoteFxRow>,
+    /// The palette the open editors last drew with: a skin or theme change makes the next `sync_palette` repaint them,
+    /// so a popped-out editor does not keep the old skin's colours.
+    palette_seen: Option<os_theme::Palette>,
 }
 
 /// One row's MIDI FX chain on the note path (`crate::note_fx::NoteFx`): the chain's instrument, the arpeggiator's
@@ -675,6 +678,22 @@ pub fn format_name(f: os_host::Format) -> &'static str {
 }
 
 impl Plugins {
+    /// Repaints every open plugin editor when the app's palette changed (a skin or theme switch). The editors read
+    /// `os_plugkit::palette()` as they paint, so the repaint is what makes a popped-out window follow the skin.
+    pub fn sync_palette(&mut self) {
+        let now = os_plugkit::palette();
+        if self.palette_seen.as_ref() == Some(&now) {
+            return;
+        }
+        self.palette_seen = Some(now);
+        #[cfg(plugin_windows)]
+        for h in self.hosted.values() {
+            if let Some(w) = &h.window {
+                w.redraw();
+            }
+        }
+    }
+
     /// The built-in plugins only (what the app knows before the scan cache is read).
     pub fn builtins() -> Plugins {
         let native_checks = (!cfg!(test)).then(|| os_native::check::Checks::load(os_paths::user_file(NATIVE_CHECKS)));

@@ -207,8 +207,9 @@ impl FrameWindow {
             if !detached {
                 ScreenToClient(owner as HWND, &mut p);
             }
+            // A detached editor is hard detached: a top-level window kept above the main window and its device rack.
             let hwnd = CreateWindowExW(
-                0,
+                if detached { WS_EX_TOPMOST } else { 0 },
                 fc.as_ptr(),
                 title.as_ptr(),
                 frame_style(detached),
@@ -286,7 +287,9 @@ impl FrameWindow {
                 SetParent(self.hwnd, owner as HWND);
                 ScreenToClient(owner as HWND, &mut p);
             }
-            SetWindowPos(self.hwnd, HWND_TOP, p.x, p.y, 0, 0, SWP_NOSIZE | SWP_FRAMECHANGED);
+            // Detached: above every window of the app (a docked child goes back into the main window's stack).
+            let after = if on { HWND_TOPMOST } else { HWND_NOTOPMOST };
+            SetWindowPos(self.hwnd, after, p.x, p.y, 0, 0, SWP_NOSIZE | SWP_FRAMECHANGED);
         }
         self.raise();
     }
@@ -367,6 +370,11 @@ impl FrameWindow {
                 SetForegroundWindow(self.hwnd);
             }
         }
+    }
+
+    /// Repaints the frame and the plugin's editor (a skin change reached their palette).
+    pub fn redraw(&self) {
+        unsafe { InvalidateRect(self.hwnd, std::ptr::null(), 0) };
     }
 
     pub fn set_info(&self, info: ChannelInfo) {

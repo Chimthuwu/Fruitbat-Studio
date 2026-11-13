@@ -138,7 +138,7 @@ impl App {
     /// originals were) are dragged from here on, starting one snap step later (a step without a snap) when `step`.
     /// A Shift+drag picks them up on its first move, without the step (spec: ui/piano-roll.md §8).
     pub(crate) fn pick_up_notes(&mut self, step: bool) {
-        let Some(Drag::NoteMove { x0, y0, orig }) = self.drag.clone() else { return };
+        let Some(Drag::NoteMove { x0, y0, orig, .. }) = self.drag.clone() else { return };
         let (Some(g), Some(ch)) = (self.piano_geom(), piano::channel(&self.state)) else { return };
         let s = &mut self.state;
         crate::history::rename(s, "Piano roll clone note");
@@ -159,7 +159,7 @@ impl App {
         let unit = crate::piano_snap::unit(s).unwrap_or(u32::from(s.project.ppq.max(4)) / 4);
         let x0 = if step { x0 - unit as f32 * g.ppt } else { x0 };
         s.piano.dirty = true;
-        self.drag = Some(Drag::NoteMove { x0, y0, orig: copies.clone() });
+        self.drag = Some(Drag::NoteMove { x0, y0, orig: copies.clone(), cloned: true });
         self.drag_notes(x0, y0, &copies, false);
         self.damage_piano();
     }
@@ -167,7 +167,7 @@ impl App {
     /// The moved clips are copied (`playlist::clone_clips`); the copies are dragged from here on, starting one snap
     /// step later (a step without a snap).
     fn pick_up_clips(&mut self) {
-        let Some(Drag::Pl(PlDrag::Move { x0, y0, orig, fresh: false })) = self.drag.clone() else { return };
+        let Some(Drag::Pl(PlDrag::Move { x0, y0, orig, fresh: false, .. })) = self.drag.clone() else { return };
         let Some(grid) = self.pl_grid() else { return };
         crate::history::rename(&mut self.state, "Arranger clone clip");
         let copies = pl::clone_clips(&mut self.state, &orig);
@@ -177,7 +177,7 @@ impl App {
             sn => sn.ticks(g.ppq, g.bar_w),
         };
         // `fresh`: the copies are a change even where they end up.
-        let d = PlDrag::Move { x0: x0 - unit as f32 * g.ppt, y0, orig: copies, fresh: true };
+        let d = PlDrag::Move { x0: x0 - unit as f32 * g.ppt, y0, orig: copies, fresh: true, cloned: true };
         self.drag = Some(Drag::Pl(d.clone()));
         pl::drag_move(self, d, grid);
         self.invalidate();

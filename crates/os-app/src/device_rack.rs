@@ -1196,7 +1196,8 @@ pub fn key(app: &mut App, c: &str) -> bool {
     match c.to_ascii_lowercase().as_str() {
         "a" => select_all(app),
         "c" => copy_selected(app),
-        "d" => duplicate_selected(app),
+        // Ctrl+B (FL) and Ctrl+D both duplicate the selected devices.
+        "b" | "d" => duplicate_selected(app),
         "x" => cut_selected(app),
         "v" => paste_clip(app),
         "g" => group_selected(app),

@@ -1152,21 +1152,41 @@ pub fn key(app: &mut crate::app::App, key: &winit::keyboard::Key, ctrl: bool, al
         return true;
     }
     match key {
+        // Every one of these belongs to the modulator strip while it has the keyboard: the key is consumed even when
+        // there is nothing to act on, so it never falls through to the piano roll's or the playlist's Ctrl+A / Ctrl+C /
+        // Ctrl+X / Ctrl+V / Delete. That leak is what made Ctrl+A in the strip select notes outside it.
         Key::Named(NamedKey::Delete | NamedKey::Backspace) if !ctrl && !alt => {
-            let had = !app.state.mod_sel.is_empty()
-                || app.state.mod_cursor.is_some()
-                || app.state.mod_editor.is_some()
-                || app.state.mod_menu.is_some();
             delete_selected(app);
-            had
+            true
         }
-        Key::Character(c) if ctrl && !alt && c.eq_ignore_ascii_case("a") => select_all(app),
-        Key::Character(c) if ctrl && !alt && c.eq_ignore_ascii_case("c") => copy_selected(app),
-        Key::Character(c) if ctrl && !alt && c.eq_ignore_ascii_case("x") => cut_selected(app),
-        Key::Character(c) if ctrl && !alt && c.eq_ignore_ascii_case("v") => paste_clipboard(app),
-        Key::Named(NamedKey::Enter) if !ctrl && !alt => open_menu(app),
-        Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowUp) if !ctrl && !alt => move_selection(app, -1, shift),
-        Key::Named(NamedKey::ArrowRight | NamedKey::ArrowDown) if !ctrl && !alt => move_selection(app, 1, shift),
+        Key::Character(c) if ctrl && !alt && c.eq_ignore_ascii_case("a") => {
+            select_all(app);
+            true
+        }
+        Key::Character(c) if ctrl && !alt && c.eq_ignore_ascii_case("c") => {
+            copy_selected(app);
+            true
+        }
+        Key::Character(c) if ctrl && !alt && c.eq_ignore_ascii_case("x") => {
+            cut_selected(app);
+            true
+        }
+        Key::Character(c) if ctrl && !alt && c.eq_ignore_ascii_case("v") => {
+            paste_clipboard(app);
+            true
+        }
+        Key::Named(NamedKey::Enter) if !ctrl && !alt => {
+            open_menu(app);
+            true
+        }
+        Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowUp) if !ctrl && !alt => {
+            move_selection(app, -1, shift);
+            true
+        }
+        Key::Named(NamedKey::ArrowRight | NamedKey::ArrowDown) if !ctrl && !alt => {
+            move_selection(app, 1, shift);
+            true
+        }
         _ => false,
     }
 }
@@ -1206,6 +1226,8 @@ pub fn sync(app: &mut crate::app::App) {
 /// The modulator UI's actions (the eight slot row, its editor and its menus).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ModAct {
+    /// A click on the strip's empty surface: it takes the editing keys (the keyboard focus) without changing the graph.
+    FocusStrip,
     /// The empty slot's "+" (or a click elsewhere closes it).
     AddMenu(u8),
     /// The "＋" after the last slot: another row of modulator slots.
@@ -1314,6 +1336,7 @@ pub fn act(app: &mut crate::app::App, a: ModAct) {
     app.state.keyboard_focus = crate::app::KeyboardFocus::Modulators;
     let s = &mut app.state;
     match a {
+        ModAct::FocusStrip => {}
         ModAct::AddMenu(slot) => {
             s.mod_add_slot = if s.mod_add_slot == Some(slot) { None } else { Some(slot) };
             s.mod_sel.clear();

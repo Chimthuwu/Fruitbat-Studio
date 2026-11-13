@@ -412,6 +412,9 @@ pub struct Launcher {
     /// The cell a click selected (an audio clip cell: a double click opens it in the panel's clip editor, and the
     /// selection then drives which sample the editor shows).
     pub sel: Option<(u32, usize)>,
+    /// The arrow keys' cell: (column, scene). The launcher takes the keyboard while it is out, so a cell can be picked
+    /// and launched without the mouse (Bitwig's launcher navigation).
+    pub cursor: (usize, usize),
     /// The bottom panel's mode ([`Panel`]).
     pub panel: Panel,
     /// By the track's id: the clip it plays.
@@ -496,6 +499,47 @@ pub enum Act {
     SceneOverride(usize),
     /// The clip editor panel's Devices button: the device rack takes the bottom panel back.
     PanelDevices,
+}
+
+/// The launcher's keys while it is out (Bitwig's launcher navigation): the arrows walk the cells, Home / End jump to
+/// the first / last scene, Enter launches the cell and Delete clears it. Returns whether the key was taken.
+pub fn key(app: &mut App, key: &winit::keyboard::Key, ctrl: bool, alt: bool) -> bool {
+    use winit::keyboard::{Key, NamedKey};
+    if !app.state.launcher_open || ctrl || alt {
+        return false;
+    }
+    let cols = columns(&app.state);
+    if cols.is_empty() {
+        return false;
+    }
+    let (mut col, mut scene) = app.state.launcher.cursor;
+    col = col.min(cols.len() - 1);
+    scene = scene.min(SCENES - 1);
+    match key {
+        Key::Named(NamedKey::ArrowLeft) => scene = scene.saturating_sub(1),
+        Key::Named(NamedKey::ArrowRight) => scene = (scene + 1).min(SCENES - 1),
+        Key::Named(NamedKey::ArrowUp) => col = col.saturating_sub(1),
+        Key::Named(NamedKey::ArrowDown) => col = (col + 1).min(cols.len() - 1),
+        Key::Named(NamedKey::Home) => scene = 0,
+        Key::Named(NamedKey::End) => scene = SCENES - 1,
+        Key::Named(NamedKey::Enter) => {
+            app.state.launcher.sel = Some((cols[col].id, scene));
+            crate::launcher::run(app, Act::Launch(cols[col].id, scene));
+            return true;
+        }
+        Key::Named(NamedKey::Delete | NamedKey::Backspace) => {
+            if clip(&app.state, cols[col].id, scene).is_some() {
+                crate::launcher::run(app, Act::Clear(cols[col].id, scene));
+            }
+            return true;
+        }
+        _ => return false,
+    }
+    app.state.launcher.cursor = (col, scene);
+    app.state.launcher.sel = Some((cols[col].id, scene));
+    crate::views::launcher::reveal(&mut app.state);
+    app.invalidate();
+    true
 }
 
 /// The tracks the launcher has a column for, in the mixer's order (`mixer_strip`), so a column sits over the strip
@@ -1447,6 +1491,9 @@ pub fn run(app: &mut App, act: Act) {
             // A click selects the cell: an audio clip's selection drives which sample the panel's clip editor
             // shows (and a single click on another audio clip retargets it).
             app.state.launcher.sel = Some((track, scene));
+            if let Some(i) = columns(&app.state).iter().position(|c| c.id == track) {
+                app.state.launcher.cursor = (i, scene.min(SCENES - 1));
+            }
             let audio = clip(&app.state, track, scene).is_some_and(|sl| sl.audio.is_some());
             // A double click opens the clip (an audio clip's in the panel's clip editor); an audio clip does
             // that from a single click too while its editor already stands (`Panel::TeslaClipEditor`).
@@ -1477,6 +1524,10 @@ pub fn run(app: &mut App, act: Act) {
             set(app, track, scene, next);
         }
         Act::SelectTrack(track) => {
+            // A header click also moves the arrow keys' column there.
+            if let Some(i) = columns(&app.state).iter().position(|c| c.id == track) {
+                app.state.launcher.cursor.0 = i;
+            }
             // A track's click (header or row) gives the device rack its panel back (§F3): the clip editor stands
             // only for an audio clip's selection.
             if app.state.launcher.panel != Panel::DeviceRack {

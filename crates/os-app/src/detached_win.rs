@@ -74,16 +74,14 @@ fn open(el: &ActiveEventLoop, main: &Window, app: &App, w: Win) -> Option<DetWin
     let k = ui_scale(main);
     let (lw, lh) = app.state.detached_size(w)?;
     let (mw, mh) = app.state.detached_min(w);
-    let always_on_top = w == Win::ModEditor;
+    // A popout is hard detached: its own native window, above the main window and every window drawn inside it (so it
+    // can never sink under the docked device rack). Only the modulator editor hides the window system's frame.
+    let bare = w == Win::ModEditor;
     let attrs = Window::default_attributes()
         .with_title(title(w))
-        .with_decorations(!always_on_top)
-        .with_resizable(!always_on_top)
-        .with_window_level(if always_on_top {
-            winit::window::WindowLevel::AlwaysOnTop
-        } else {
-            winit::window::WindowLevel::Normal
-        })
+        .with_decorations(!bare)
+        .with_resizable(!bare)
+        .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
         .with_min_inner_size(PhysicalSize::new((f64::from(mw) * k).round() as u32, (f64::from(mh) * k).round() as u32));
     let attrs = match app.detached_frame(w) {
         Some([x, y, fw, fh]) => {
@@ -125,11 +123,9 @@ fn open(el: &ActiveEventLoop, main: &Window, app: &App, w: Win) -> Option<DetWin
         if app.plugins.owner != 0 { attrs.with_x11_window_type(vec![WindowType::Utility]).with_visible(false) } else { attrs }
     };
     let window = Rc::new(el.create_window(attrs).ok()?);
-    // Reassert the level after creation: the owner and other creation options are applied around it, and this window
-    // must stay above the main window's piano roll / playlist and every detached window.
-    if always_on_top {
-        window.set_window_level(winit::window::WindowLevel::AlwaysOnTop);
-    }
+    // Reassert the level after creation: the owner and other creation options are applied around it, and a popout must
+    // stay above the main window's piano roll / playlist and every detached window, never under the device rack.
+    window.set_window_level(winit::window::WindowLevel::AlwaysOnTop);
     #[cfg(target_os = "linux")]
     if app.plugins.owner != 0 {
         use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};

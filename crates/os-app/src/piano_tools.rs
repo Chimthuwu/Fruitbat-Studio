@@ -146,7 +146,7 @@ pub fn repeats(key: &winit::keyboard::Key, ctrl: bool, alt: bool, shift: bool) -
         Key::Named(NamedKey::ArrowUp | NamedKey::ArrowDown) => (shift || ctrl || alt) && !(ctrl && shift),
         Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowRight) => shift || ctrl || alt,
         Key::Named(NamedKey::PageUp | NamedKey::PageDown) => true,
-        Key::Character(c) => ctrl && !alt && (c.eq_ignore_ascii_case("b") || c.eq_ignore_ascii_case("v")),
+        Key::Character(c) => ctrl && !alt && (c.eq_ignore_ascii_case("b") || c.eq_ignore_ascii_case("d") || c.eq_ignore_ascii_case("v")),
         _ => false,
     }
 }
@@ -163,7 +163,8 @@ pub fn key(app: &mut App, key: &winit::keyboard::Key, ctrl: bool, alt: bool) -> 
         Key::Character(c) if ctrl && !alt && is(c, "l") => NCmd::Legato,
         Key::Character(c) if ctrl && !alt && is(c, "u") => NCmd::QuickChop,
         Key::Character(c) if ctrl && !alt && is(c, "g") => NCmd::Glue,
-        Key::Character(c) if ctrl && !alt && is(c, "b") => NCmd::Duplicate,
+        // Ctrl+B (FL) and Ctrl+D (Bitwig) both duplicate the selected notes.
+        Key::Character(c) if ctrl && !alt && (is(c, "b") || is(c, "d")) => NCmd::Duplicate,
         Key::Character(c) if shift && !ctrl && !alt && is(c, "d") => NCmd::DiscardLengths,
         Key::Character(c) if alt && !ctrl && is(c, "m") => NCmd::Mute(!shift),
         Key::Character(c) if alt && !ctrl && is(c, "q") => NCmd::Dialog(crate::piano_dlg::Tool::Quantize),
@@ -179,11 +180,6 @@ pub fn key(app: &mut App, key: &winit::keyboard::Key, ctrl: bool, alt: bool) -> 
         Key::Character(c) if alt && !ctrl && is(c, "r") => NCmd::Dialog(crate::piano_dlg::Tool::Randomize),
         Key::Character(c) if alt && !ctrl && is(c, "v") => NCmd::Ghosts,
         Key::Character(c) if alt && !ctrl && !shift && is(c, "t") => NCmd::AddMarker,
-        Key::Character(c) if ctrl && !alt && is(c, "d") => {
-            app.state.piano.clear_selection();
-            app.invalidate();
-            return true;
-        }
         Key::Character(c) if ctrl && !alt && is(c, "x") => {
             let s = &mut app.state;
             let sel = s.piano.selection(s.pattern, piano::channel(s));

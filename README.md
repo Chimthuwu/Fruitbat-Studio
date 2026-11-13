@@ -8,7 +8,7 @@
 
 <h3>A free and open-source digital audio workstation, written in Rust.</h3>
 
-<p><b>LemonWig Studio</b> — Bitwig/Ableton-style workflow meets Lemon Studio.</p>
+<p><b>Fruitbat Studios</b> — Bitwig/Ableton-style workflow meets the Lemon Studio engine.</p>
 
 <p>
   <a href="https://github.com/ItsAlphaNeon/Lemon-Studio/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/ItsAlphaNeon/Lemon-Studio/ci.yml?branch=main&style=flat-square&label=CI"></a>
@@ -20,7 +20,7 @@
 </p>
 
 <p>
-  <a href="#lemonwig-studio">LemonWig Studio</a> ·
+  <a href="#fruitbat-studios">Fruitbat Studios</a> ·
   <a href="#overview">Overview</a> ·
   <a href="#capabilities">Capabilities</a> ·
   <a href="#getting-started">Getting started</a> ·
@@ -39,11 +39,14 @@
 
 ---
 
-## LemonWig Studio
+## Fruitbat Studios
 
-**LemonWig Studio** is the name this repository goes by: a performance-first way of working in Lemon Studio.
-Launch clips, fire scenes, and mix on a console that behaves like hardware — the Bitwig and Ableton way of working —
-on top of Lemon Studio's engine and its FL Studio project support.
+**Fruitbat Studios** is the working name for this DAW: a performance-first way of working on top of the Lemon Studio
+engine. Launch clips, fire scenes, and mix on a console that behaves like hardware — the Bitwig and Ableton way of
+working — while keeping Lemon Studio's FL Studio project support, instruments and plugin hosting.
+
+The program, its crates and its files keep their `lemonstudio` and `os-*` names, so builds, project files and
+automation keep working. Fruitbat Studios is the studio/product name; `lemonstudio.exe` is still the binary.
 
 ### Where it comes from
 
@@ -53,9 +56,6 @@ Two repositories, in this order:
 |---|---|
 | [ItsAlphaNeon / Lemon-Studio](https://github.com/ItsAlphaNeon/Lemon-Studio) | The original Lemon Studio: a free, open-source DAW written in Rust by AlphaNeon. It opens and saves FL Studio projects, hosts CLAP, VST3 and VST2 plugins, and ships its own instruments and effects. Everything here starts from that code. |
 | [nyannonymous / Lemon-Studio](https://github.com/nyannonymous/Lemon-Studio) | This repository — the fork where the new workflow is built: a clip launcher, a hardware-console mixer, the glitch strip and the modulation system. |
-
-LemonWig Studio is the working name for that fork. The program, its crates and its files keep their `lemonstudio`
-and `os-*` names, so builds, project files and automation behave exactly as before.
 
 ### The idea
 
@@ -67,7 +67,19 @@ Three things, together:
   track. Hardware habits, on a screen.
 - **FL Studio, still.** The same project files, plugins, patterns and piano roll that Lemon Studio handles.
 
-Lemon + Bitwig: **LemonWig**.
+### What is actually working today
+
+The honest, tested picture lives in [docs/AUDIT-2026-11-14-fruitbat.md](docs/AUDIT-2026-11-14-fruitbat.md).
+The short version:
+
+- **Solid:** FL Studio project I/O, the audio engine and export, plugin hosting and the built-in Lemon instruments and
+effects, the piano roll's editing tools, the pattern/channel system, and the device rack's docked editors.
+- **Working but still rough:** the clip launcher (playback, scenes, recording, audio clips and keyboard navigation work;
+track headers still lack volume/pan faders and clips cannot yet be dragged between cells), the modulation system (graph,
+engine and persistence work; native popped-out plugin editors cannot show modulation overlays), and window management
+(the piano roll is still a movable floating window).
+- **Not finished:** roughly 146 greyed-out placeholder controls across menus and panels, MIDI FX rack routing (blocked on
+the note-path work), and several launcher/device-rack polish items listed in the audit.
 
 ### Who made it
 
@@ -142,7 +154,7 @@ Where Lemon Studio stands against what a complete DAW offers:
 | Scripting and assistants | 🚧 | Scripts, tests and AI assistants read and edit projects over a local socket, every change undoable; see [docs/control-plane.md](docs/control-plane.md) |
 | Audio drivers | 🚧 | WASAPI (shared and exclusive) and ASIO® (output, and inputs for audio recording) on Windows, ALSA (and PipeWire / PulseAudio through it) on Linux, Core Audio on macOS; no JACK yet |
 | Platforms | 🚧 | Windows 10 / 11, Linux (X11, and Wayland through XWayland) and macOS 11 or newer; macOS is supported at the same level as Linux |
-| Look and themes | 🚧 | Lemon and Citrus (formerly Classic) skins; 25 built-in themes, your own themes and `.flstheme` files colour either skin, with live adjustments and a colour picker; Lemon plugin editors in the Lemon design only |
+| Look and themes | 🚧 | Meridian, Lemon, Lemon Industrial and Citrus (formerly Classic) skins; 25 built-in themes, your own themes and `.flstheme` files, with live adjustments and a colour picker. Settings ▸ Theme currently lists Lemon and Citrus only; Meridian and Industrial are selected elsewhere. Plugin editors follow the app palette, including popped-out windows after a skin change |
 | Settings | 🚧 | Every page works: MIDI, Audio, Recording, General, File, Plugins, Theme, Project and Info |
 | Audio recording | 🚧 | Armed mixer tracks record into the playlist at their record source; one-click audio recording into the playlist or the audio editor, from ASIO or system inputs; Tesla records what reaches its mixer slot |
 | Audio editing | ✅ | Tesla, the audio editor and recorder after FL's Edison: a mixer effect (and VST3 / CLAP plugin) with markers, regions, destructive edits and tools; a project's Edison slots open in it |
@@ -362,8 +374,9 @@ cargo run -p os-app --release -- --render path/to/project.flp out.wav [--rate 48
 ```
 
 `--builtin-only` hosts only Lemon Studio's own plugins, for a render that is the same on every machine.
-Settings > Theme picks the skin (Lemon, or Citrus, the look formerly called Classic) and the theme; the choice is
-remembered.
+Settings > Theme picks the skin (Lemon or Citrus, the look formerly called Classic) and the theme; the choice is
+remembered. Meridian and Lemon Industrial are selectable from the theme/skin surfaces outside that page — see
+[docs/AUDIT-2026-11-14-fruitbat.md](docs/AUDIT-2026-11-14-fruitbat.md) for the current gap.
 
 Lemon Trio and Lemon Parametric EQ were called Lemon 3x Osc and Lemon Parametric EQ 2 before, and earlier all three
 plugins were called Open Sampler, Open 3x Osc and Open Parametric EQ 2. They keep their plugin IDs, so sessions saved

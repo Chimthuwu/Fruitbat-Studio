@@ -137,6 +137,29 @@ pub fn wheel(s: &mut State, x: f32, y: f32, dx: f32, dy: f32, shift: bool) -> bo
     true
 }
 
+/// Scrolls the grid so the arrow keys' cell shows (a cell picked off the edge scrolls into view).
+pub fn reveal(s: &mut State) {
+    let client = client_rect(s);
+    let g = geom(s, client);
+    let (col, scene) = s.launcher.cursor;
+    let x = g.col_x(scene);
+    let left = client.x + g.label_w;
+    if x < left {
+        s.launcher.scroll_x = (g.sx - (left - x)).max(0.0);
+    } else if x + g.scene_w > client.right() {
+        s.launcher.scroll_x = g.sx + x + g.scene_w - client.right();
+    }
+    let y = g.row_y(col);
+    let top = client.y + HEAD_H;
+    if y < top {
+        s.launcher.scroll_y = (g.sy - (top - y)).max(0.0);
+    } else if y + g.row_h > client.bottom() {
+        s.launcher.scroll_y = g.sy + y + g.row_h - client.bottom();
+    }
+    s.launcher.scroll_x = s.launcher.scroll_x.clamp(0.0, g.max_sx());
+    s.launcher.scroll_y = s.launcher.scroll_y.clamp(0.0, g.max_sy());
+}
+
 /// `r` cut to the part of it inside `area`.
 fn clip_to(r: Rect, area: Rect) -> Rect {
     let x0 = r.x.max(area.x);
@@ -272,7 +295,7 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
         ui.c.push_clip(cells);
         for scene in 0..launcher::SCENES {
             let cell = Rect::new(g.col_x(scene) + PAD, y + PAD, g.scene_w - 2.0 * PAD, g.row_h - 2.0 * PAD);
-            slot_paint(ui, s, c, scene, cell, cells);
+            slot_paint(ui, s, c, scene, cell, cells, s.launcher.cursor == (i, scene));
         }
         ui.c.pop_clip();
     }
@@ -295,7 +318,7 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
 
 /// One cell: empty, holding a clip, or the one the track plays (queued cells are outlined while they wait). `area` is
 /// what the grid shows of the cells, so one half scrolled out only answers where it shows.
-fn slot_paint(ui: &mut Ui, s: &State, c: &launcher::Column, scene: usize, cell: Rect, area: Rect) {
+fn slot_paint(ui: &mut Ui, s: &State, c: &launcher::Column, scene: usize, cell: Rect, area: Rect, cursor: bool) {
     let t = ui.t;
     let hov = hit_in(
         ui,
@@ -375,6 +398,11 @@ fn slot_paint(ui: &mut Ui, s: &State, c: &launcher::Column, scene: usize, cell: 
                 ui.c.text(fnt(13.0), cell.cx() - 4.0, cell.cy() - 9.0, t.text_dim, "+");
             }
         }
+    }
+    // The arrow keys' cell: a bright inner ring, so keyboard navigation is visible even over a playing or queued
+    // cell's own rings.
+    if cursor {
+        ui.c.stroke_rrect(cell.inset(2.0), 2.0, 1.5, t.accent);
     }
     // The cell a take records into: ringed in the record colour with a dot, so the armed cell is not lost among the
     // clips (an empty one stays empty until the first note, then shows the clip it is making).

@@ -2092,6 +2092,72 @@ pub fn duplicate(s: &mut State) {
     s.piano.dirty = true;
 }
 
+/// A dropped or resized pattern clip takes the ground it lands on (Bitwig): another pattern clip of the same track it
+/// overlaps is cut back to its start, moved past the new clip or removed, never stacked underneath. Audio and
+/// automation clips are left alone: their overlaps are the automatic crossfades.
+pub fn clear_pattern_overlaps(s: &mut State, keep: &[usize]) {
+    let all = clips(s).to_vec();
+    let spans: Vec<(u16, u32, u32)> = keep
+        .iter()
+        .filter_map(|&i| all.get(i))
+        .filter(|c| matches!(c.source, ClipSource::Pattern(_)))
+        .map(|c| (c.track, c.position, c.end()))
+        .collect();
+    if spans.is_empty() {
+        return;
+    }
+    let mut remove: Vec<usize> = Vec::new();
+    let mut trim: Vec<(usize, Option<u32>, u32)> = Vec::new();
+    let mut tails: Vec<Clip> = Vec::new();
+    for (j, c) in all.iter().enumerate() {
+        if keep.contains(&j) || !matches!(c.source, ClipSource::Pattern(_)) {
+            continue;
+        }
+        for &(track, start, stop) in &spans {
+            if c.track != track || c.position >= stop || c.end() <= start {
+                continue;
+            }
+            if c.position < start {
+                // Keep the part before the new clip, and the part after it when the old one runs past its end.
+                trim.push((j, None, start - c.position));
+                if c.end() > stop {
+                    let mut tail = *c;
+                    tail.set_id(0);
+                    tail.position = stop;
+                    tail.length = c.end() - stop;
+                    tails.push(tail);
+                }
+            } else if c.end() > stop {
+                // The old clip starts inside the new one and runs past it: only its tail survives.
+                trim.push((j, Some(stop), c.end() - stop));
+            } else {
+                remove.push(j);
+            }
+            break;
+        }
+    }
+    if remove.is_empty() && trim.is_empty() && tails.is_empty() {
+        return;
+    }
+    let arr = arr_mut(s);
+    for (j, pos, len) in trim {
+        if let Some(c) = arr.clips.get_mut(j) {
+            if let Some(p) = pos {
+                c.position = p;
+            }
+            c.length = len.max(1);
+        }
+    }
+    remove.sort_unstable_by(|a, b| b.cmp(a));
+    for j in remove {
+        if j < arr.clips.len() {
+            arr.clips.remove(j);
+        }
+    }
+    arr.clips.extend(tails);
+    s.piano.dirty = true;
+}
+
 pub fn copy(s: &mut State) {
     let idx = if s.playlist.sel.is_empty() { Vec::new() } else { s.playlist.sel.clone() };
     s.playlist.clipboard = idx.iter().filter_map(|&i| clips(s).get(i).copied()).collect();
@@ -3459,8 +3525,9 @@ pub fn knob_menu(s: &State, auto: Option<(u32, String, f64)>, typein: Option<cra
 /// Drags inside the playlist.
 #[derive(Debug, Clone)]
 pub enum PlDrag {
-    /// `fresh` = the clip was just placed (its undo step stays even without a move).
-    Move { x0: f32, y0: f32, orig: Vec<(usize, Clip)>, fresh: bool },
+    /// `fresh` = the clip was just placed (its undo step stays even without a move). `cloned` = the clip was picked
+    /// up as a copy (Shift+drag, click-and-hold): an overlap with the original it came from is intended.
+    Move { x0: f32, y0: f32, orig: Vec<(usize, Clip)>, fresh: bool, cloned: bool },
     ResizeL { x0: f32, orig: Vec<(usize, Clip)> },
     ResizeR { x0: f32, orig: Vec<(usize, Clip)> },
     Slip { x0: f32, i: usize, orig: Clip },
@@ -3874,7 +3941,7 @@ pub fn press_grid(app: &mut App, grid: Rect, right: bool) {
                 if tool == PlTool::Paint {
                     app.drag = Some(Drag::Pl(PlDrag::Paint { track, start, len: c.length.max(1) }));
                 } else {
-                    app.drag = Some(Drag::Pl(PlDrag::Move { x0: x, y0: y, orig: vec![(i, c)], fresh: true }));
+                    app.drag = Some(Drag::Pl(PlDrag::Move { x0: x, y0: y, orig: vec![(i, c)], fresh: true, cloned: false }));
                 }
             }
             Some(i) => {
@@ -3934,7 +4001,7 @@ pub fn press_grid(app: &mut App, grid: Rect, right: bool) {
                 app.drag = Some(Drag::Pl(match e {
                     -1 => PlDrag::ResizeL { x0: x, orig },
                     1 => PlDrag::ResizeR { x0: x, orig },
-                    _ => PlDrag::Move { x0: x, y0: y, orig, fresh: app.shift },
+                    _ => PlDrag::Move { x0: x, y0: y, orig, fresh: app.shift, cloned: app.shift },
                 }));
                 // Held without a move, the clips are cloned (Click-and-hold & special gesture functions).
                 if e == 0 && !app.shift {
@@ -4250,6 +4317,11 @@ pub fn drag_end(app: &mut App, d: PlDrag, grid: Rect) {
     let s = &mut app.state;
     let g = PGeom::new(s, grid);
     let overlay = s.playlist.overlay.take();
+    let moved: Vec<usize> = match &d {
+        PlDrag::Move { orig, cloned, .. } if !cloned => orig.iter().map(|&(i, _)| i).collect(),
+        PlDrag::ResizeL { orig, .. } | PlDrag::ResizeR { orig, .. } => orig.iter().map(|&(i, _)| i).collect(),
+        _ => Vec::new(),
+    };
     // A resized clip's new length is used for the next clips of its source.
     if let PlDrag::ResizeL { orig, .. } | PlDrag::ResizeR { orig, .. } = &d
         && let Some(c) = orig.first().and_then(|&(i, _)| clips(s).get(i))
@@ -4318,7 +4390,8 @@ pub fn drag_end(app: &mut App, d: PlDrag, grid: Rect) {
         }
         _ => {}
     }
-    let _ = g;
+    // The clips that moved or resized win their ground: no pattern clips stack on one track (Bitwig).
+    clear_pattern_overlaps(&mut app.state, &moved);
     app.invalidate();
 }
 

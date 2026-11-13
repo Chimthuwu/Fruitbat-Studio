@@ -70,6 +70,9 @@ pub enum KeyboardFocus {
     Tracks,
     Rack,
     Modulators,
+    /// The piano roll was the last editing surface clicked into: its notes win the editing keys (Ctrl+B / Ctrl+D
+    /// duplicate them, Ctrl+C / X / V act on them) even while a device rack tile stays selected.
+    Piano,
 }
 
 impl Win {
@@ -988,7 +991,9 @@ pub enum Drag {
     /// Cable physics debug panel slider.
     CableParam(usize),
     /// Piano roll: move notes (originals by index), resize their ends, erase, draw velocities.
-    NoteMove { x0: f32, y0: f32, orig: Vec<(usize, Note)> },
+    NoteMove { x0: f32, y0: f32, orig: Vec<(usize, Note)>, /// The notes were picked up as copies (Shift+drag or click-and-hold): the originals stay, so an overlap with one
+    /// of them is intended and is not trimmed on release.
+    cloned: bool },
     NoteResize { x0: f32, orig: Vec<(usize, Note)> },
     NoteErase,
     /// Mute tool swipe: every note touched gets `on` (the first note's new state, §9).
@@ -4450,6 +4455,8 @@ impl App {
         s.control.settle_tick(&mut s.project, s.piano.dirty);
         self.control_tick();
         self.plugin_tick();
+        // A skin / theme change reaches the open plugin editors (docked and popped out) at their next repaint.
+        self.plugins.sync_palette();
         // A launcher clip queued for the next bar line goes on the air at that line (`launcher::advance`).
         crate::launcher::advance(self);
         // Playback loops over the time selection, as it is now (spec: ui/recording.md §5).
@@ -6145,7 +6152,7 @@ impl App {
                         }
                     }
                 }
-                Drag::NoteMove { x0, y0, orig } => {
+                Drag::NoteMove { x0, y0, orig, .. } => {
                     if std::mem::take(&mut self.shift_clone) {
                         self.pick_up_notes(false);
                     } else {
@@ -6901,6 +6908,14 @@ impl App {
                 self.invalidate();
             }
             self.state.no_focus = false;
+            // The keyboard follows the surface clicked into, so the device rack's selection does not keep the editing
+            // keys after the piano roll (or the arrangement) was clicked.
+            self.state.keyboard_focus = match w {
+                Win::PianoRoll => KeyboardFocus::Piano,
+                Win::ChannelRack => KeyboardFocus::Rack,
+                Win::Playlist | Win::Mixer => KeyboardFocus::Tracks,
+                _ => self.state.keyboard_focus,
+            };
         } else if self.state.work_rect().contains(x, y) {
             self.state.no_focus = true;
         }
@@ -7522,6 +7537,19 @@ impl App {
         if had_overlay {
             self.damage_piano();
         }
+        // A moved or resized note takes the ground it lands on: overlapping notes of the same key are trimmed, split or
+        // removed (Bitwig). A copy picked up from an original (Shift+drag, click-and-hold) is meant to overlap the
+        // original it came from, so a cloned drag leaves the other notes alone.
+        if let Some(Drag::NoteMove { orig, cloned, .. }) = self.drag.clone()
+            && !cloned
+        {
+            let keep: Vec<usize> = orig.iter().map(|&(i, _)| i).collect();
+            piano::clear_overlaps(&mut self.state, &keep);
+        }
+        if let Some(Drag::NoteResize { orig, .. }) = self.drag.clone() {
+            let keep: Vec<usize> = orig.iter().map(|&(i, _)| i).collect();
+            piano::clear_overlaps(&mut self.state, &keep);
+        }
         if matches!(self.drag, Some(Drag::NoteMove { .. } | Drag::NoteResize { .. } | Drag::NoteErase | Drag::NoteMute { .. } | Drag::NotePaint { .. })) {
             piano::finish_edit(&mut self.state);
             self.state.piano.dirty = true;
@@ -7704,6 +7732,7 @@ impl App {
                 piano::pattern_mut(&mut self.state).notes[i].length = len;
                 let before = piano::notes(&self.state).len();
                 let i = piano::paint_mono(&mut self.state, i);
+                let i = piano::clear_overlaps(&mut self.state, &[i])[0];
                 deleted |= piano::notes(&self.state).len() < before;
                 added.push(piano::notes(&self.state)[i]);
             }
@@ -8366,16 +8395,18 @@ impl App {
         if self.state.keyboard_focus == KeyboardFocus::Modulators
             && self.state.playlist.edit.is_none()
             && self.state.menu_open.is_none()
-            && (self.state.mod_editor.is_some() || self.state.mod_menu.is_some() || !self.state.mod_sel.is_empty())
             && crate::modulation::key(self, key, ctrl, alt, self.shift)
         {
             self.invalidate();
             return;
         }
-        // The device rack's keys when a tile is selected (main window in front, no dialog, no playlist edit):
-        // arrows move the selection across the device chain, Delete / Backspace remove the selected devices,
-        // and Ctrl+D / Ctrl+X / Ctrl+V / Ctrl+G duplicate, cut, paste and group them (§7, the spec keys).
-        if !self.state.device_rack_sels.is_empty()
+        // The device rack's keys when a tile is selected and the rack was the last surface clicked into (main window in
+        // front, no dialog, no playlist edit): arrows move the selection across the device chain, Delete / Backspace
+        // remove the selected devices, and Ctrl+B / Ctrl+D / Ctrl+X / Ctrl+V / Ctrl+G duplicate, cut, paste and group
+        // them (§7, the spec keys). Without the focus check a tile clicked once kept the notes' Ctrl+B / Ctrl+C / Ctrl+X /
+        // Ctrl+V, so selecting notes in the piano roll cut or duplicated the docked device instead.
+        if self.state.keyboard_focus == KeyboardFocus::Rack
+            && !self.state.device_rack_sels.is_empty()
             && self.state.playlist.edit.is_none()
             && self.state.menu_open.is_none()
             && crate::device_rack::visible(&self.state)
@@ -8404,6 +8435,17 @@ impl App {
         if s.z.last() == Some(&Win::Mixer) && s.menu_open.is_none() && !s.settings.open && s.playlist.edit.is_none() && s.playlist.popup.is_none() && crate::mixer::key(self, key, ctrl, alt) {
             return;
         }
+        // The clip launcher's keys while the Playlist window shows it (Bitwig's launcher navigation): the arrows walk
+        // the cells, Enter launches, Delete clears.
+        if self.state.launcher_open
+            && self.pl_focus()
+            && self.state.menu_open.is_none()
+            && !self.state.settings.open
+            && self.state.playlist.edit.is_none()
+            && crate::launcher::key(self, key, ctrl, alt)
+        {
+            return;
+        }
         // The playlist's editing keys when it is in front (spec: ui/playlist.md §5).
         if self.pl_focus() && crate::playlist::key(self, key, ctrl, alt) {
             return;
@@ -8416,7 +8458,12 @@ impl App {
         }
         // The piano roll's editing and tool keys (spec: ui/piano-roll.md §11, ui/piano-keys.md).
         let s = &self.state;
-        if s.shown(Win::PianoRoll) && s.menu_open.is_none() && !s.settings.open && s.playlist.edit.is_none() && crate::piano_tools::key(self, key, ctrl, alt) {
+        if self.piano_keys()
+            && s.menu_open.is_none()
+            && !s.settings.open
+            && s.playlist.edit.is_none()
+            && crate::piano_tools::key(self, key, ctrl, alt)
+        {
             return;
         }
         
@@ -8477,7 +8524,7 @@ impl App {
             }
             // Piano roll editing keys (spec: ui/piano-roll.md §8).
             // Ctrl+A also makes the whole pattern the time selection, as FL does (spec: ui/piano-keys.md §4 rule 4).
-            Key::Character(c) if ctrl && c.eq_ignore_ascii_case("a") && self.state.shown(Win::PianoRoll) => {
+            Key::Character(c) if ctrl && self.piano_keys() && c.eq_ignore_ascii_case("a") => {
                 let s = &mut self.state;
                 if let Some(ch) = piano::channel(s) {
                     let all = piano::notes(s).iter().enumerate().filter(|(_, n)| n.channel == ch).map(|(i, _)| i).collect();
@@ -8510,31 +8557,31 @@ impl App {
             // Piano-roll tools and selection editing (spec: ui/piano-roll.md §9). Letters switch tools; with Shift too,
             // which the typing keyboard leaves alone (Shift+C and Shift+D were taken above; spec: ui/piano-keys.md §4
             // rule 16).
-            Key::Character(c) if !ctrl && !alt && self.state.shown(Win::PianoRoll) && Tool::from_letter(c).is_some() => {
+            Key::Character(c) if !ctrl && !alt && self.piano_keys() && Tool::from_letter(c).is_some() => {
                 if let Some(t) = Tool::from_letter(c) {
                     self.act(Action::PianoTool(t));
                 }
             }
-            Key::Character(c) if ctrl && c.eq_ignore_ascii_case("c") && self.state.shown(Win::PianoRoll) => {
+            Key::Character(c) if ctrl && self.piano_keys() && c.eq_ignore_ascii_case("c") => {
                 let s = &mut self.state;
                 let sel = s.piano.selection(s.pattern, piano::channel(s));
                 let notes = piano::notes(s);
                 s.piano.clipboard = sel.iter().filter_map(|&i| notes.get(i).copied()).collect();
             }
-            Key::Character(c) if ctrl && c.eq_ignore_ascii_case("v") && self.state.shown(Win::PianoRoll) => {
+            Key::Character(c) if ctrl && self.piano_keys() && c.eq_ignore_ascii_case("v") => {
                 let clip = self.state.piano.clipboard.clone();
                 let at = piano::paste_tick(&self.state, &clip);
                 piano::paste(&mut self.state, &clip, at);
                 self.state.piano.dirty = true;
             }
             Key::Named(k @ (NamedKey::ArrowLeft | NamedKey::ArrowRight | NamedKey::ArrowUp | NamedKey::ArrowDown))
-                if self.state.shown(Win::PianoRoll) =>
+                if self.piano_keys() =>
             {
                 self.piano_arrow(*k, ctrl, alt);
             }
             // Delete: the selection, or with nothing selected every note of the channel (spec: ui/piano-keys.md §4
             // rule 3).
-            Key::Named(NamedKey::Delete) if self.state.shown(Win::PianoRoll) => {
+            Key::Named(NamedKey::Delete) if self.piano_keys() => {
                 let s = &mut self.state;
                 let idx = piano::targets(s);
                 if !idx.is_empty() {
@@ -8861,7 +8908,9 @@ impl App {
     /// the channel rack, the mixer nor the playlist is in front of it (`App::key` asks those first).
     fn piano_keys(&self) -> bool {
         let s = &self.state;
+        // A rack tile or the modulator strip keeps the editing keys while it was the last section clicked into.
         s.shown(Win::PianoRoll)
+            && !matches!(s.keyboard_focus, KeyboardFocus::Rack | KeyboardFocus::Modulators)
             && s.menu_open.is_none()
             && !s.settings.open
             && s.playlist.edit.is_none()
@@ -8914,6 +8963,8 @@ impl App {
                     let start = crate::piano_snap::place(s, &g, g.tick_at(x), self.alt);
                     let i = piano::add_note(s, ch, start, key);
                     let i = piano::paint_mono(s, i);
+                    // The painted note wins over anything already on its key, as in Bitwig (no stacked notes).
+                    let i = piano::clear_overlaps(s, &[i])[0];
                     let len = piano::notes(s)[i].length;
                     s.piano.dirty = true;
                     self.drag = Some(Drag::NotePaint { key, start, len });
@@ -8970,9 +9021,10 @@ impl App {
                 s.piano.clear_selection();
                 let i = piano::add_note(s, ch, crate::piano_snap::place(s, &g, g.tick_at(x), self.alt), g.key_at(y));
                 let i = piano::paint_mono(s, i);
+                let i = piano::clear_overlaps(s, &[i])[0];
                 let n = piano::notes(s)[i];
                 s.piano.last_len = n.length;
-                self.drag = Some(Drag::NoteMove { x0: x, y0: y, orig: vec![(i, n)] });
+                self.drag = Some(Drag::NoteMove { x0: x, y0: y, orig: vec![(i, n)], cloned: false });
                 let play = self.audition();
                 self.hold_key(Some(i32::from(n.key)), play);
                 // Held without a move, the new note's type cycles (Click-and-hold & special gesture functions).
@@ -9008,7 +9060,7 @@ impl App {
                 } else {
                     let play = self.audition();
                     self.hold_key(Some(i32::from(n.key)), play);
-                    Drag::NoteMove { x0: x, y0: y, orig }
+                    Drag::NoteMove { x0: x, y0: y, orig, cloned: false }
                 });
                 // Shift+drag drags copies of the notes (§8); held without a move, the notes are cloned (Click-and-hold &
                 // special gesture functions).
@@ -9151,6 +9203,49 @@ impl App {
     }
 
     pub fn act(&mut self, a: Action) {
+        // The keyboard belongs to the section last clicked into. Every section's editing keys (Ctrl+A / C / X / V / B /
+        // D, Delete, the arrows) are scoped by `State::keyboard_focus`, so a click in the modulator strip cannot leave
+        // Ctrl+A selecting piano notes or playlist clips, and a click in the piano roll hands it back.
+        self.state.keyboard_focus = match &a {
+            Action::Mod(_) | Action::Modulator(_) => KeyboardFocus::Modulators,
+            Action::DeviceRack(_) => KeyboardFocus::Rack,
+            Action::PianoGrid
+            | Action::PianoNote(_)
+            | Action::PianoVelocity
+            | Action::PianoKeys
+            | Action::PianoRuler
+            | Action::PianoSplitter
+            | Action::PianoCmd(_)
+            | Action::PianoTool(_)
+            | Action::PianoLanePick(_)
+            | Action::PitchStep(_)
+            | Action::PianoUndo
+            | Action::PianoTarget => KeyboardFocus::Piano,
+            Action::Launcher(_)
+            | Action::ToggleLauncher
+            | Action::PlTool(_)
+            | Action::PlSnap
+            | Action::PlOptions
+            | Action::PlRuler
+            | Action::PlMarkers
+            | Action::PlHeader(_)
+            | Action::PlLed(_)
+            | Action::PlSolo(_)
+            | Action::PlPan(_)
+            | Action::PlGroupArrow(_)
+            | Action::PlLaneArrow(..)
+            | Action::PlArrangement
+            | Action::PlStretch
+            | Action::PlPopup(_)
+            | Action::PlPopupSub(_)
+            | Action::PlaylistArea
+            | Action::Mix(_)
+            | Action::MixerArea
+            | Action::ChannelSelect(_)
+            | Action::ChannelEnable(_)
+            | Action::Fader(_) => KeyboardFocus::Tracks,
+            _ => self.state.keyboard_focus,
+        };
         if let Action::Settings(sa) = a {
             return self.settings_act(sa);
         }
@@ -9444,6 +9539,7 @@ impl App {
                     s.raise(w);
                 }
                 if w == Win::PianoRoll && s.shown(Win::PianoRoll) {
+                    s.keyboard_focus = KeyboardFocus::Piano;
                     piano::center_keys(s, self.piano_grid.map_or(700.0, |g| g.h));
                 }
             }
@@ -9675,6 +9771,7 @@ impl App {
                     s.wins[i].maxed = true;
                 }
                 if w == Win::PianoRoll {
+                    s.keyboard_focus = KeyboardFocus::Piano;
                     piano::center_keys(s, self.piano_grid.map_or(700.0, |g| g.h));
                 }
             }
@@ -17494,6 +17591,7 @@ mod tests {
                 NamedKey::ArrowRight => KeyCode::ArrowRight,
                 NamedKey::Delete => KeyCode::Delete,
                 NamedKey::Enter => KeyCode::Enter,
+                NamedKey::Escape => KeyCode::Escape,
                 _ => unreachable!("add the key"),
             };
             for i in 0..n {
@@ -17580,7 +17678,7 @@ mod tests {
             both.extend(moved(1152, 0));
             both.sort_unstable();
             assert_eq!(spans(&app), both, "the copies move by the pattern's length in bars");
-            letter(&mut app, 'd', CTRL, 1);
+            named(&mut app, NamedKey::Escape, 0, 1);
             assert!(selected(&app).is_empty());
             assert_eq!(app.state.piano.range, None);
             select(&mut app, 800, 60);
@@ -17608,16 +17706,16 @@ mod tests {
             // The marker never placed: the note's place in its bar, in bar 1; a second paste onto the first moves a unit.
             select(&mut app, 432, 72);
             letter(&mut app, 'c', CTRL, 1);
-            letter(&mut app, 'd', CTRL, 1);
+            named(&mut app, NamedKey::Escape, 0, 1);
             letter(&mut app, 'v', CTRL, 1);
             assert_eq!(selected(&app), [(48, 72)]);
-            letter(&mut app, 'd', CTRL, 1);
+            named(&mut app, NamedKey::Escape, 0, 1);
             letter(&mut app, 'v', CTRL, 1);
             assert_eq!(selected(&app), [(72, 72)]);
             // C5 from 800 lands at 32, inside the chord's C5: one unit later.
             select(&mut app, 800, 60);
             letter(&mut app, 'c', CTRL, 1);
-            letter(&mut app, 'd', CTRL, 1);
+            named(&mut app, NamedKey::Escape, 0, 1);
             letter(&mut app, 'v', CTRL, 1);
             assert_eq!(selected(&app), [(56, 60)]);
             // Pasting again while that copy is still selected lands on it.

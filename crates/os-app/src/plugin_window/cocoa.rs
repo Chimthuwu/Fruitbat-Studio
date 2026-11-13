@@ -525,6 +525,11 @@ impl FrameWindow {
         f.view.setNeedsDisplay(true);
     }
 
+    /// Repaints the frame and the plugin's editor (a skin change reached their palette).
+    pub fn redraw(&self) {
+        self.f.view.setNeedsDisplay(true);
+    }
+
     pub fn set_info(&self, info: ChannelInfo) {
         let mut st = self.f.state.borrow_mut();
         if st.info != info && st.drag.is_none() && st.misc_ui.drag.is_none() {

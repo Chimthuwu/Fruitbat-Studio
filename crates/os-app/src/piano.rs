@@ -646,6 +646,64 @@ pub fn paint_mono(s: &mut State, i: usize) -> usize {
     i - gone.iter().filter(|&&j| j < i).count()
 }
 
+/// Bitwig's note rule: one key of a channel never sounds two notes at once. The notes at `keep` win; every other
+/// note of the same channel and key they overlap is cut back to their start, split around them (its tail kept), or
+/// removed when it starts inside them. Returns the kept notes' indices after the removals (they shift down when a
+/// note before them goes), so a caller that just appended a note still finds it.
+pub fn clear_overlaps(s: &mut State, keep: &[usize]) -> Vec<usize> {
+    let all = notes(s).to_vec();
+    let spans: Vec<(u16, u16, u32, u32)> = keep
+        .iter()
+        .filter_map(|&i| all.get(i))
+        .map(|n| (n.channel, n.key, n.position, n.position + shown_len(s, n)))
+        .collect();
+    if spans.is_empty() {
+        return keep.to_vec();
+    }
+    let mut remove: Vec<usize> = Vec::new();
+    let mut trim: Vec<(usize, u32)> = Vec::new();
+    let mut tails: Vec<Note> = Vec::new();
+    for (j, n) in all.iter().enumerate() {
+        if keep.contains(&j) {
+            continue;
+        }
+        let end = n.position + shown_len(s, n);
+        for &(ch, key, start, stop) in &spans {
+            if n.channel != ch || n.key != key || n.position >= stop || end <= start {
+                continue;
+            }
+            if n.position < start {
+                trim.push((j, start - n.position));
+                if end > stop {
+                    tails.push(Note { position: stop, length: end - stop, ..*n });
+                }
+            } else {
+                remove.push(j);
+            }
+            break;
+        }
+    }
+    if remove.is_empty() && trim.is_empty() {
+        return keep.to_vec();
+    }
+    let moved: Vec<usize> = keep.iter().map(|&i| i - remove.iter().filter(|&&j| j < i).count()).collect();
+    let p = pattern_mut(s);
+    for (j, len) in trim {
+        if let Some(n) = p.notes.get_mut(j) {
+            n.length = len.max(1);
+        }
+    }
+    remove.sort_unstable_by(|a, b| b.cmp(a));
+    for j in remove {
+        if j < p.notes.len() {
+            p.notes.remove(j);
+        }
+    }
+    p.notes.extend(tails);
+    s.piano.clear_selection();
+    moved
+}
+
 /// The controls a new note takes from the last one touched; never its place, length, key or mute.
 pub fn copy_controls(from: &Note, to: &mut Note) {
     to.velocity = from.velocity;

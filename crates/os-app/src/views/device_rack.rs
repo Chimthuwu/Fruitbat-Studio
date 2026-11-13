@@ -1209,6 +1209,8 @@ pub(crate) fn mod_row_paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
     }
     ui.c.fill_rect(row, t.s(0x15181a));
     ui.c.fill_rect(Rect::new(row.x, row.bottom() - 1.0, row.w, 1.0), t.splitter_dark);
+    // Anywhere on the strip takes the editing keys for it: Ctrl+A selects its modulators, not notes elsewhere.
+    ui.hit(row, Action::Mod(crate::modulation::ModAct::FocusStrip), "Modulator strip: its keys act on its slots");
     ui.c.text(fnt(10.5), row.x + 8.0, row.y + 2.0, t.text_dim, "PROJECT MODULATORS");
     // Toggle modulator rack visibility button (click to collapse/expand the modulator row).
     let vis_rect = Rect::new(row.right() - 28.0, row.y + 4.0, 20.0, 16.0);
