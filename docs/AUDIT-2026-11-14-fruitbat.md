@@ -1,6 +1,6 @@
 # Fruitbat Studios / Lemon Studio — full audit, 2026-11-14
 
-This audit is written against the tree that became commit `Fruitbat audit` on
+This audit is written against the tree that became commit `cf52e2be` on
 `chimthuwu/main` (parent `1d4c4091`, branch `modulation-m0`). It is deliberately
 honest about the difference between **code that exists**, **behaviour covered by
 tests**, and **behaviour a user can actually reach in the running app**.
