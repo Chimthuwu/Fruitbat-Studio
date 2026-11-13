@@ -19,6 +19,22 @@
 > ergonomics of classic pattern sequencers with the deep, cable-routed modulation and routing paradigms of modular
 > workstations — running natively on Windows, Linux and macOS.
 
+## 📸 Screenshots
+
+<div align="center">
+
+<img alt="FruitBat Studio with the clip launcher, mixer, modulation rack and device rack open" src="docs/assets/screenshot-fruitbat.png" width="100%">
+
+<sub>The clip launcher, mixer, project modulators and device rack, all in one workspace.</sub>
+
+<br><br>
+
+<img alt="The FruitBat Studio piano roll with Lemon Drum Sampler notes and the modulator strip below" src="docs/assets/screenshot-piano-roll-fruitbat.png" width="620">
+
+<sub>The piano roll, the project modulation strip and docked device editors.</sub>
+
+</div>
+
 ---
 
 ## ✨ Features
