@@ -27,9 +27,10 @@ const LANE_W: f32 = 172.0;
 /// Paints the rack in `win` (the container window's rect).
 pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, row: usize, win: Rect, f: &FrameInfo) {
     let t = ui.t;
+    let meridian = t.style.meridian();
     let (x0, y0) = (win.x, win.y);
-    ui.c.fill_rect(win, t.s(0x16191a));
-    ui.c.fill_rect(win.inset(1.0), t.s(0x2a2f31));
+    ui.c.fill_rect(win, if meridian { t.s(0x10171a) } else { t.s(0x16191a) });
+    ui.c.fill_rect(win.inset(1.0), if meridian { t.s(0x1b2329) } else { t.s(0x2a2f31) });
     ui.hit(win, Action::Swallow, "");
     let name = crate::rack::channel_name(s, row);
     ui.hit(Rect::new(x0 + 1.0, y0 + 1.0, win.w - 30.0, TITLE_H - 4.0), Action::WinDrag(Win::Container), "Drag to move");
@@ -50,7 +51,7 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, row: usize, win: Rect, f
     for (label, d) in [("\u{2039}", -1), ("\u{203a}", 1)] {
         let b = Rect::new(x, bar.y, 18.0, 18.0);
         let hv = ui.hit(b, Action::Container(CAct::RackPattern(d)), "Previous / next pattern (every clip plays the same pattern)");
-        ui.c.fill_rrect(b, 2.0, if hv { t.s(0x3a4347) } else { t.s(0x202628) });
+        ui.c.fill_rrect(b, 2.0, if hv { if meridian { t.s(0x33403f) } else { t.s(0x3a4347) } } else { if meridian { t.s(0x222c31) } else { t.s(0x202628) } });
         ui.c.text_center(fnt(12.0), b, t.text, label);
         x += 20.0;
     }
@@ -62,7 +63,7 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, row: usize, win: Rect, f
     for (label, d) in [("\u{2212}", -1), ("+", 1)] {
         let b = Rect::new(lx, bar.y, 18.0, 18.0);
         let hv = ui.hit(b, Action::Container(CAct::RackLength(bars as i32 + d)), "Pattern length in bars (0 = Auto)");
-        ui.c.fill_rrect(b, 2.0, if hv { t.s(0x3a4347) } else { t.s(0x202628) });
+        ui.c.fill_rrect(b, 2.0, if hv { if meridian { t.s(0x33403f) } else { t.s(0x3a4347) } } else { if meridian { t.s(0x222c31) } else { t.s(0x202628) } });
         ui.c.text_center(fnt(12.0), b, t.text, label);
         lx += 20.0;
     }
@@ -77,7 +78,7 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, row: usize, win: Rect, f
     for (label, np, ok) in [("\u{2039}", page.saturating_sub(1), page > 0), ("\u{203a}", (page + 1).min(pages - 1), page + 1 < pages)] {
         let b = Rect::new(px, bar.y, 16.0, 18.0);
         let hv = ok && ui.hit(b, Action::Container(CAct::RackPage(np as i32)), "Previous / next sixteen steps");
-        ui.c.fill_rrect(b, 2.0, if hv { t.s(0x3a4347) } else { t.s(0x202628) });
+        ui.c.fill_rrect(b, 2.0, if hv { if meridian { t.s(0x33403f) } else { t.s(0x3a4347) } } else { if meridian { t.s(0x222c31) } else { t.s(0x202628) } });
         ui.c.text_center(fnt(10.0), b, if ok { t.text } else { t.text_faint }, label);
         px += 17.0;
     }
@@ -85,12 +86,12 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, row: usize, win: Rect, f
     let bank = s.container.bank.min(1);
     let bk = Rect::new(bar.right() - 128.0, bar.y, 22.0, 18.0);
     let bh = ui.hit(bk, Action::Container(CAct::RackBank), "Switch lane bank A / B");
-    ui.c.fill_rrect(bk, 2.0, if bh { t.s(0x3a4347) } else { t.s(0x202628) });
+    ui.c.fill_rrect(bk, 2.0, if bh { if meridian { t.s(0x33403f) } else { t.s(0x3a4347) } } else { if meridian { t.s(0x222c31) } else { t.s(0x202628) } });
     ui.c.text_center(fnt(10.0), bk, t.text, if bank == 0 { "A" } else { "B" });
     // Open the lane's sampler window (sample assignment, pad settings) and clear this channel's steps.
     let open = Rect::new(bar.right() - 100.0, bar.y, 44.0, 18.0);
     let oh = ui.hit(open, Action::Container(CAct::RackOpen), "Open the lanes' sampler: load each lane's sample");
-    ui.c.fill_rrect(open, 2.0, if oh { t.s(0x3a4347) } else { t.s(0x202628) });
+    ui.c.fill_rrect(open, 2.0, if oh { if meridian { t.s(0x33403f) } else { t.s(0x3a4347) } } else { if meridian { t.s(0x222c31) } else { t.s(0x202628) } });
     ui.c.text_center(fnt(9.0), open, if oh { t.text } else { t.text_dim }, "LANES");
     let clear = Rect::new(bar.right() - 50.0, bar.y, 50.0, 18.0);
     let chh = ui.hit(clear, Action::Container(CAct::RackClear), "Clear this rack's steps in the current pattern");
@@ -112,18 +113,18 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, row: usize, win: Rect, f
         let step = first + i;
         let sx = cols_x + i as f32 * step_w;
         let bg = if step >= total {
-            t.s(0x171b1d)
+            if meridian { t.s(0x13191c) } else { t.s(0x171b1d) }
         } else if (step / beat) % 2 == 0 {
-            t.s(0x1d2325)
+            if meridian { t.s(0x1c2429) } else { t.s(0x1d2325) }
         } else {
-            t.s(0x181d1f)
+            if meridian { t.s(0x161d21) } else { t.s(0x181d1f) }
         };
         ui.c.fill_rect(Rect::new(sx, grid.y, step_w, grid.h), bg);
         if step < total {
             ui.c.text_center(fnt(8.0), Rect::new(sx, grid.y, step_w, HEAD_H), t.text_faint, &(step + 1).to_string());
         }
         if i % beat == 0 {
-            ui.c.fill_rect(Rect::new(sx, grid.y, 1.0, grid.h), t.s(0x3d474b));
+            ui.c.fill_rect(Rect::new(sx, grid.y, 1.0, grid.h), if meridian { t.s(0x4a3c22) } else { t.s(0x3d474b) });
         }
     }
     let row_h = ((grid.h - HEAD_H) / crate::channel_rack::LANES as f32).max(5.0);
@@ -138,7 +139,7 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, row: usize, win: Rect, f
         let label = Rect::new(grid.x, y, LANE_W - 2.0, row_h);
         let lh = ui.hit(label, Action::Container(CAct::RackLane(at)), "Select this lane; its steps are this instrument's notes");
         if lh || selected {
-            ui.c.fill_rect(label, t.s(0x25302c));
+            ui.c.fill_rect(label, if meridian { t.s(0x22352e) } else { t.s(0x25302c) });
         }
         let (nm, ky, loaded) = lane.map_or((format!("Lane {}", at + 1), 0u16, false), |l| (l.name.clone(), l.key, l.sample));
         let ink = if !loaded { t.text_faint } else if selected { t.text } else { t.text_dim };
@@ -166,22 +167,27 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, row: usize, win: Rect, f
             let fill = if on {
                 if selected { t.accent } else { t.accent.with_alpha(205) }
             } else if hv {
-                t.s(0x3b464a)
+                if meridian { t.s(0x33403f) } else { t.s(0x3b464a) }
             } else if loaded {
-                t.s(0x262e31)
+                if meridian { t.s(0x232c31) } else { t.s(0x262e31) }
             } else {
-                t.s(0x1e2426)
+                if meridian { t.s(0x1a2125) } else { t.s(0x1e2426) }
             };
-            ui.c.fill_rrect(cell, 1.5, fill);
+            ui.c.fill_rrect(cell, if meridian { 0.0 } else { 1.5 }, fill);
             if on {
-                ui.c.fill_rect(Rect::new(cell.x + 1.0, cell.y + 1.0, (cell.w - 2.0).max(1.0), 1.0), t.s(0xd8ff9a));
+                ui.c.fill_rect(Rect::new(cell.x + 1.0, cell.y + 1.0, (cell.w - 2.0).max(1.0), 1.0), if meridian { t.s(0xe8dcc0) } else { t.s(0xd8ff9a) });
             }
         }
     }
     // The playhead: the engine's own position, drawn over the columns.
     if let Some(k) = cur.filter(|k| (*k >= first) && (*k < first + crate::channel_rack::STEPS)) {
         let sx = cols_x + (k - first) as f32 * step_w;
-        ui.c.fill_rect(Rect::new(sx, grid.y + HEAD_H, step_w, grid.h - HEAD_H), t.s(0x00d5c0).with_alpha(34));
-        ui.c.fill_rect(Rect::new(sx, grid.y + HEAD_H, step_w, 2.0), t.s(0x00d5c0));
+        ui.c.fill_rect(Rect::new(sx, grid.y + HEAD_H, step_w, grid.h - HEAD_H), if meridian { t.accent.with_alpha(26) } else { t.s(0x00d5c0).with_alpha(34) });
+        ui.c.fill_rect(Rect::new(sx, grid.y + HEAD_H, step_w, 2.0), if meridian { t.accent } else { t.s(0x00d5c0) });
+    }
+    // Meridian: a precision-instrument matrix — brass structural rules frame the editor.
+    if meridian {
+        ui.c.fill_rect(Rect::new(win.x + 1.0, y0 + TITLE_H, 2.0, win.h - TITLE_H - 2.0), t.accent.with_alpha(110));
+        ui.c.fill_rect(Rect::new(x0, y0 + TITLE_H, win.w, 1.0), t.accent.with_alpha(80));
     }
 }

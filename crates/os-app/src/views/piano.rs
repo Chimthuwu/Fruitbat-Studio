@@ -546,7 +546,7 @@ fn keyboard(ui: &mut Ui, l: &Layout, g: &Geom, lit: &[i32]) {
         let c = if lemon { t.key_white } else { t.key_white_left.mix(t.key_white, i as f32 / (bands - 1) as f32) };
         ui.c.fill_rect(Rect::new(x, k.y, w, k.h), c);
     }
-    ui.c.fill_rect(Rect::new(k.right() - 1.0, k.y, 1.0, k.h), ui.t.s(0x7e8289));
+    ui.c.fill_rect(Rect::new(k.right() - 1.0, k.y, 1.0, k.h), if meridian { t.accent } else { ui.t.s(0x7e8289) });
     let (lo, hi) = g.visible_keys();
     // Lit white keys: the row plus half of each neighbouring black row (the white-key shape).
     let (row, half) = (g.row, (g.row / 2.0).floor());
@@ -609,8 +609,8 @@ fn keyboard(ui: &mut Ui, l: &Layout, g: &Geom, lit: &[i32]) {
     }
     ui.c.pop_clip();
     // Divider between keyboard and grid.
-    ui.c.fill_rect(Rect::new(k.right(), l.grid.y, 1.0, k.h), ui.t.s(0x131718));
-    ui.c.fill_rect(Rect::new(k.right() + 1.0, l.grid.y, 1.0, k.h), ui.t.s(0x000000));
+    ui.c.fill_rect(Rect::new(k.right(), l.grid.y, 1.0, k.h), if meridian { t.accent.with_alpha(130) } else { ui.t.s(0x131718) });
+    ui.c.fill_rect(Rect::new(k.right() + 1.0, l.grid.y, 1.0, k.h), if meridian { t.accent.with_alpha(55) } else { ui.t.s(0x000000) });
 }
 
 /// Vertical step / beat / bar lines over `area`, in `line(fill)` colors per horizontal band.

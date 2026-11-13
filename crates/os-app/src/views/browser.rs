@@ -862,9 +862,12 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
         }
         icons::draw(ui.c, icon, Rect::new(r.x + 1.0, 87.0 + dy, 12.0, 14.0), if hov { t.glyph } else { t.text_dim });
     }
-    ui.c.text(os_ui::Font::new(14), 52.0, 85.0 + dy, t.text_dim, "Browser");
+    ui.c.text(if meridian { os_ui::Font::condensed(13, 8).bold() } else { os_ui::Font::new(14) }, 52.0, 85.0 + dy, if meridian { t.accent } else { t.text_dim }, if meridian { "BROWSER" } else { "Browser" });
     // Tabs (spec ui/browser.md §1): FL's five without Online content, sharing the strip.
     ui.c.fill_rect(Rect::span(0.0, bw - 1.0, 106.0 + dy, 141.0 + dy), t.browser_tabs);
+    if meridian {
+        ui.c.fill_rect(Rect::new(0.0, 105.0 + dy, bw, 1.0), t.accent.with_alpha(90));
+    }
     const TIPS: [&str; 4] = ["All", "Current project", "Plugin library", "Favorites"];
     for (i, icon) in [Icon::Wave, Icon::Page, Icon::Speaker, Icon::Star].into_iter().enumerate() {
         let cx = 25.0 + 50.0 * i as f32;
@@ -901,6 +904,9 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
     let list = Rect::span(13.0, bw - 1.0, top, r.bottom() - FOOTER_H - ih);
     ui.c.fill_rect(Rect::new(0.0, top, 13.0, list.h), t.browser_tabs.shade(0.02));
     ui.c.fill_rect(list, t.browser_list);
+    if meridian {
+        ui.c.fill_rect(Rect::new(12.0, top, 1.0, list.h), t.accent.with_alpha(70));
+    }
     ui.hit(Rect::new(0.0, top, bw, list.h), Action::BrowserList, "");
     ui.c.push_clip(Rect::new(0.0, top, bw, list.h));
     let cats: [Color; 2] = [t.cat_project, t.cat_plugin_db];
