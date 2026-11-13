@@ -1439,6 +1439,10 @@ fn audio_thread(rx: Receiver<Cmd>, shared: Arc<Shared>, latest: Arc<Mutex<Option
         if s.kind == Kind::Live {
             e.clear_schedule();
         }
+        // A rebuilt engine starts with no modulation of its own: install the graph the app last set, or every project
+        // update (a device knob drag, any edit) would silently drop the modulation until the next modulator edit.
+        e.set_modulation(shared.modulation.lock().map(|m| m.clone()).unwrap_or_default());
+        e.set_mod_snapshot(shared.mod_snapshot.lock().map(|s| s.clone()).unwrap_or_default());
         let old = s.engine.lock().map(|mut slot| {
             e.continue_from(&mut slot);
             std::mem::replace(&mut *slot, e)

@@ -1401,7 +1401,7 @@ impl State {
     pub fn work_rect(&self) -> Rect {
         let left = if self.show_browser { views::browser_w(self) } else { 0.0 };
         let top = views::work_y(self);
-        let bottom = crate::device_rack::height(self);
+        let bottom = crate::device_rack::total_height(self);
         Rect::new(left, top, (self.screen.0 - left).max(0.0), (self.screen.1 - top - bottom).max(0.0))
     }
 
@@ -1416,7 +1416,7 @@ impl State {
         let (mw, mh) = w.min_size();
         let (sw, sh) = self.screen;
         let rw = r.w.min(sw).max(mw);
-        let rh = r.h.min(sh - views::work_y(self) - crate::device_rack::height(self)).max(mh);
+        let rh = r.h.min(sh - views::work_y(self) - crate::device_rack::total_height(self)).max(mh);
         let (x, y) = crate::win_clamp::keep(r.x, r.y, rw, self.work_rect());
         Rect::new(x, y, rw, rh)
     }
@@ -2601,12 +2601,26 @@ impl App {
         s.playlist.reset();
         s.history.reset();
         s.control.reset();
+        // A new project has no modulators: the graph, its selection and its open windows go with the old project.
+        s.modulation = Default::default();
+        s.mod_routing = None;
+        s.mod_editor = None;
+        s.mod_menu = None;
+        s.mod_add_slot = None;
+        s.mod_sel.clear();
+        s.mod_cursor = None;
+        s.mod_anchor = None;
+        s.mod_menu_sel = 0;
+        s.mod_clipboard.clear();
+        s.mod_drag_before = None;
+        *s.mod_hist.borrow_mut() = Default::default();
         s.control.event(&crate::control::By::User, "opened", "New project", Vec::new());
         crate::playlist::load_view(s);
         s.rack.reset();
         crate::rack::from_model(s);
         s.piano.dirty = true;
         s.message = Some("New project".into());
+        crate::modulation::sync(self);
         self.mark_saved();
     }
 
