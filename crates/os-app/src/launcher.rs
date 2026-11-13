@@ -690,6 +690,17 @@ pub fn playing(s: &State, track: u32) -> Option<usize> {
     s.launcher.playing.get(&track).map(|p| p.scene)
 }
 
+/// How far the clip a track plays is into its own loop, `0..=1` (the cell's progress bar reads it); `None` when the
+/// track plays nothing. A track's clip loops at its own length from the tick it was launched at, so the phase is the
+/// ticks since then, wrapped at that length.
+pub fn progress(s: &State, track: u32) -> Option<f32> {
+    let p = s.launcher.playing.get(&track)?;
+    let slot = clip(s, track, p.scene)?;
+    let len = slot_len(s, &slot).max(1) as f64;
+    let now = s.launcher.last_tick.max(p.since as f64);
+    Some((((now - p.since as f64) % len) / len) as f32)
+}
+
 /// The scene a track is waiting to launch at its grid line, when it has one queued.
 pub fn pending(s: &State, track: u32) -> Option<usize> {
     s.launcher.pending.get(&track).map(|p| p.scene)

@@ -31,20 +31,26 @@ use crate::history::ChannelControl;
 /// The shortest the rack may be, in logical px: below this its tiles are too short to read their editor in, and a
 /// splitter drag down to the workspace edge (which used to be allowed) left a sliver of a panel.
 pub const MIN_H: f32 = 180.0;
-/// The tallest the rack may be. The splitter used to give it up to half the window, which on a 1080 px screen is
-/// 540 px of editor stretched out of shape and less workspace above it; the rack's own frame now stops at this.
-pub const MAX_H: f32 = 360.0;
-/// The height the rack opens at, and what a double click on its splitter gives back: tall enough for a MIDI FX
-/// editor (the tallest is 380 px, the commonest 302) to be drawn at nearly its own size.
-pub const DEFAULT_H: f32 = 336.0;
-/// Header row (title, pin, collapse), and the collapsed rack's whole height.
+/// The tallest the rack may be: enough for the widest native instrument editors (the Trio and Sampler are 560 px
+/// wide and their whole UI, strip row included, is about 440 px tall) to show at their own size. The clamp against
+/// half the window still keeps a short screen usable.
+pub const MAX_H: f32 = 540.0;
+/// The height the rack opens at, and what a double click on its splitter gives back: tall enough for the docked
+/// instrument editors (the Trio and Sampler) to be readable, while leaving most of the window to the workspace.
+pub const DEFAULT_H: f32 = 420.0;
+/// The rack panel's own header row (DEVICE RACK, track name, Add / Pin / Hide / Pop-out), and the collapsed
+/// rack's whole height. Device tiles have their own, shorter header ([`TILE_HEAD`]).
 pub const HEADER_H: f32 = 42.0;
+/// A device tile's header: the LED, name, channel knobs and tile buttons, in one compact row. It is shorter than the
+/// rack's header so the device editor gets the rest of the tile.
+pub const TILE_HEAD: f32 = 30.0;
 /// Width of a device tile (rows stack name above bar, so it stays narrow): 4 tiles fit a 1229 px window.
 pub const TILE_W: f32 = 280.0;
 /// Padding between a tile's edge and the device controls drawn in it.
 pub const TILE_PAD: f32 = 6.0;
-/// The widest a tile grows to show a wide editor 1:1 (wider ones are scaled down).
-pub const TILE_MAX_W: f32 = 560.0;
+/// The widest a tile grows to show a wide editor 1:1 (wider ones are scaled down). The Trio and Sampler paint
+/// 568 px wide, so the frame can hold one at 1:1 plus the tile padding.
+pub const TILE_MAX_W: f32 = 580.0;
 
 /// A tile's width: a device whose plugin the rack draws itself (`crate::rack_ui`) gets its editor's width at the
 /// size the rack's body shows it (its natural width where it fits, else scaled down), padded; every other device
@@ -80,6 +86,11 @@ pub fn height(s: &State) -> f32 {
     } else {
         s.device_rack_h.clamp(MIN_H, max_h(s))
     }
+}
+
+/// The rack plus the project-modulator strip above it: what the workspace must leave free at the bottom.
+pub fn total_height(s: &State) -> f32 {
+    height(s) + if visible(s) { crate::views::device_rack::mod_row_h(s) } else { 0.0 }
 }
 
 /// A device of the track the rack shows.
@@ -249,15 +260,25 @@ pub fn chain(s: &State, tr: &os_model::Track) -> Vec<Device> {
     v
 }
 
+/// The rack row whose instrument is hosted under `key` (`None` for an effect, MIDI FX or empty slot).
+pub fn instrument_row(s: &State, key: usize) -> Option<usize> {
+    rack_chain(s).into_iter().find_map(|d| match d.kind {
+        DeviceKind::Instrument(row) if d.key == Some(key) => Some(row),
+        _ => None,
+    })
+}
+
 /// The chain the rack shows (of [`rack_track`]).
 pub fn rack_chain(s: &State) -> Vec<Device> {
     rack_track(s).map_or_else(Vec::new, |tr| chain(s, tr))
 }
 
-/// The last selected tile index in the rack, if any (the selection is a set, `State::device_rack_sels`; the
-/// keyboard and Delete act on the last one).
+/// The tile the keyboard acts on: the cursor (the last clicked or arrowed-to tile) while it is selected, else
+/// the last selected tile. The selection itself is a set, `State::device_rack_sels`.
 pub fn rack_sel(s: &State) -> Option<usize> {
-    s.device_rack_sels.last().copied()
+    s.device_rack_cursor
+        .filter(|i| s.device_rack_sels.contains(i))
+        .or_else(|| s.device_rack_sels.last().copied())
 }
 
 /// Whether chain tile `i` is selected (a header click paints it brighter).
@@ -269,27 +290,66 @@ pub fn tile_selected(s: &State, i: usize) -> bool {
 /// being the last plain click) selects every tile from the anchor to `i` — the playlist's track headers'
 /// pattern (`playlist::select_track`).
 pub fn select_tile(s: &mut State, i: usize, extend: bool) {
-    let anchor = s.device_rack_anchor.or_else(|| s.device_rack_sels.last().copied());
+    s.keyboard_focus = crate::app::KeyboardFocus::Rack;
+    let anchor = s
+        .device_rack_anchor
+        .or(s.device_rack_cursor)
+        .or_else(|| s.device_rack_sels.last().copied());
     if extend && let Some(a) = anchor {
         for j in a.min(i)..=a.max(i) {
             s.device_rack_sels.insert(j);
         }
+        s.device_rack_anchor = Some(a);
+        s.device_rack_cursor = Some(i);
         return;
     }
     s.device_rack_sels = BTreeSet::from([i]);
-    s.device_rack_anchor = None;
+    s.device_rack_anchor = Some(i);
+    s.device_rack_cursor = Some(i);
 }
 
 /// Sets the selection to just tile `i` (the arrow keys: a multi-selection collapses to the tile moved to).
 pub fn set_sel(s: &mut State, i: usize) {
     s.device_rack_sels = BTreeSet::from([i]);
-    s.device_rack_anchor = None;
+    s.device_rack_anchor = Some(i);
+    s.device_rack_cursor = Some(i);
+    s.keyboard_focus = crate::app::KeyboardFocus::Rack;
+}
+
+/// Moves the keyboard's tile `dir` places along the chain: plain selects the neighbour alone, `extend`
+/// (Shift) keeps the anchor's range and adds the neighbour, so repeated presses walk through the chain while
+/// the original device stays selected.
+pub fn move_sel(s: &mut State, dir: i32, extend: bool) -> bool {
+    let n = rack_chain(s).len();
+    if n == 0 {
+        return false;
+    }
+    let cur = rack_sel(s)
+        .unwrap_or(if dir < 0 { n - 1 } else { 0 })
+        .min(n - 1);
+    let next = if dir < 0 {
+        cur.saturating_sub(1)
+    } else {
+        (cur + 1).min(n - 1)
+    };
+    if extend {
+        let anchor = s.device_rack_anchor.unwrap_or(cur).min(n - 1);
+        for j in anchor.min(next)..=anchor.max(next) {
+            s.device_rack_sels.insert(j);
+        }
+        s.device_rack_anchor = Some(anchor);
+        s.device_rack_cursor = Some(next);
+    } else {
+        set_sel(s, next);
+    }
+    true
 }
 
 /// Clears the selection (a device removal does).
 pub fn clear_sel(s: &mut State) {
     s.device_rack_sels.clear();
     s.device_rack_anchor = None;
+    s.device_rack_cursor = None;
 }
 
 /// A cut device (Ctrl+X), pasted with Ctrl+V: an effect (its name, the plugin it came from, its saved state
@@ -419,6 +479,9 @@ pub enum RackAct {
     /// Select a device tile by its index in the chain: a plain header click selects it alone, Shift+click
     /// extends the selection to it (the anchor pattern of the playlist's track headers).
     SelectTile(usize),
+    /// A click on the tile away from a control: select it (Shift+click extends) without starting the header's
+    /// reorder drag.
+    FocusTile(usize),
     /// A container tile's wrench (or body): open its container window (`crate::container`, the docked
     /// `Win::Container`).
     OpenContainer { t: u16, k: u8 },
@@ -457,12 +520,35 @@ pub enum RackAct {
     /// A tile body's switch, selector row or radio pressed: set the parameter to normalized `v` once, with no drag
     /// (`None` picks nothing).
     ParamTap { key: usize, id: u32, v: Option<f64> },
+    /// A Parametric EQ band token in a docked tile's graph pressed: drag it to set the band's frequency
+    /// (across) and level (up / down), exactly as the plugin's window does.
+    EditorEqToken { key: usize, band: usize },
+    /// A docked Parametric EQ's graph well pressed (not on a token): drag it to set the main level.
+    EditorEqGraph { key: usize },
     /// Editor-only hits inside a docked native editor that carry no host parameter: a Trio tab / sub-tab,
     /// or a drum bank / pad. The run handler applies them to that tile's cached view.
     EditorTab { key: usize, n: u8 },
     EditorSubTab { key: usize, n: u8 },
     EditorBank { key: usize, n: u8 },
+    /// Lemon Parametric EQ's dock: show / hide its fader bank.
+    EditorFaders { key: usize },
     EditorPad { key: usize, n: u8 },
+    /// The drum instrument's interface: the step programmer or the performance pads.
+    EditorMode { key: usize, mode: crate::rack_ui::DrumMode },
+    /// The step programmer's page (the first step shown; 16 steps a page).
+    EditorPage { key: usize, page: u32 },
+    /// The step programmer's lane selection (a pad index).
+    EditorLane { key: usize, lane: usize },
+    /// Toggle a drum lane's step in the current pattern.
+    EditorStep { key: usize, lane: usize, step: u32, on: bool },
+    /// Clear this instrument's notes in the current pattern (one undo step).
+    EditorStepClear { key: usize },
+    /// The step programmer's previous / next pattern (global pattern, as the pattern box is).
+    EditorPattern { d: i32 },
+    /// Duplicate the current project pattern and show the copy.
+    EditorDuplicate,
+    /// The step programmer's pattern length in bars (0 = Auto), one undo step.
+    EditorLength { bars: i32 },
     /// The drum machine tile's other half: swap its pads for its pad / layer cards (and back).
     EditorFlip { key: usize },
     /// The flipped cards' Load: the picker lives in the full editor, so pop its window out.
@@ -581,6 +667,12 @@ pub fn run(app: &mut App, act: RackAct) {    match act {
             }
             app.invalidate();
         }
+        RackAct::FocusTile(idx) => {
+            if rack_chain(&app.state).get(idx).is_some() {
+                select_tile(&mut app.state, idx, app.shift);
+            }
+            app.invalidate();
+        }
         RackAct::OpenContainer { t, k } => {
             crate::container::show(&mut app.state, t, k);
             app.invalidate();
@@ -623,7 +715,7 @@ pub fn run(app: &mut App, act: RackAct) {    match act {
         RackAct::ParamSet { key, id, v } => {
             // Routing mode (handoff §4): a press on a tinted parameter sets the modulation depth, not the base value.
             if let Some(mod_id) = app.state.mod_routing {
-                if let Some(target) = crate::params::target_of(&app.state, key, usize::try_from(id).unwrap_or(usize::MAX))
+                if let Some(target) = crate::params::target_of_id(&app.state, key, id)
                     .filter(|&t| crate::modulation::is_modulatable(&app.state, t))
                 {
                     crate::modulation::begin_routing_drag(app, mod_id, target);
@@ -636,6 +728,16 @@ pub fn run(app: &mut App, act: RackAct) {    match act {
             app.drag = Some(Drag::DeviceRackParam { key, id, y0: app.mouse.1, v0: v });
         }
         RackAct::ParamTap { key, id, v } => {
+            // A switch or selector under routing mode routes like a dial; a discrete control is not modulatable, so
+            // it keeps its normal click.
+            if let Some(mod_id) = app.state.mod_routing {
+                if let Some(target) = crate::params::target_of_id(&app.state, key, id)
+                    .filter(|&t| crate::modulation::is_modulatable(&app.state, t))
+                {
+                    crate::modulation::begin_routing_drag(app, mod_id, target);
+                    return;
+                }
+            }
             if let Some(v) = v {
                 set_param_value(app, key, id, v);
             }
@@ -656,6 +758,39 @@ pub fn run(app: &mut App, act: RackAct) {    match act {
                     .clamp(0.0, (crate::views::device_rack::content_w(s) - w).max(0.0));
             app.invalidate();
         }
+        RackAct::EditorEqToken { key, band } => {
+            // The same drag the plugin's graph has: frequency across, level up / down. Both parameters are
+            // hosted ones, so the pop-out editor follows the drag as it happens.
+            let Some(ps) = app.state.device_rack_params.get(&key) else { return };
+            let (Some(freq), Some(level)) = (
+                eq_band_param(ps, band, "freq"),
+                eq_band_param(ps, band, "level"),
+            ) else {
+                return;
+            };
+            let has_level = eq_band_param(ps, band, "type")
+                .is_some_and(|p| os_engine::effects::eq::has_level(p.plain.round() as i32));
+            app.drag = Some(Drag::DeviceRackEqBand {
+                key,
+                x0: app.mouse.0,
+                y0: app.mouse.1,
+                freq_id: freq.id,
+                level_id: has_level.then_some(level.id),
+                freq0: freq.value,
+                level0: level.value,
+            });
+        }
+        RackAct::EditorEqGraph { key } => {
+            let Some(main) = app
+                .state
+                .device_rack_params
+                .get(&key)
+                .and_then(|ps| ps.iter().find(|p| p.name.eq_ignore_ascii_case("Main level")))
+            else {
+                return;
+            };
+            app.drag = Some(Drag::DeviceRackEqMain { key, id: main.id, y0: app.mouse.1, v0: main.value });
+        }
         RackAct::EditorTab { key, n } => {
             if let Some(e) = app.state.rack_ui_cache.borrow_mut().get_mut(&key) {
                 if let crate::rack_ui::TileView::Trio(v) = &mut e.view {
@@ -672,6 +807,14 @@ pub fn run(app: &mut App, act: RackAct) {    match act {
             }
             app.invalidate();
         }
+        RackAct::EditorFaders { key } => {
+            if let Some(e) = app.state.rack_ui_cache.borrow_mut().get_mut(&key) {
+                if let crate::rack_ui::TileView::Eq { faders } = &mut e.view {
+                    *faders = !*faders;
+                }
+            }
+            app.invalidate();
+        }
         RackAct::EditorBank { key, n } => {
             if let Some(e) = app.state.rack_ui_cache.borrow_mut().get_mut(&key) {
                 if let crate::rack_ui::TileView::Drum { view, .. } = &mut e.view {
@@ -681,11 +824,100 @@ pub fn run(app: &mut App, act: RackAct) {    match act {
             app.invalidate();
         }
         RackAct::EditorPad { key, n } => {
+            let mut lane_key = None;
             if let Some(e) = app.state.rack_ui_cache.borrow_mut().get_mut(&key) {
-                if let crate::rack_ui::TileView::Drum { view, .. } = &mut e.view {
+                if let crate::rack_ui::TileView::Drum { view, lane, .. } = &mut e.view {
                     view.pad = n as usize;
+                    *lane = n as usize;
                 }
             }
+            // The pad auditions its lane through the real hosted instrument. The key comes from the pad's saved state,
+            // so a reassigned pad plays the same sound its pattern row writes.
+            if let Some(row) = instrument_row(&app.state, key) {
+                let st = crate::rack_ui::drum_state(&app.plugins, key);
+                lane_key = st.pad(n as usize).map(|p| p.key).filter(|k| (0..128).contains(k));
+                if let (Some(ch), Some(k)) = (app.state.project.channels.get(row), lane_key) {
+                    app.preview(ch.index, k);
+                }
+            }
+            app.invalidate();
+        }
+        RackAct::EditorMode { key, mode } => {
+            if let Some(e) = app.state.rack_ui_cache.borrow_mut().get_mut(&key) {
+                if let crate::rack_ui::TileView::Drum { mode: m, .. } = &mut e.view {
+                    *m = mode;
+                }
+            }
+            // The preferred interface outlives the session; it is a view choice only, never pattern or audio state.
+            crate::rack_ui::remember_mode(mode);
+            app.invalidate();
+        }
+        RackAct::EditorPage { key, page } => {
+            if let Some(e) = app.state.rack_ui_cache.borrow_mut().get_mut(&key) {
+                if let crate::rack_ui::TileView::Drum { page: p, .. } = &mut e.view {
+                    *p = page;
+                }
+            }
+            app.invalidate();
+        }
+        RackAct::EditorLane { key, lane } => {
+            if let Some(e) = app.state.rack_ui_cache.borrow_mut().get_mut(&key) {
+                if let crate::rack_ui::TileView::Drum { lane: l, view, .. } = &mut e.view {
+                    *l = lane;
+                    view.pad = lane;
+                    view.bank = lane / 16;
+                }
+            }
+            app.invalidate();
+        }
+        RackAct::EditorDuplicate => {
+            // The normal pattern clone, so identity, numbering, clips and its one undo step follow the existing path.
+            app.pattern_cmd(crate::patterns::Cmd::Clone);
+            app.invalidate();
+        }
+        RackAct::EditorStep { key, lane, step, on } => {
+            if let Some(e) = app.state.rack_ui_cache.borrow_mut().get_mut(&key) {
+                if let crate::rack_ui::TileView::Drum { lane: l, view, .. } = &mut e.view {
+                    *l = lane;
+                    view.pad = lane;
+                    view.bank = lane / 16;
+                }
+            }
+            let Some(row) = instrument_row(&app.state, key) else { return };
+            let st = crate::rack_ui::drum_state(&app.plugins, key);
+            let Some(pad) = st.pad(lane) else { return };
+            let key = pad.key.clamp(0, 127) as u16;
+            let Some(ch) = app.state.project.channels.get(row).map(|c| c.index) else { return };
+            crate::rack::snapshot(&mut app.state);
+            crate::rack::set_drum_step(&mut app.state, ch, key, step, on);
+            if on {
+                // A step turned on plays its lane at once, so programming is audible, not just visible.
+                if let Some(c) = app.state.project.channels.get(row) {
+                    app.preview(c.index, i32::from(key));
+                }
+            }
+            app.invalidate();
+        }
+        RackAct::EditorStepClear { key } => {
+            let Some(row) = instrument_row(&app.state, key) else { return };
+            let Some(ch) = app.state.project.channels.get(row).map(|c| c.index) else { return };
+            crate::rack::snapshot(&mut app.state);
+            crate::rack::clear_channel_steps(&mut app.state, ch);
+            app.invalidate();
+        }
+        RackAct::EditorPattern { d } => {
+            let next = (i32::from(app.state.pattern) + d).clamp(1, i32::from(crate::patterns::MAX)) as u16;
+            if next != app.state.pattern {
+                app.state.pattern = next;
+                app.state.piano.dirty = true;
+            }
+            app.invalidate();
+        }
+        RackAct::EditorLength { bars } => {
+            let bars = bars.max(0) as u32;
+            let steps = (bars > 0).then(|| bars * crate::rack::bar_steps(&app.state));
+            crate::rack::snapshot(&mut app.state);
+            crate::rack::set_len(&mut app.state, steps);
             app.invalidate();
         }
         // The drum machine's tile shows one half at a time: its pads, or its cards.
@@ -784,6 +1016,12 @@ pub fn set_channel_knob(app: &mut App, row: usize, which: ChannelControl, v: f64
         // The mixer track is not a knob: it has no place in a device's header.
         ChannelControl::Track => {}
     }
+}
+
+/// A hosted Parametric EQ band's parameter as the plugin names it in the host ("Band 3 freq").
+fn eq_band_param<'a>(params: &'a [RackParam], band: usize, which: &str) -> Option<&'a RackParam> {
+    let name = format!("Band {} {which}", band + 1);
+    params.iter().find(|p| p.name.eq_ignore_ascii_case(&name))
 }
 
 pub fn set_param_value(app: &mut App, key: usize, id: u32, v: f64) {
@@ -951,16 +1189,67 @@ fn remove_fx(app: &mut App, strip: u16, slot: u8) {
     }
 }
 
-/// The rack's Ctrl keys while a tile is selected (app.rs's rack block): D duplicates the selected device, X
-/// cuts it, V pastes the cut device, G groups the selected effects into a container (§7's group device).
+/// The rack's Ctrl keys while a tile is selected (app.rs's rack block): A selects the whole chain, C copies the
+/// selected devices, X cuts them, V pastes what was copied, D duplicates the selected device and G groups the
+/// selected effects into a container (§7's group device).
 pub fn key(app: &mut App, c: &str) -> bool {
     match c.to_ascii_lowercase().as_str() {
+        "a" => select_all(app),
+        "c" => copy_selected(app),
         "d" => duplicate_selected(app),
         "x" => cut_selected(app),
         "v" => paste_clip(app),
         "g" => group_selected(app),
         _ => false,
     }
+}
+
+/// Ctrl+A: every device of the rack's track is selected (the whole chain), ready for cut / copy / paste.
+pub fn select_all(app: &mut App) -> bool {
+    let n = rack_chain(&app.state).len();
+    if n == 0 {
+        return false;
+    }
+    let cursor = rack_sel(&app.state).filter(|i| *i < n).unwrap_or(n - 1);
+    app.state.device_rack_sels = (0..n).collect();
+    app.state.device_rack_anchor = Some(cursor);
+    app.state.device_rack_cursor = Some(cursor);
+    app.invalidate();
+    true
+}
+
+/// The cut / copied form of every selected effect and MIDI FX, in chain order. The instrument, an empty slot and a
+/// container are not carried by this clipboard.
+fn selected_clips(app: &App) -> Vec<Clip> {
+    let chain = rack_chain(&app.state);
+    app.state
+        .device_rack_sels
+        .iter()
+        .filter_map(|&i| chain.get(i))
+        .filter_map(|d| match d.kind {
+            DeviceKind::Fx(t, k) => clip_fx(app, t, k).map(|(name, index, state, on)| Clip::Fx { name, index, state, on }),
+            DeviceKind::MidiFx(k) => {
+                let id = rack_track(&app.state)?.id.0;
+                let sl = crate::midi_fx::slots(&app.state, id).get(k).cloned().flatten()?;
+                Some(Clip::MidiFx { index: sl.index, on: sl.on })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Ctrl+C: copies the selected devices (their state with them) without removing anything.
+pub fn copy_selected(app: &mut App) -> bool {
+    let clips = selected_clips(app);
+    if clips.is_empty() {
+        app.state.message = Some("Only effects and MIDI FX can be copied".into());
+        return true;
+    }
+    let n = clips.len();
+    app.state.device_rack_clip = clips;
+    app.state.message = Some(if n == 1 { "1 device copied".into() } else { format!("{n} devices copied") });
+    app.invalidate();
+    true
 }
 
 /// What a cut needs from an effect: its shown name, its plugin's index (for hosting), its saved state and
@@ -1031,38 +1320,54 @@ pub fn duplicate_selected(app: &mut App) -> bool {
     }
 }
 
-/// Ctrl+X: the selected device is cut — copied (its state with it) and removed ([`remove_device`]).
+/// Ctrl+X: the selected devices are cut — copied (their state with them) and removed ([`remove_device`]).
 pub fn cut_selected(app: &mut App) -> bool {
-    let Some(sel) = rack_sel(&app.state) else { return false };
-    let Some(d) = rack_chain(&app.state).get(sel).cloned() else { return false };
-    let clip = match d.kind {
-        DeviceKind::Fx(t, k) => match clip_fx(app, t, k) {
-            Some((name, index, state, on)) => Clip::Fx { name, index, state, on },
-            None => return false,
-        },
-        DeviceKind::MidiFx(k) => {
-            let Some(id) = rack_track(&app.state).map(|tr| tr.id.0) else { return false };
-            let Some(sl) = crate::midi_fx::slots(&app.state, id).get(k).cloned().flatten() else { return false };
-            Clip::MidiFx { index: sl.index, on: sl.on }
-        }
-        _ => {
-            app.state.message = Some("Only effects and MIDI FX can be cut".into());
-            return true;
-        }
-    };
-    app.state.device_rack_clip = Some(clip);
-    app.state.message = Some(format!("{} cut", d.name));
-    remove_device(app, d.kind);
+    let clips = selected_clips(app);
+    if clips.is_empty() {
+        app.state.message = Some("Only effects and MIDI FX can be cut".into());
+        return true;
+    }
+    let chain = rack_chain(&app.state);
+    let mut chosen: Vec<(usize, DeviceKind)> = app
+        .state
+        .device_rack_sels
+        .iter()
+        .filter_map(|&i| chain.get(i).map(|d| (i, d.kind)))
+        .collect();
+    // From the end of the chain: the selection clears on each removal and earlier devices keep their numbers.
+    chosen.sort_by_key(|(i, _)| std::cmp::Reverse(*i));
+    let n = clips.len();
+    app.state.device_rack_clip = clips;
+    app.state.message = Some(if n == 1 { "1 device cut".into() } else { format!("{n} devices cut") });
+    clear_sel(&mut app.state);
+    for (_, kind) in chosen {
+        remove_device(app, kind);
+    }
     true
 }
 
-/// Ctrl+V: the cut device is pasted — an effect after the selected device's slot (else the strip's first free
-/// slot), from the state it was cut with; a MIDI FX into the next free MIDI FX slot.
+/// Ctrl+V: every cut / copied device is pasted — an effect after the selected device's slot (else the strip's
+/// first free slot), from the state it was cut with; a MIDI FX into the next free MIDI FX slot.
 pub fn paste_clip(app: &mut App) -> bool {
-    let Some(clip) = app.state.device_rack_clip.clone() else {
-        app.state.message = Some("Nothing cut to paste".into());
+    if app.state.device_rack_clip.is_empty() {
+        app.state.message = Some("Nothing cut or copied to paste".into());
         return true;
-    };
+    }
+    let clips = app.state.device_rack_clip.clone();
+    let mut pasted = 0;
+    for clip in &clips {
+        if paste_one(app, clip) {
+            pasted += 1;
+        }
+    }
+    if pasted > 1 {
+        app.state.message = Some(format!("{pasted} devices pasted"));
+    }
+    true
+}
+
+/// Pastes one cut / copied device.
+fn paste_one(app: &mut App, clip: &Clip) -> bool {
     match clip {
         Clip::Fx { name, index, state, on } => {
             let Some(t) = rack_track(&app.state).map(|tr| tr.mixer_strip) else { return false };
@@ -1076,8 +1381,8 @@ pub fn paste_clip(app: &mut App) -> bool {
                 app.state.message = Some("No free slot of this track to paste into".into());
                 return true;
             };
-            add_fx_with_state(app, t, k, index, state);
-            if !on
+            add_fx_with_state(app, t, k, *index, state.clone());
+            if !*on
                 && let Some(m) = crate::mixer::track_mut(&mut app.state, t)
             {
                 m.slot_on[usize::from(k)] = false;
@@ -1091,8 +1396,8 @@ pub fn paste_clip(app: &mut App) -> bool {
                 app.state.message = Some("No free MIDI FX slot to paste into".into());
                 return true;
             };
-            crate::midi_fx::add(app, id, Some(i), index);
-            if !on {
+            crate::midi_fx::add(app, id, Some(i), *index);
+            if !*on {
                 crate::midi_fx::toggle(&mut app.state, id, i);
             }
             true
@@ -1431,6 +1736,135 @@ mod tests {
         assert_eq!(height(&app.state), 0.0);
     }
 
+    /// The strip carries all twenty-one project-modulator slots in one row, the last one inside the panel and
+    /// clickable even at the narrowest usual window.
+    #[test]
+    fn the_modulator_strip_shows_every_slot() {
+        let Ok(mut c) = os_ui::Canvas::new(1229, 900, 1.0) else { return };
+        let mut app = app();
+        app.state.screen = (1229.0, 900.0);
+        crate::playlist::run(&mut app, Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi));
+        let r = crate::views::device_rack::panel_rect(&app.state, 1229.0, 900.0);
+        let slots = crate::views::device_rack::mod_slots(&app.state, r);
+        assert_eq!(slots.len(), os_model::modulation::PROJECT_SLOTS);
+        assert!(slots.last().is_some_and(|s| s.right() <= r.right() - 2.0), "the last slot is on the panel");
+        assert!(slots.windows(2).all(|w| w[0].right() <= w[1].x), "the slots do not overlap");
+        app.paint(&mut c, None);
+        let last = os_model::modulation::PROJECT_SLOTS as u8 - 1;
+        assert!(
+            app.hits
+                .iter()
+                .any(|h| h.action == Action::Mod(crate::modulation::ModAct::AddMenu(last))),
+            "slot {last} paints its add button"
+        );
+        assert!(
+            app.hits.iter().any(|h| h.action == Action::Mod(crate::modulation::ModAct::AddRow)),
+            "the strip ends with the add-row button, apart from the slots' own +"
+        );
+    }
+
+    /// The strip's "＋" after the last slot is its own button: it grows the strip by a row of slots, which are drawn
+    /// on the new row and can hold modulators (a slot beyond the first row's last gets its own add menu).
+    #[test]
+    fn the_add_row_button_gives_another_row_of_slots() {
+        let Ok(mut c) = os_ui::Canvas::new(1600, 900, 1.0) else { return };
+        let mut app = app();
+        app.state.screen = (1600.0, 900.0);
+        let panel = crate::views::device_rack::panel_rect(&app.state, 1600.0, 900.0);
+        let one_row = crate::views::device_rack::mod_row_h(&app.state);
+        assert_eq!(crate::views::device_rack::mod_slots(&app.state, panel).len(), os_model::modulation::PROJECT_SLOTS);
+        crate::modulation::act(&mut app, crate::modulation::ModAct::AddRow);
+        assert_eq!(app.state.modulation.rows(), 2);
+        assert!(crate::views::device_rack::mod_row_h(&app.state) > one_row, "the strip grew a row");
+        let panel = crate::views::device_rack::panel_rect(&app.state, 1600.0, 900.0);
+        let slots = crate::views::device_rack::mod_slots(&app.state, panel);
+        assert_eq!(slots.len(), os_model::modulation::PROJECT_SLOTS * 2);
+        assert!(slots[os_model::modulation::PROJECT_SLOTS].y > slots[0].bottom(), "the new slots sit on a new row");
+        assert!(slots.windows(2).all(|w| w[0].right() <= w[1].x || w[1].y > w[0].y), "no slot overlaps another");
+        app.paint(&mut c, None);
+        let last_row_two = (os_model::modulation::PROJECT_SLOTS * 2 - 1) as u8;
+        assert!(
+            app.hits.iter().any(|h| h.action == Action::Mod(crate::modulation::ModAct::AddMenu(last_row_two))),
+            "the new row's last slot paints its add button"
+        );
+        assert!(app.hits.iter().any(|h| h.action == Action::Mod(crate::modulation::ModAct::AddRow)));
+        // A slot in the new row holds a modulator.
+        let slot = os_model::modulation::PROJECT_SLOTS as u8 + 2;
+        crate::modulation::act(&mut app, crate::modulation::ModAct::AddKind(slot, crate::modulation::Kind::Lfo));
+        assert!(app.state.modulation.modulator_at_slot(slot).is_some(), "the new row's slot takes a modulator");
+    }
+
+    /// A device tile's header is shorter than the rack's, and every control in it — LED, name, channel knobs, menu
+    /// and pop-out — still fits inside that shorter row.
+    #[test]
+    fn the_tile_header_is_short_and_keeps_every_control() {
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = full_chain_app();
+        app.paint(&mut c, None);
+        assert!(TILE_HEAD < HEADER_H, "tiles have the compact header");
+        let (d, tile) = crate::views::device_rack::tiles(&app.state)
+            .into_iter()
+            .find(|(d, _)| matches!(d.kind, DeviceKind::Instrument(_)))
+            .expect("the instrument tile");
+        let head = os_ui::Rect::new(tile.x, tile.y, tile.w, TILE_HEAD);
+        let knobs: Vec<_> = app
+            .hits
+            .iter()
+            .filter(|h| matches!(h.action, Action::DeviceRack(RackAct::ChannelKnob { .. })))
+            .collect();
+        assert_eq!(knobs.len(), 3, "VOL, PAN and PITCH stay in the header");
+        for h in knobs {
+            assert!(
+                h.rect.y >= head.y - 0.01 && h.rect.bottom() <= head.bottom() + 0.01,
+                "a channel knob fits the compact header: {:?} in {head:?}",
+                h.rect
+            );
+        }
+        let key = d.key.unwrap();
+        for act in [RackAct::Menu(key), RackAct::PopOut(key), RackAct::ToggleOn(d.kind)] {
+            let h = app
+                .hits
+                .iter()
+                .find(|h| h.action == Action::DeviceRack(act))
+                .unwrap_or_else(|| panic!("{act:?} is painted"));
+            assert!(
+                h.rect.y >= head.y - 0.01 && h.rect.bottom() <= head.bottom() + 0.01,
+                "{act:?} fits the compact header: {:?}",
+                h.rect
+            );
+        }
+    }
+
+    /// The modulator editor opens directly above its slot (and may stand over the browser), not at a remembered
+    /// screen position.
+    #[test]
+    fn the_modulator_editor_opens_above_its_slot() {
+        let mut app = app();
+        let id = app.state.modulation.add(os_model::modulation::ModSource::default());
+        app.state.mod_editor = Some(id);
+        let panel = crate::views::device_rack::panel_rect(&app.state, app.state.screen.0, app.state.screen.1);
+        let slot = crate::views::device_rack::mod_slots(&app.state, panel)[0];
+        let o = app.detached_origin(crate::app::Win::ModEditor).expect("the editor has a place");
+        assert!((o.x - slot.x.max(8.0)).abs() < 0.01, "the editor starts at the slot: {:?} vs {:?}", o, slot);
+        assert!((slot.y - o.bottom() - 8.0).abs() < 1.0, "the editor sits just above the slot: {:?} vs {:?}", o, slot);
+    }
+
+    /// Each modulator kind has its own accent; LFO keeps the themed modulation colour.
+    #[test]
+    fn modulator_kinds_have_their_own_colours() {
+        use os_model::modulation::ModSource;
+        let base = os_ui::Color::rgb(0x54a6e8);
+        assert_eq!(crate::views::device_rack::mod_accent(base, &ModSource::default()), base);
+        assert_eq!(
+            crate::views::device_rack::mod_accent(base, &ModSource::Random(Default::default())),
+            os_ui::Color::rgb(0xc6ff53)
+        );
+        assert_eq!(
+            crate::views::device_rack::mod_accent(base, &ModSource::AudioFollower(Default::default())),
+            os_ui::Color::rgb(0xae65ff)
+        );
+    }
+
     /// The rack is visible and sized at the default height after a Linear template is loaded.
     #[test]
     fn linear_template_shows_rack() {
@@ -1683,6 +2117,46 @@ mod tests {
                 "out-of-range values clamp to 1.0"
             );
         }
+    }
+
+    /// A docked Parametric EQ's graph token is a real drag: across sets the band's frequency and up / down
+    /// its level, through the hosted parameters the pop-out editor reads, so both surfaces follow.
+    #[test]
+    fn a_docked_eq_token_drags_frequency_and_level() {
+        let mut app = app();
+        app.plugins = crate::plugins::Plugins::builtins();
+        // The EQ is offered as a mixer effect; host it under key 0 for the tile path.
+        let at = app
+            .plugins
+            .effect_index("Lemon Parametric EQ")
+            .expect("the EQ is bundled");
+        let eq = app.plugins.effects[at].clone();
+        app.plugins.available.push(eq);
+        let index = app.plugins.index_of("Lemon Parametric EQ").expect("offered now");
+        app.plugins.create_with(0, index, None).expect("the EQ hosted");
+        let params = app.plugins.rack_controls(0, &[]);
+        let param = |which: &str| {
+            params
+                .iter()
+                .find(|p| p.name.eq_ignore_ascii_case(&format!("Band 1 {which}")))
+                .unwrap_or_else(|| panic!("Band 1 {which}"))
+                .clone()
+        };
+        let (freq, level) = (param("freq"), param("level"));
+        app.state.device_rack_params.insert(0, params);
+        app.mouse = (300.0, 300.0);
+        run(&mut app, RackAct::EditorEqToken { key: 0, band: 0 });
+        assert!(
+            matches!(app.drag, Some(crate::app::Drag::DeviceRackEqBand { .. })),
+            "the token starts a band drag"
+        );
+        // 102.4 px across = a tenth of the frequency range; 64 px up = a tenth of the level's 36 dB.
+        app.mouse_move(402.4, 236.0);
+        let now = |id: u32| app.plugins.param_value(0, id).expect("the hosted value");
+        assert!((now(freq.id) - (freq.value + 0.1)).abs() < 1e-6, "frequency follows across: {}", now(freq.id));
+        assert!((now(level.id) - (level.value + 0.1)).abs() < 1e-6, "level follows up: {}", now(level.id));
+        app.mouse_up();
+        assert!(app.drag.is_none(), "the release ends the drag");
     }
 
     /// Tile drag and drop: the drop gap follows the pointer (`drop_index`), and a release reorders — an FX
@@ -2326,7 +2800,7 @@ mod tests {
         app.paint(&mut c, None);
         let tiles = crate::views::device_rack::tiles(&app.state);
         let (d, t) = tiles.iter().find(|(d, _)| matches!(d.kind, DeviceKind::MidiFx(_))).unwrap().clone();
-        app.mouse_move(t.cx(), t.y + HEADER_H + 4.0);
+        app.mouse_move(t.cx(), t.y + TILE_HEAD + 4.0);
         app.mouse_down_right();
         assert_eq!(app.state.device_rack_menu, d.key);
         app.paint(&mut c, None);
@@ -2372,6 +2846,60 @@ mod tests {
         let m = crate::mixer::track(&app.state, strip).unwrap();
         assert_eq!(m.slots.iter().filter(|s| s.is_some()).count(), n_fx - 2, "both selected effects went");
         assert!(app.state.device_rack_sels.is_empty(), "the selection cleared");
+    }
+
+    /// A device click takes the arrow keys back from an open modulator editor: plain arrows move the device
+    /// selection, Shift+arrow keeps the original and adds the neighbour, and Ctrl+A selects the whole chain.
+    /// Clicking a modulator gives it the keys again.
+    #[test]
+    fn device_and_modulator_clicks_own_the_arrow_keys() {
+        use winit::keyboard::{Key, NamedKey};
+        let mut app = full_chain_app();
+        let n = rack_chain(&app.state).len();
+        assert!(n >= 3, "the chain has neighbours");
+        let mod_id = app.state.modulation.add(os_model::modulation::ModSource::default());
+        app.state.keyboard_focus = crate::app::KeyboardFocus::Modulators;
+        crate::modulation::select_one(&mut app.state, mod_id);
+        let slot = app.state.modulation.get(mod_id).unwrap().slot;
+        // Clicking the first device selects it and gives the rack the keys, even though the modulator is still
+        // selected and its editor open.
+        app.state.mod_editor = Some(mod_id);
+        app.act(Action::DeviceRack(RackAct::SelectTile(0)));
+        assert_eq!(app.state.keyboard_focus, crate::app::KeyboardFocus::Rack);
+        assert!(tile_selected(&app.state, 0));
+        app.key(&Key::Named(NamedKey::ArrowRight), false, false);
+        assert_eq!(rack_sel(&app.state), Some(1), "the rack moved, not the modulator");
+        assert_eq!(app.state.mod_cursor, Some(slot), "the modulator stayed put");
+        // Shift+Right keeps tile 1 and adds 2.
+        app.shift = true;
+        app.key(&Key::Named(NamedKey::ArrowRight), false, false);
+        app.shift = false;
+        assert_eq!(app.state.device_rack_sels, BTreeSet::from([1, 2]), "the original stays selected");
+        // Ctrl+A selects every device of the chain.
+        app.key(&Key::Character("a".into()), true, false);
+        assert_eq!(app.state.device_rack_sels.len(), n);
+        // A modulator click takes the keys for its own row; its arrows no longer move the rack.
+        crate::modulation::act(&mut app, crate::modulation::ModAct::Open(mod_id));
+        assert_eq!(app.state.keyboard_focus, crate::app::KeyboardFocus::Modulators);
+        let before = app.state.device_rack_sels.clone();
+        app.key(&Key::Named(NamedKey::ArrowRight), false, false);
+        assert_eq!(app.state.device_rack_sels, before, "the rack selection stayed");
+        assert_ne!(app.state.mod_cursor, Some(slot), "the modulator moved");
+    }
+
+    /// The EQ's dock starts without its fader bank; its header button flips that state both ways.
+    #[test]
+    fn the_eq_faders_start_hidden_and_toggle() {
+        let mut app = app();
+        app.state.rack_ui_cache.borrow_mut().ensure(&0, crate::rack_ui::Ui::Eq);
+        let faders = |app: &crate::app::App| {
+            matches!(app.state.rack_ui_cache.borrow().view(&0), Some(crate::rack_ui::TileView::Eq { faders: true }))
+        };
+        assert!(!faders(&app), "the dock opens on the graph, not the fader bank");
+        run(&mut app, RackAct::EditorFaders { key: 0 });
+        assert!(faders(&app));
+        run(&mut app, RackAct::EditorFaders { key: 0 });
+        assert!(!faders(&app));
     }
 
     /// Each device tile's header carries a wrench (right of the v menu): it pops that device's editor out to its
@@ -2469,10 +2997,10 @@ mod tests {
             "the cut slot is empty"
         );
         let clip = app.state.device_rack_clip.clone();
-        let Some(Clip::Fx { name, state: clip_state, .. }) = clip else { panic!("an effect in the clip") };
-        assert_eq!(name, d.name);
+        let Some(Clip::Fx { name, state: clip_state, .. }) = clip.first() else { panic!("an effect in the clip") };
+        assert_eq!(name.as_str(), d.name.as_str());
         if let Some(st) = state {
-            assert_eq!(clip_state, st, "the cut keeps the device's state");
+            assert_eq!(clip_state, &st, "the cut keeps the device's state");
         }
         // Ctrl+V pastes it into the freed slot, from the state it was cut with.
         assert!(paste_clip(&mut app));
@@ -2486,6 +3014,26 @@ mod tests {
         app.state.device_rack_sels = BTreeSet::from([tiles.iter().position(|(t, _)| t.kind == inst.kind).unwrap()]);
         assert!(duplicate_selected(&mut app));
         assert!(app.state.message.as_deref().unwrap().contains("Only effects"));
+    }
+
+    /// Ctrl+A selects every device of the track's chain; Ctrl+C copies them (removing nothing) and Ctrl+V pastes
+    /// them, each from the state it was copied with.
+    #[test]
+    fn ctrl_a_selects_the_chain_and_copies_paste_back() {
+        let mut app = full_chain_app();
+        let n = rack_chain(&app.state).len();
+        assert!(n >= 2, "the chain has devices");
+        assert!(select_all(&mut app));
+        assert_eq!(app.state.device_rack_sels.len(), n, "every device selected");
+        assert!(copy_selected(&mut app));
+        assert!(!app.state.device_rack_clip.is_empty(), "the copies are on the clipboard");
+        let strip = rack_track(&app.state).expect("the rack's track").mixer_strip;
+        let filled = |app: &crate::app::App| {
+            crate::mixer::track(&app.state, strip).unwrap().slots.iter().filter(|s| s.is_some()).count()
+        };
+        let before = filled(&app);
+        assert!(paste_clip(&mut app));
+        assert!(filled(&app) > before, "the copied effects were pasted after the originals");
     }
 
     /// Ctrl+G groups the selected effects of one strip into a container in the first one's slot: every selected
@@ -2527,25 +3075,94 @@ mod tests {
         assert!(app.state.device_rack_sels.is_empty(), "the selection cleared");
     }
 
+    /// The modulator editor lives in its own native always-on-top window: it is not a rack overlay, and its knobs
+    /// drag there (and hold the cursor while they do).
+    #[test]
+    fn the_modulator_editors_knobs_drag_in_its_own_window() {
+        use crate::modulation::{KnobField, ModAct};
+        use crate::views::device_rack::{MOD_EDITOR_H, MOD_EDITOR_W};
+        let Ok(mut c) = os_ui::Canvas::new(MOD_EDITOR_W as u32, MOD_EDITOR_H as u32, 1.0) else { return };
+        let mut app = app();
+        let id = app.state.modulation.add(os_model::modulation::ModSource::default());
+        app.state.mod_editor = Some(id);
+        assert!(app.detached_windows().contains(&crate::app::Win::ModEditor));
+        assert_eq!(app.state.detached_size(crate::app::Win::ModEditor), Some((MOD_EDITOR_W, MOD_EDITOR_H)));
+        assert_eq!(
+            crate::views::paint_area(&app.state, crate::app::Win::ModEditor),
+            os_ui::Rect::new(0.0, 0.0, MOD_EDITOR_W, MOD_EDITOR_H),
+            "the editor window paints whole"
+        );
+        app.paint_detached(crate::app::Win::ModEditor, &mut c);
+        let knob = app
+            .on_surface(crate::app::Win::ModEditor, |a| {
+                a.hits
+                    .iter()
+                    .rev()
+                    .find(|h| h.action == Action::Mod(ModAct::Knob(id, KnobField::Phase)))
+                    .map(|h| h.rect)
+            })
+            .expect("the editor window's phase knob");
+        let before = app.state.modulation.get(id).map_or(0.0, |m| crate::modulation::knob_value(m.source, KnobField::Phase));
+        app.on_surface(crate::app::Win::ModEditor, |a| {
+            a.mouse_move(knob.cx(), knob.cy());
+            a.mouse_down();
+            assert!(a.cursor_locked(), "a modulator knob drag holds the cursor");
+            // Two steps, not one: the drag must accumulate from the press, not spring back to `v0` per event.
+            a.mouse_move(knob.cx(), knob.cy() - 20.0);
+            a.mouse_move(knob.cx(), knob.cy() - 40.0);
+            a.mouse_up();
+        });
+        let after = app.state.modulation.get(id).map_or(0.0, |m| crate::modulation::knob_value(m.source, KnobField::Phase));
+        let want = (before + 40.0 * crate::knobs::PER_PX).min(1.0);
+        assert!((after - want).abs() < 1e-4, "dragging up turns the knob the whole way: {before} -> {after} (wanted {want})");
+        // The rack's own paint no longer carries the editor.
+        let Ok(mut main) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        app.state.mod_editor = None;
+        app.paint(&mut main, None);
+        assert!(!app.hits.iter().any(|h| matches!(h.action, Action::Mod(ModAct::Knob(..)))), "no editor knobs in the main window");
+        // Right-clicking the slot opens its options in the same always-on-top window, not back in the main one.
+        let slot = app
+            .hits
+            .iter()
+            .rev()
+            .find(|h| h.action == Action::Mod(ModAct::Open(id)))
+            .map(|h| h.rect)
+            .expect("the modulator slot");
+        app.mouse_move(slot.cx(), slot.cy());
+        app.mouse_down_right();
+        assert_eq!((app.state.mod_editor, app.state.mod_menu), (Some(id), Some(id)));
+        assert!(app.detached_windows().contains(&crate::app::Win::ModEditor));
+        app.paint_detached(crate::app::Win::ModEditor, &mut c);
+        assert!(
+            app.on_surface(crate::app::Win::ModEditor, |a| a.hits.iter().any(|h| h.action == Action::Mod(ModAct::Enable(id)))),
+            "the options menu paints in the topmost window"
+        );
+    }
+
     /// The rack slot editor's title is its name field: clicking it edits the name in place, and the rename is one
     /// undo step.
     #[test]
     fn a_modulator_renames_from_the_rack_editors_title() {
         use crate::modulation::ModAct;
-        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        use crate::views::device_rack::{MOD_EDITOR_H, MOD_EDITOR_W};
+        let Ok(mut c) = os_ui::Canvas::new(MOD_EDITOR_W as u32, MOD_EDITOR_H as u32, 1.0) else { return };
         let mut app = app();
         let id = app.state.modulation.add(os_model::modulation::ModSource::default());
         app.state.mod_editor = Some(id);
-        app.paint(&mut c, None);
+        app.paint_detached(crate::app::Win::ModEditor, &mut c);
         let title = app
-            .hits
-            .iter()
-            .rev()
-            .find(|h| matches!(h.action, Action::Mod(ModAct::Rename(i, _)) if i == id))
-            .map(|h| h.rect)
+            .on_surface(crate::app::Win::ModEditor, |a| {
+                a.hits
+                    .iter()
+                    .rev()
+                    .find(|h| matches!(h.action, Action::Mod(ModAct::Rename(i, _)) if i == id))
+                    .map(|h| h.rect)
+            })
             .expect("the editor's title field");
-        app.mouse_move(title.cx(), title.cy());
-        app.mouse_down();
+        app.on_surface(crate::app::Win::ModEditor, |a| {
+            a.mouse_move(title.cx(), title.cy());
+            a.mouse_down();
+        });
         assert!(
             matches!(app.state.playlist.edit.as_ref().map(|e| e.target), Some(crate::playlist::EditTarget::ModulatorName(x)) if x == id),
             "the title starts the rename"
@@ -2586,5 +3203,58 @@ mod tests {
             "the instrument is a container now\n{chain:?}"
         );
         assert_eq!(crate::container::members(&app.state, row as u16, crate::container::CHANNEL).map(|m| m.len()), Some(1));
+    }
+
+    /// The project-modulator strip is above the rack panel, outside its height: the tiles keep the rack's whole body.
+    #[test]
+    fn modulators_sit_above_the_rack_not_over_the_tiles() {
+        let app = full_chain_app();
+        let r = crate::views::device_rack::panel_rect(&app.state, app.state.screen.0, app.state.screen.1);
+        let strip = crate::views::device_rack::mod_row_rect(&app.state, r);
+        assert_eq!(strip.h, crate::views::device_rack::MOD_H);
+        assert!(strip.bottom() <= r.y, "the strip ends at the rack's top edge");
+        assert_eq!(total_height(&app.state), height(&app.state) + strip.h);
+        let tiles = crate::views::device_rack::layout(&app.state, r);
+        let (_, tile) = tiles.first().expect("the instrument tile");
+        assert_eq!(tile.y, r.y + HEADER_H, "the tiles start under the rack header");
+        assert!((tile.h - (r.h - HEADER_H)).abs() < 0.01, "the strip takes no tile height");
+    }
+
+    /// Routing mode on a real Lemon Trio knob assigns the LFO through the rack's click path (Trio's knobs are stepped
+    /// integer parameters, so a naive `steps == 0` test marked every one unmodulatable).
+    #[test]
+    fn an_lfo_routes_to_a_trio_knob() {
+        let mut app = app();
+        crate::playlist::run(&mut app, Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi));
+        app.plugins = crate::plugins::Plugins::builtins();
+        app.state.plugdb.rebuild(&app.plugins);
+        let trio = app.plugins.index_of(crate::osc3::LEMON_TRIO).expect("Lemon Trio is bundled");
+        let tr = app.state.project.tracks.first().unwrap().clone();
+        let row = app.state.project.channels.iter().position(|c| Some(c.index) == tr.channel).unwrap();
+        crate::plugin_menu::replace_generator(&mut app, trio, row);
+        (0..3).for_each(|_| app.plugin_tick());
+        sync_embed(&mut app);
+        let key = row;
+        let cutoff = app
+            .state
+            .device_rack_params
+            .get(&key)
+            .and_then(|ps| ps.iter().find(|p| p.name.starts_with("Filter frequency")))
+            .cloned()
+            .expect("the Trio's cutoff is a rack control");
+        let target = crate::params::target_of_id(&app.state, key, cutoff.id).expect("the cutoff's target");
+        assert!(
+            crate::modulation::is_modulatable(&app.state, target),
+            "the Trio cutoff is continuous: {} steps",
+            app.state.params.lists[&key].params[crate::params::index_of(&app.state, key, cutoff.id).unwrap()].steps
+        );
+        let id = app.state.modulation.add(os_model::modulation::ModSource::default());
+        app.state.mod_routing = Some(id);
+        run(&mut app, RackAct::ParamSet { key, id: cutoff.id, v: cutoff.value });
+        let path = crate::modulation::target_path(&mut app.state, target).expect("a persistent path");
+        assert!(
+            app.state.modulation.get(id).is_some_and(|m| m.targets.iter().any(|t| t.path == path)),
+            "the LFO drives the cutoff"
+        );
     }
 }

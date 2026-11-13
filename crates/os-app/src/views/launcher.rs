@@ -310,50 +310,62 @@ fn slot_paint(ui: &mut Ui, s: &State, c: &launcher::Column, scene: usize, cell: 
     let queued = launcher::pending(s, c.id) == Some(scene);
     match launcher::clip(s, c.id, scene) {
         Some(slot) => {
-            let base = launcher::clip_color(s, c.id, scene).map(rgb).unwrap_or(t.s(0x2f3a42));
-            ui.c.fill_rrect(cell, 2.0, base.with_alpha(if playing { 235 } else { 165 }));
-            ui.c.fill_rect_gradient(cell, Color::rgb(0).with_alpha(60), Color::rgb(0).with_alpha(0), 0.0);
+            // A clip is a solid card in its own colour, not another empty slot: full strength (brighter while it
+            // plays), a lit cap across the top, a sunken frame, and the name along the top.
+            // Its own colour, else a solid default: a clip is never the empty slot's near-black.
+            let base = launcher::clip_color(s, c.id, scene).map(rgb).unwrap_or(t.s(0x46565f));
+            ui.c.fill_rrect(cell, 3.0, base.with_alpha(if playing { 255 } else { 225 }));
+            ui.c.fill_rect_gradient(cell, Color::rgb(0).with_alpha(if playing { 30 } else { 70 }), Color::rgb(0).with_alpha(0), 0.0);
+            ui.c.fill_rrect(Rect::new(cell.x + 2.0, cell.y + 2.0, (cell.w - 4.0).max(1.0), 2.0), 1.0, base.shade(0.5).with_alpha(235));
+            ui.c.stroke_rrect(cell, 3.0, 1.0, if playing { t.glyph } else { base.shade(-0.4) });
             if slot.audio.is_some() {
-                audio_paint(ui, s, &slot, cell, t.glyph.with_alpha(110));
+                audio_paint(ui, s, &slot, cell.inset(2.0), t.glyph.with_alpha(90));
             }
             let name = launcher::clip_name(s, c.id, scene);
-            // Bitwig-style play/stop button in the top-right corner: a play triangle while the clip is stopped, a
+            ui.c.text_clip(fnt(11.0), cell.x + 5.0, cell.y + 3.0, (cell.w - 10.0).max(1.0), t.text, &name);
+            // The button that plays it, big and in the middle of the cell: a play triangle while the clip waits, a
             // stop square while it plays. While playing it is a `Stop` hit (distinct from the cell's `Launch` hit, so
-            // clicking it stops the clip); while stopped the whole cell already launches, so the button is drawn but
-            // not separately hit.
-            let btn_w = 15.0;
-            let btn = Rect::new(cell.right() - btn_w - 1.0, cell.y + 2.0, btn_w, (cell.h - 5.0).max(10.0));
+            // the big button means what it shows); while stopped the whole cell already launches.
+            let d = (cell.h - 22.0).clamp(13.0, 24.0);
+            let btn = Rect::new(cell.cx() - d / 2.0, cell.cy() + 3.0 - d / 2.0, d, d);
+            let bhov = playing && hit_in(ui, btn, area, Action::Launcher(Act::Stop(c.id)), "Stop this clip");
+            let face = if playing { t.glyph } else { Color::rgb(0x0d0f10).mix(t.glyph, 0.82) };
+            ui.c.fill_rrect(btn, d / 3.0, face.with_alpha(if playing { 245 } else if hov { 235 } else { 200 }));
             if playing {
-                let bhov = hit_in(ui, btn, area, Action::Launcher(Act::Stop(c.id)), "Stop this clip");
-                ui.c.fill_rrect(btn, 2.0, if bhov { t.s(0x39424a) } else { t.s(0x23282b) });
-                ui.c.fill_rect(btn.inset(3.5), t.glyph);
+                let sq = (d * 0.42).round();
+                ui.c.fill_rect(Rect::new(btn.cx() - sq / 2.0, btn.cy() - sq / 2.0, sq, sq), base.shade(-0.45));
             } else {
-                ui.c.fill_rrect(btn, 2.0, t.s(0x23282b));
-                let tri = Rect::new(btn.x + 4.5, btn.y + 3.5, 5.0, 7.0);
-                ui.c.fill_polygon(&[(tri.x, tri.y), (tri.x, tri.y + tri.h), (tri.x + tri.w, tri.cy())], t.text);
+                // The triangle sits optically centred, a little right of the middle.
+                let s2 = (d * 0.46).round();
+                let x = btn.cx() - s2 * 0.32;
+                ui.c.fill_polygon(
+                    &[(x, btn.cy() - s2 / 2.0), (x, btn.cy() + s2 / 2.0), (x + s2 * 0.86, btn.cy())],
+                    t.s(0x14181a),
+                );
             }
-            if queued && !playing {
-                ui.c.stroke_rrect(btn, 2.0, 1.5, t.accent);
+            if bhov || (queued && !playing) {
+                ui.c.stroke_rrect(btn, d / 3.0, 1.5, t.accent);
             }
+            // Where the clip is in its own loop, across the bottom of the cell: the bar fills left to right (a clip
+            // loops at its own length from the tick it was launched at, `launcher::progress`).
             if playing {
-                ui.c.stroke_rrect(cell, 2.0, 2.0, t.glyph);
+                if let Some(p) = launcher::progress(s, c.id) {
+                    let bar = Rect::new(cell.x + 3.0, cell.bottom() - 6.0, (cell.w - 6.0).max(1.0), 3.0);
+                    ui.c.fill_rrect(bar, 1.5, Color::rgb(0).with_alpha(130));
+                    ui.c.fill_rrect(Rect::new(bar.x, bar.y, (bar.w * p).max(1.0), bar.h), 1.5, t.glyph);
+                }
             }
             // A clip with a next action carries a mark, so a follow chain is visible without opening its menu.
-            let follow = if slot.next != launcher::NextAction::None { 12.0 } else { 0.0 };
-            let gutter = btn_w + 4.0 + follow;
-            let (x, w) = if playing { (cell.x + 19.0, cell.w - 25.0 - gutter) } else { (cell.x + 7.0, cell.w - 14.0 - gutter) };
-            let lh = ui.c.line_height(fnt(13.0));
-            ui.c.text_clip(fnt(13.0), x, (cell.cy() - lh / 2.0).round(), w.max(1.0), t.text, &name);
-            if follow > 0.0 {
-                ui.c.text(fnt(12.0), cell.right() - btn_w - 5.0 - follow, (cell.cy() - lh / 2.0).round(), t.glyph, "\u{2192}");
+            if slot.next != launcher::NextAction::None {
+                ui.c.text(fnt(11.0), cell.right() - 12.0, cell.y + 2.0, t.glyph, "\u{2192}");
             }
             if queued {
-                ui.c.stroke_rrect(cell, 2.0, 2.0, t.accent);
+                ui.c.stroke_rrect(cell, 3.0, 2.0, t.accent);
             }
             // The cell a click selected (the panel's clip editor shows its sample): a thin mark, under the
             // playing and queued rings (`launcher::Panel`).
             if s.launcher.sel == Some((c.id, scene)) && !playing && !queued {
-                ui.c.stroke_rrect(cell, 2.0, 1.0, t.text_dim);
+                ui.c.stroke_rrect(cell, 3.0, 1.0, t.text_dim);
             }
         }
         None => {

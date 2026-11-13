@@ -285,7 +285,7 @@ impl Kind {
         }
     }
 
-    /// The three types the eight project slots offer (the handoff's v1 set). Steps and Envelope stay readable in
+    /// The three types the project slots offer (the handoff's v1 set). Steps and Envelope stay readable in
     /// old projects and keep their knob-menu entries, but a new slot starts as one of these.
     pub const PROJECT: [Kind; 3] = [Kind::Lfo, Kind::Random, Kind::Follower];
 }
@@ -325,6 +325,45 @@ pub fn rate_text(period: Timebase) -> String {
     match period {
         Timebase::Sync(n) => SYNC_RATES.iter().find(|(k, _)| *k == n).map_or_else(|| format!("{n}/16"), |&(_, l)| l.to_string()),
         Timebase::Free(h) => format!("{h} Hz"),
+    }
+}
+
+/// `period` as the rate knob's 0..=1 position. Synced rates step through the six musical values; free rates run
+/// logarithmically from 0.0625 Hz to 32 Hz, so 1 Hz sits below the middle and dragging up raises it.
+pub fn rate_pos(period: Timebase) -> f32 {
+    match period {
+        Timebase::Sync(n) => {
+            let i = SYNC_RATES.iter().position(|(k, _)| *k == n).unwrap_or(0);
+            i as f32 / (SYNC_RATES.len() - 1) as f32
+        }
+        Timebase::Free(hz) => {
+            let lo = 0.0625f32.ln();
+            let hi = 32.0f32.ln();
+            ((hz.max(0.0625).ln() - lo) / (hi - lo)).clamp(0.0, 1.0)
+        }
+    }
+}
+
+/// The rate `period` takes at rate-knob position `pos`, keeping its sync / free mode.
+fn period_at(period: Timebase, pos: f32) -> Timebase {
+    let pos = pos.clamp(0.0, 1.0);
+    match period {
+        Timebase::Sync(_) => {
+            let i = (pos * (SYNC_RATES.len() - 1) as f32).round() as usize;
+            Timebase::Sync(SYNC_RATES[i.min(SYNC_RATES.len() - 1)].0)
+        }
+        Timebase::Free(_) => {
+            let hz = (0.0625f32.ln() + pos * (32.0f32.ln() - 0.0625f32.ln())).exp();
+            Timebase::Free((hz * 100.0).round() / 100.0)
+        }
+    }
+}
+
+/// The mode button: free hertz becomes a beat, a synced rate becomes 1 Hz.
+fn toggle_period(period: Timebase) -> Timebase {
+    match period {
+        Timebase::Sync(_) => Timebase::Free(1.0),
+        Timebase::Free(_) => Timebase::Sync(4),
     }
 }
 
@@ -524,19 +563,30 @@ pub fn depth_on(s: &State, target: u32) -> Option<f32> {
 #[derive(Debug, Default)]
 pub struct History {
     at: Option<Instant>,
+    /// When the tiles started sampling: the preview clock used while the transport is stopped.
+    start: Option<Instant>,
     series: BTreeMap<u32, VecDeque<f32>>,
 }
 
 impl History {
-    /// Samples the snapshot at most every 33 ms.
-    pub fn sample(&mut self, s: &State) {
+    /// Samples at most every 33 ms. Playing, the values are the engine's actual outputs; stopped, the sources are
+    /// evaluated on a free-running preview clock so the plots still move (a follower has no signal then and stays
+    /// at zero). `tempo` gives a sync source its project-tempo speed.
+    pub fn sample(&mut self, s: &State, playing: bool, tempo: f64) {
         let now = Instant::now();
         if self.at.is_some_and(|t| now.duration_since(t).as_millis() < 33) {
             return;
         }
         self.at = Some(now);
+        let start = *self.start.get_or_insert(now);
+        let secs = now.duration_since(start).as_secs_f64();
+        let beats = secs * tempo.max(1.0) / 60.0;
         for m in &s.modulation.modulators {
-            let v = s.mod_snapshot.output(m.id.0).unwrap_or(0.0);
+            let v = if playing {
+                s.mod_snapshot.output(m.id.0).unwrap_or(0.0)
+            } else {
+                os_engine::source_value(&m.source, m.id.0, beats, secs)
+            };
             let q = self.series.entry(m.id.0).or_default();
             q.push_back(v);
             while q.len() > 60 {
@@ -551,6 +601,10 @@ impl History {
         self.series.get(&id.0)
     }
 }
+
+/// A stepped parameter with more steps than this is a continuous control stored as an integer (Lemon Trio's knobs),
+/// not a selector or switch. Its steps are what the LFO can sweep through.
+const CONTINUOUS_STEPS: u32 = 32;
 
 /// Whether a control may receive project modulation (the handoff's `is_modulatable`). Continuous plugin parameters
 /// and the mixer's own controls qualify; discrete/boolean parameters, hidden ones and everything else do not. This is
@@ -567,7 +621,9 @@ pub fn is_modulatable(s: &State, target: u32) -> bool {
         Target::ChannelParam(..) | Target::SlotParam(..) => {
             let Some((key, index)) = crate::params::key_of(s, target::decode(target)) else { return false };
             let Some(e) = s.params.lists.get(&key).and_then(|l| l.params.get(index)) else { return false };
-            !e.hidden && e.steps == 0
+            // A knob with a wide integer range (Trio's cutoff, pitch, envelope times) is continuous for modulation;
+            // a handful of steps is a shape selector or a switch.
+            !e.hidden && (e.steps == 0 || e.steps > CONTINUOUS_STEPS)
         }
         _ => false,
     }
@@ -612,6 +668,8 @@ pub enum ModCmd {
     New(u32),
     /// A new modulator of `source` in project slot `.0` (the empty slot's add menu).
     AddInSlot(u8, ModSource),
+    /// Copied modulators, each pasted into its slot with a fresh id and its settings and routings intact.
+    PasteMany(Vec<(u8, Modulator)>),
     /// Modulator `.0` starts driving that parameter.
     Assign(ModulatorId, u32),
     /// Assign and set the depth in one step (routing mode's drag on release).
@@ -622,6 +680,8 @@ pub enum ModCmd {
     UnassignPath(ModulatorId, ParameterPath),
     /// A modulator goes, with every assignment it had.
     Remove(ModulatorId),
+    /// Several modulators go together, one undo step.
+    RemoveMany(Vec<ModulatorId>),
     /// A modulator on or off: its assignments stay, it drives nothing while off.
     SetEnabled(ModulatorId, bool),
     /// One routing on or off (the browser's checkbox).
@@ -660,10 +720,12 @@ pub fn run(app: &mut crate::app::App, cmd: ModCmd) -> Option<String> {
             | ModCmd::SetCurve(_, t, _)
             | ModCmd::SetPolarity(_, t, _) => target_path(s, t),
             ModCmd::AddInSlot(..)
+            | ModCmd::PasteMany(..)
             | ModCmd::UnassignPath(..)
             | ModCmd::SetTargetEnabled(..)
             | ModCmd::SetDepthPath(..)
             | ModCmd::Remove(_)
+            | ModCmd::RemoveMany(_)
             | ModCmd::SetEnabled(..)
             | ModCmd::SetSource(..)
             | ModCmd::SetKind(..)
@@ -682,6 +744,20 @@ pub fn run(app: &mut crate::app::App, cmd: ModCmd) -> Option<String> {
                 let m = s.modulation.get(id)?;
                 Some(format!("{} added to slot {}", name_of(m), slot + 1))
             }),
+            ModCmd::PasteMany(clips) => {
+                let n = clips.len();
+                let mut done = 0usize;
+                for (slot, clip) in clips {
+                    let Modulator { name, source, targets, enabled, .. } = clip;
+                    let Some(id) = s.modulation.add_in_slot(slot, source) else { continue };
+                    let Some(m) = s.modulation.get_mut(id) else { continue };
+                    m.name = name;
+                    m.targets = targets;
+                    m.enabled = enabled;
+                    done += 1;
+                }
+                (done > 0).then(|| if n == 1 { "1 modulator pasted".to_string() } else { format!("{done} modulators pasted") })
+            }
             ModCmd::Assign(id, _) => path.map(|path| {
                 s.modulation.assign(id, os_model::modulation::ModTarget::new(path));
                 let m = s.modulation.get(id).expect("an existing modulator");
@@ -705,6 +781,10 @@ pub fn run(app: &mut crate::app::App, cmd: ModCmd) -> Option<String> {
                 s.modulation.unassign(id, path).then(|| "Routing removed".to_string())
             }
             ModCmd::Remove(id) => s.modulation.remove(id).map(|m| format!("{} removed", name_of(&m))),
+            ModCmd::RemoveMany(ids) => {
+                let n = ids.iter().filter_map(|id| s.modulation.remove(*id)).count();
+                (n > 0).then(|| if n == 1 { "1 modulator removed".to_string() } else { format!("{n} modulators removed") })
+            }
             ModCmd::SetEnabled(id, on) => s.modulation.get_mut(id).map(|m| {
                 m.enabled = on;
                 format!("{}: {}", name_of(m), if on { "on" } else { "off" })
@@ -777,6 +857,320 @@ pub fn run(app: &mut crate::app::App, cmd: ModCmd) -> Option<String> {
     msg
 }
 
+/// The selected slots' modulators, in slot order. With no slot selection, the open editor/menu/routing is the
+/// fallback (a browser row can open a modulator without touching the slot row).
+pub fn selected_ids(s: &State) -> Vec<ModulatorId> {
+    let mut v: Vec<ModulatorId> = s
+        .mod_sel
+        .iter()
+        .filter_map(|slot| s.modulation.modulator_at_slot(*slot))
+        .map(|m| m.id)
+        .collect();
+    if v.is_empty() {
+        if let Some(id) = s.mod_editor.or(s.mod_menu).or(s.mod_routing)
+            && s.modulation.get(id).is_some()
+        {
+            v.push(id);
+        }
+    }
+    v
+}
+
+fn selection_has(s: &State, id: ModulatorId) -> bool {
+    s.mod_sel
+        .iter()
+        .any(|slot| s.modulation.modulator_at_slot(*slot).is_some_and(|m| m.id == id))
+}
+
+/// A plain click: this one modulator, and its slot is the arrow-key cursor.
+pub fn select_one(s: &mut State, id: ModulatorId) {
+    let Some(slot) = s.modulation.get(id).map(|m| m.slot) else { return };
+    s.mod_sel = vec![slot];
+    s.mod_cursor = Some(slot);
+    s.mod_anchor = Some(slot);
+    s.keyboard_focus = crate::app::KeyboardFocus::Modulators;
+}
+
+/// Shift-click: add the modulator to the selection, or take it out, without opening or closing its editor.
+pub fn extend_selection(app: &mut crate::app::App, id: ModulatorId) {
+    let Some(slot) = app.state.modulation.get(id).map(|m| m.slot) else { return };
+    let s = &mut app.state;
+    if let Some(i) = s.mod_sel.iter().position(|s| *s == slot) {
+        s.mod_sel.remove(i);
+    } else {
+        s.mod_sel.push(slot);
+        s.mod_sel.sort_unstable();
+        s.mod_anchor.get_or_insert(slot);
+    }
+    s.mod_cursor = Some(slot);
+    s.keyboard_focus = crate::app::KeyboardFocus::Modulators;
+    s.mod_add_slot = None;
+    s.mod_menu = None;
+    if s.mod_editor.is_some_and(|id| !selection_has(s, id)) {
+        s.mod_editor = None;
+    }
+}
+
+/// Move the modulator cursor by `dir`, selecting the slot's modulator (or clearing the selection on an empty slot).
+/// With Shift, select the occupied slots from the anchor to the cursor inclusive.
+pub fn move_selection(app: &mut crate::app::App, dir: i32, shift: bool) -> bool {
+    let s = &mut app.state;
+    let last = s.modulation.slots() as u8 - 1;
+    let cur = s.mod_cursor.or_else(|| s.mod_sel.first().copied()).unwrap_or(0).min(last);
+    let next = if dir < 0 { cur.saturating_sub(1) } else { (cur + 1).min(last) };
+    if shift {
+        let anchor = s.mod_anchor.unwrap_or(cur).min(last);
+        let (a, b) = if anchor <= next { (anchor, next) } else { (next, anchor) };
+        s.mod_sel = (a..=b)
+            .filter(|slot| s.modulation.modulator_at_slot(*slot).is_some())
+            .collect();
+    } else {
+        s.mod_sel = s.modulation.modulator_at_slot(next).map(|_| vec![next]).unwrap_or_default();
+        s.mod_anchor = Some(next);
+    }
+    s.mod_cursor = Some(next);
+    s.mod_add_slot = None;
+    s.mod_menu = None;
+    if s.mod_editor.is_some_and(|id| !selection_has(s, id)) {
+        s.mod_editor = None;
+    }
+    if s.mod_routing.is_some_and(|id| !selection_has(s, id)) {
+        s.mod_routing = None;
+    }
+    true
+}
+
+/// Ctrl+A: every modulator in the strip is selected (the devices' Ctrl+A, for the modulator row).
+pub fn select_all(app: &mut crate::app::App) -> bool {
+    let s = &mut app.state;
+    let slots: Vec<u8> = (0..s.modulation.slots() as u8)
+        .filter(|slot| s.modulation.modulator_at_slot(*slot).is_some())
+        .collect();
+    let Some((&first, &last)) = slots.first().zip(slots.last()) else { return false };
+    s.mod_sel = slots;
+    s.mod_anchor = Some(first);
+    s.mod_cursor = Some(last);
+    s.mod_add_slot = None;
+    s.mod_menu = None;
+    true
+}
+
+/// Delete / Backspace: removes every selected modulator, closing their editor/menu, as one undo step.
+pub fn delete_selected(app: &mut crate::app::App) -> bool {
+    let ids = selected_ids(&app.state);
+    if ids.is_empty() {
+        return false;
+    }
+    if run(app, ModCmd::RemoveMany(ids.clone())).is_some() {
+        let s = &mut app.state;
+        s.mod_sel.clear();
+        if s.mod_editor.is_some_and(|id| ids.contains(&id)) {
+            s.mod_editor = None;
+        }
+        if s.mod_menu.is_some_and(|id| ids.contains(&id)) {
+            s.mod_menu = None;
+        }
+        if s.mod_routing.is_some_and(|id| ids.contains(&id)) {
+            s.mod_routing = None;
+        }
+        app.state.message = Some(if ids.len() == 1 { "1 modulator removed".into() } else { format!("{} modulators removed", ids.len()) });
+        app.invalidate();
+    }
+    true
+}
+
+/// Ctrl+C: every selected modulator, with its source, name, enabled state and routings.
+pub fn copy_selected(app: &mut crate::app::App) -> bool {
+    let ids = selected_ids(&app.state);
+    let clips: Vec<Modulator> = ids.iter().filter_map(|id| app.state.modulation.get(*id).cloned()).collect();
+    if clips.is_empty() {
+        return false;
+    }
+    let n = clips.len();
+    app.state.mod_clipboard = clips;
+    app.state.message = Some(if n == 1 { "1 modulator copied".into() } else { format!("{n} modulators copied") });
+    app.invalidate();
+    true
+}
+
+/// Ctrl+A selects every modulator in the strip, the modulator row's version of the device rack's Ctrl+A.
+#[test]
+fn ctrl_a_selects_every_modulator() {
+        use winit::keyboard::Key;
+        let mut app = crate::app::App::new(None);
+        act(&mut app, ModAct::AddKind(0, Kind::Lfo));
+        act(&mut app, ModAct::AddKind(1, Kind::Random));
+        let first = app.state.modulation.modulator_at_slot(0).expect("the first modulator").id;
+        select_one(&mut app.state, first);
+        assert!(key(&mut app, &Key::Character("a".into()), true, false, false));
+        assert_eq!(app.state.mod_sel, vec![0, 1], "both modulators selected");
+        assert_eq!(app.state.mod_cursor, Some(1));
+    }
+
+    /// Enter opens the selected modulator's options menu, the arrows walk its rows and Enter runs the highlighted
+    /// one; Ctrl+X copies the modulator and removes it.
+    #[test]
+    fn the_options_menu_is_walked_by_the_keyboard_and_ctrl_x_cuts() {
+        use winit::keyboard::{Key, NamedKey};
+        let mut app = crate::app::App::new(None);
+        act(&mut app, ModAct::AddKind(0, Kind::Lfo));
+        let id = app.state.modulation.modulator_at_slot(0).expect("a modulator").id;
+        let press = |app: &mut crate::app::App, k: Key| key(app, &k, false, false, false);
+        assert!(press(&mut app, Key::Named(NamedKey::Enter)));
+        assert_eq!(app.state.mod_menu, Some(id), "Enter opens the menu");
+        assert_eq!(app.state.mod_menu_sel, 0, "on its first row");
+        assert!(press(&mut app, Key::Named(NamedKey::ArrowDown)));
+        assert_eq!(app.state.mod_menu_sel, 1, "the arrow walks the rows");
+        assert!(press(&mut app, Key::Named(NamedKey::Enter)), "the row runs");
+        assert_eq!(app.state.mod_menu, None, "and the menu closes");
+        // Ctrl+X: the modulator is copied and cut out of its slot.
+        assert!(key(&mut app, &Key::Character("x".into()), true, false, false));
+        assert_eq!(app.state.modulation.modulator_at_slot(0), None, "cut out of the slot");
+        assert_eq!(app.state.mod_clipboard.len(), 1, "the clipboard kept it");
+    }
+
+    /// Ctrl+X: copies the selected modulators and removes them (the removal is one undo step).
+pub fn cut_selected(app: &mut crate::app::App) -> bool {
+    if !copy_selected(app) {
+        return false;
+    }
+    let n = app.state.mod_clipboard.len();
+    delete_selected(app);
+    app.state.message = Some(if n == 1 { "1 modulator cut".into() } else { format!("{n} modulators cut") });
+    app.invalidate();
+    true
+}
+
+/// Ctrl+V: pastes the copied modulators into empty slots, starting at the clicked/cursed empty slot and wrapping
+/// through the project's slots. All of them must fit (no partial paste); the pasted ones become the selection
+/// and the first one's editor opens.
+pub fn paste_clipboard(app: &mut crate::app::App) -> bool {
+    let clips = app.state.mod_clipboard.clone();
+    if clips.is_empty() {
+        return false;
+    }
+    let s = &mut app.state;
+    let last = s.modulation.slots() as u8 - 1;
+    let start = s.mod_add_slot.or(s.mod_cursor).unwrap_or(0).min(last);
+    let free: Vec<u8> = (0..s.modulation.slots() as u8)
+        .filter(|slot| s.modulation.modulator_at_slot(*slot).is_none())
+        .collect();
+    if free.len() < clips.len() {
+        s.message = Some(format!("Need {} empty modulator slots; only {} available", clips.len(), free.len()));
+        app.invalidate();
+        return true;
+    }
+    let slots: Vec<u8> = free
+        .iter()
+        .copied()
+        .filter(|slot| *slot >= start)
+        .chain(free.iter().copied().filter(|slot| *slot < start))
+        .take(clips.len())
+        .collect();
+    let jobs: Vec<(u8, Modulator)> = slots.iter().copied().zip(clips).collect();
+    if let Some(msg) = run(app, ModCmd::PasteMany(jobs)) {
+        let made: Vec<u8> = slots
+            .iter()
+            .copied()
+            .filter(|slot| app.state.modulation.modulator_at_slot(*slot).is_some())
+            .collect();
+        let first = made.first().and_then(|slot| app.state.modulation.modulator_at_slot(*slot)).map(|m| m.id);
+        let s = &mut app.state;
+        s.mod_add_slot = None;
+        s.mod_menu = None;
+        s.mod_sel = made.clone();
+        s.mod_cursor = made.last().copied();
+        s.mod_anchor = made.first().copied();
+        s.mod_editor = first;
+        s.message = Some(msg);
+        app.invalidate();
+    }
+    true
+}
+
+/// The rows of a modulator's options menu: what the panel draws and the keyboard walks.
+pub fn menu_items(m: &Modulator) -> Vec<(String, ModAct)> {
+    use os_model::modulation::ModSource;
+    let mut v = vec![(
+        if m.enabled { "Disable".to_string() } else { "Enable".to_string() },
+        ModAct::Enable(m.id),
+    )];
+    if matches!(m.source, ModSource::Random(_)) {
+        v.push(("Reroll seed".into(), ModAct::RerollSeed(m.id)));
+    }
+    v.push(("Clear routings".into(), ModAct::Clear(m.id)));
+    v.push(("Remove modulator".into(), ModAct::Remove(m.id)));
+    v
+}
+
+/// Open the options menu on the selected modulator, its keyboard row at the top.
+pub fn open_menu(app: &mut crate::app::App) -> bool {
+    let Some(id) = selected_ids(&app.state).last().copied().or(app.state.mod_menu) else { return false };
+    act(app, ModAct::Menu(id));
+    true
+}
+
+/// Keys while the options menu is open: arrows walk its rows, Enter runs the highlighted one, Escape closes it.
+fn menu_key(app: &mut crate::app::App, key: &winit::keyboard::Key) -> bool {
+    use winit::keyboard::{Key, NamedKey};
+    let Some(id) = app.state.mod_menu else { return false };
+    let Some(m) = app.state.modulation.get(id).cloned() else { return false };
+    let items = menu_items(&m);
+    if items.is_empty() {
+        return false;
+    }
+    match key {
+        Key::Named(NamedKey::ArrowDown | NamedKey::ArrowRight) => {
+            app.state.mod_menu_sel = (app.state.mod_menu_sel + 1) % items.len();
+            app.invalidate();
+            true
+        }
+        Key::Named(NamedKey::ArrowUp | NamedKey::ArrowLeft) => {
+            let n = items.len();
+            app.state.mod_menu_sel = (app.state.mod_menu_sel + n - 1) % n;
+            app.invalidate();
+            true
+        }
+        Key::Named(NamedKey::Enter) => {
+            let act_item = items[app.state.mod_menu_sel.min(items.len() - 1)].1;
+            act(app, act_item);
+            true
+        }
+        Key::Named(NamedKey::Escape) => {
+            app.state.mod_menu = None;
+            app.invalidate();
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The modulator window's keys (`App::key` calls this while its slot row/editor/menu is active).
+pub fn key(app: &mut crate::app::App, key: &winit::keyboard::Key, ctrl: bool, alt: bool, shift: bool) -> bool {
+    use winit::keyboard::{Key, NamedKey};
+    if !ctrl && !alt && app.state.mod_menu.is_some() && menu_key(app, key) {
+        return true;
+    }
+    match key {
+        Key::Named(NamedKey::Delete | NamedKey::Backspace) if !ctrl && !alt => {
+            let had = !app.state.mod_sel.is_empty()
+                || app.state.mod_cursor.is_some()
+                || app.state.mod_editor.is_some()
+                || app.state.mod_menu.is_some();
+            delete_selected(app);
+            had
+        }
+        Key::Character(c) if ctrl && !alt && c.eq_ignore_ascii_case("a") => select_all(app),
+        Key::Character(c) if ctrl && !alt && c.eq_ignore_ascii_case("c") => copy_selected(app),
+        Key::Character(c) if ctrl && !alt && c.eq_ignore_ascii_case("x") => cut_selected(app),
+        Key::Character(c) if ctrl && !alt && c.eq_ignore_ascii_case("v") => paste_clipboard(app),
+        Key::Named(NamedKey::Enter) if !ctrl && !alt => open_menu(app),
+        Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowUp) if !ctrl && !alt => move_selection(app, -1, shift),
+        Key::Named(NamedKey::ArrowRight | NamedKey::ArrowDown) if !ctrl && !alt => move_selection(app, 1, shift),
+        _ => false,
+    }
+}
+
 /// Routing mode: a press on `target`. The assignment is created at depth 0 so the arc and the sound follow the drag;
 /// the base value is never written. The graph as it was is kept in the drag, so a release is one undo step and Esc
 /// restores it exactly.
@@ -814,6 +1208,8 @@ pub fn sync(app: &mut crate::app::App) {
 pub enum ModAct {
     /// The empty slot's "+" (or a click elsewhere closes it).
     AddMenu(u8),
+    /// The "＋" after the last slot: another row of modulator slots.
+    AddRow,
     CloseAdd,
     /// A type from the add menu.
     AddKind(u8, Kind),
@@ -835,6 +1231,8 @@ pub enum ModAct {
     NextShape(ModulatorId),
     /// The rate rounds up (`+1`) or down (`-1`) to the next musical step.
     RateStep(ModulatorId, i32),
+    /// The rate knob's mode button: tempo-synced rates and free hertz.
+    RateMode(ModulatorId),
     ToggleBipolar(ModulatorId),
     ToggleDistribution(ModulatorId),
     ToggleInterpolate(ModulatorId),
@@ -859,6 +1257,7 @@ pub enum ModAct {
 /// A knob in a modulator's editor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KnobField {
+    Rate,
     Amount,
     Phase,
     Offset,
@@ -871,15 +1270,18 @@ pub enum KnobField {
 /// The value a knob shows, `0..=1`.
 pub fn knob_value(source: ModSource, field: KnobField) -> f32 {
     match (source, field) {
+        (ModSource::Lfo(l), KnobField::Rate) => rate_pos(l.period),
         (ModSource::Lfo(l), KnobField::Amount) => l.amount,
         (ModSource::Lfo(l), KnobField::Phase) => l.phase,
         (ModSource::Lfo(l), KnobField::Offset) => (l.offset + 1.0) * 0.5,
+        (ModSource::Random(r), KnobField::Rate) => rate_pos(r.period),
         (ModSource::Random(r), KnobField::Amount) => r.amount,
         (ModSource::Random(r), KnobField::Smooth) => r.smooth,
         (ModSource::AudioFollower(f), KnobField::Amount) => f.amount,
         (ModSource::AudioFollower(f), KnobField::Attack) => (f.attack / 2.0).clamp(0.0, 1.0),
         (ModSource::AudioFollower(f), KnobField::Release) => (f.release / 10.0).clamp(0.0, 1.0),
         (ModSource::AudioFollower(f), KnobField::Gain) => (f.gain_db + 24.0) / 48.0,
+        (ModSource::Steps(s), KnobField::Rate) => rate_pos(s.period),
         _ => 0.5,
     }
 }
@@ -888,15 +1290,18 @@ pub fn knob_value(source: ModSource, field: KnobField) -> f32 {
 pub fn with_knob(source: ModSource, field: KnobField, v: f32) -> ModSource {
     let v = v.clamp(0.0, 1.0);
     match (source, field) {
+        (ModSource::Lfo(l), KnobField::Rate) => ModSource::Lfo(Lfo { period: period_at(l.period, v), ..l }),
         (ModSource::Lfo(l), KnobField::Amount) => ModSource::Lfo(Lfo { amount: v, ..l }),
         (ModSource::Lfo(l), KnobField::Phase) => ModSource::Lfo(Lfo { phase: v, ..l }),
         (ModSource::Lfo(l), KnobField::Offset) => ModSource::Lfo(Lfo { offset: v * 2.0 - 1.0, ..l }),
+        (ModSource::Random(r), KnobField::Rate) => ModSource::Random(Random { period: period_at(r.period, v), ..r }),
         (ModSource::Random(r), KnobField::Amount) => ModSource::Random(Random { amount: v, ..r }),
         (ModSource::Random(r), KnobField::Smooth) => ModSource::Random(Random { smooth: v, interpolate: false, ..r }),
         (ModSource::AudioFollower(f), KnobField::Amount) => ModSource::AudioFollower(AudioFollower { amount: v, ..f }),
         (ModSource::AudioFollower(f), KnobField::Attack) => ModSource::AudioFollower(AudioFollower { attack: (0.0005 + v * 2.0).max(0.0005), ..f }),
         (ModSource::AudioFollower(f), KnobField::Release) => ModSource::AudioFollower(AudioFollower { release: (0.001 + v * 10.0).max(0.001), ..f }),
         (ModSource::AudioFollower(f), KnobField::Gain) => ModSource::AudioFollower(AudioFollower { gain_db: v * 48.0 - 24.0, ..f }),
+        (ModSource::Steps(st), KnobField::Rate) => ModSource::Steps(Steps { period: period_at(st.period, v), ..st }),
         (s, _) => s,
     }
 }
@@ -904,27 +1309,48 @@ pub fn with_knob(source: ModSource, field: KnobField, v: f32) -> ModSource {
 /// Applies a modulator UI action. Edits that change the project run as one undo step (`run`); routing mode itself is
 /// not an edit.
 pub fn act(app: &mut crate::app::App, a: ModAct) {
+    // A click on a modulator slot or its editor hands that strip the selection keys; a click on a device
+    // hands them back (`App::act`).
+    app.state.keyboard_focus = crate::app::KeyboardFocus::Modulators;
     let s = &mut app.state;
     match a {
         ModAct::AddMenu(slot) => {
             s.mod_add_slot = if s.mod_add_slot == Some(slot) { None } else { Some(slot) };
+            s.mod_sel.clear();
+            s.mod_cursor = Some(slot);
+            s.mod_anchor = Some(slot);
             s.mod_menu = None;
             s.mod_editor = None;
+        }
+        ModAct::AddRow => {
+            if !s.modulation.add_row() {
+                s.message = Some(format!("The modulator strip holds at most {} rows", os_model::modulation::MAX_ROWS));
+            }
+            s.mod_add_slot = None;
+            s.mod_menu = None;
+            app.invalidate();
+            return;
         }
         ModAct::CloseAdd => s.mod_add_slot = None,
         ModAct::AddKind(slot, kind) => {
             s.mod_add_slot = None;
             let source = set_kind(ModSource::default(), kind);
             run(app, ModCmd::AddInSlot(slot, source));
+            if let Some(id) = app.state.modulation.modulator_at_slot(slot).map(|m| m.id) {
+                select_one(&mut app.state, id);
+                app.state.mod_editor = Some(id);
+            }
             return;
         }
         ModAct::Route(id) => {
+            select_one(s, id);
             s.mod_routing = if s.mod_routing == Some(id) { None } else { Some(id) };
             s.mod_flash = Some(Instant::now());
             s.mod_add_slot = None;
             s.mod_menu = None;
         }
         ModAct::Open(id) => {
+            select_one(s, id);
             s.mod_editor = if s.mod_editor == Some(id) { None } else { Some(id) };
             s.mod_routing = None;
             s.mod_menu = None;
@@ -937,9 +1363,12 @@ pub fn act(app: &mut crate::app::App, a: ModAct) {
         ModAct::Close => {
             s.mod_editor = None;
             s.mod_menu = None;
+            s.mod_menu_sel = 0;
             s.mod_add_slot = None;
         }
         ModAct::Menu(id) => {
+            select_one(s, id);
+            s.mod_menu_sel = 0;
             s.mod_menu = if s.mod_menu == Some(id) { None } else { Some(id) };
             s.mod_editor = None;
             s.mod_add_slot = None;
@@ -952,6 +1381,9 @@ pub fn act(app: &mut crate::app::App, a: ModAct) {
             return;
         }
         ModAct::Remove(id) => {
+            if let Some(slot) = s.modulation.get(id).map(|m| m.slot) {
+                s.mod_sel.retain(|s| *s != slot);
+            }
             s.mod_menu = None;
             s.mod_editor = None;
             if s.mod_routing == Some(id) {
@@ -977,6 +1409,18 @@ pub fn act(app: &mut crate::app::App, a: ModAct) {
                     let i = all.iter().position(|&x| x == l.shape).unwrap_or(0);
                     ModSource::Lfo(Lfo { shape: all[(i + 1) % all.len()], ..l })
                 }
+                other => other,
+            });
+            if let Some(src) = next {
+                run(app, ModCmd::SetSource(id, src));
+                return;
+            }
+        }
+        ModAct::RateMode(id) => {
+            let next = s.modulation.get(id).map(|m| match m.source {
+                ModSource::Lfo(l) => ModSource::Lfo(Lfo { period: toggle_period(l.period), ..l }),
+                ModSource::Random(r) => ModSource::Random(Random { period: toggle_period(r.period), ..r }),
+                ModSource::Steps(st) => ModSource::Steps(Steps { period: toggle_period(st.period), ..st }),
                 other => other,
             });
             if let Some(src) = next {
@@ -1096,6 +1540,7 @@ pub fn act(app: &mut crate::app::App, a: ModAct) {
                     s.playlist.track = t;
                 }
             }
+            select_one(s, id);
             s.mod_editor = Some(id);
         }
         ModAct::TargetEnabled(id, path, on) => {
@@ -1213,6 +1658,27 @@ mod tests {
         assert_eq!(res, ParamResolution::Unique(0));
     }
 
+    /// A stopped project with a modulator repaints the modulator strip from `tick` alone: its plot is a live sample,
+    /// so without this it froze until a knob drag happened to repaint the strip.
+    #[test]
+    fn a_stopped_modulator_strip_repaints_itself() {
+        let mut app = crate::app::App::new(None);
+        app.state.project.linear_mode = true;
+        app.state.show_device_rack = true;
+        app.state.device_rack_collapsed = false;
+        app.state.modulation.add(ModSource::default());
+        let _ = app.take_damage();
+        app.tick();
+        let damage = app.take_damage().expect("the strip asked for a frame");
+        let s = &app.state;
+        let h = crate::device_rack::height(s);
+        let rack = os_ui::Rect::new(0.0, s.screen.1 - h, s.screen.0, h);
+        let row = crate::views::device_rack::mod_row_rect(s, rack);
+        if let Some(rects) = damage {
+            assert!(rects.iter().any(|r| !r.intersect(&row).is_empty()), "the modulator strip is in the damage: {rects:?}");
+        }
+    }
+
     /// The graph reaches the engine with its sources and the assignments that resolve, and without the ones that do
     /// not (a native id and no plugin metadata); depths and curves travel unchanged.
     #[test]
@@ -1324,5 +1790,159 @@ mod tests {
         crate::playlist::run(&mut app, crate::playlist::Cmd::Undo);
         assert!(app.state.modulation.get(id).is_some_and(|m| m.enabled));
         assert_eq!(depth_on(&app.state, t), Some(0.5));
+    }
+
+    /// While the transport is stopped the tile's plot still moves: the history falls back to evaluating the source
+    /// on its own preview clock instead of reading the engine's idle snapshot.
+    #[test]
+    fn the_tile_history_previews_a_source_while_stopped() {
+        let mut app = crate::app::App::new(None);
+        app.state.project = crate::app::test_project();
+        app.state.control.settle(&mut app.state.project);
+        let id = app.state.modulation.add(ModSource::default());
+        let mut h = History::default();
+        h.sample(&app.state, false, 120.0);
+        let first = *h.get(id).and_then(|q| q.back()).unwrap();
+        // Step the 33 ms sampler past its gate without sleeping.
+        h.at = Some(Instant::now() - std::time::Duration::from_millis(200));
+        h.sample(&app.state, false, 120.0);
+        let second = *h.get(id).and_then(|q| q.back()).unwrap();
+        assert_ne!(first, second, "the preview plot moves while stopped");
+    }
+
+    /// The clicked modulator copies with its settings and routings, pastes into the clicked empty slot with a fresh
+    /// id, and Delete removes the selected copy — each through the modulator window's keys.
+    #[test]
+    fn a_modulator_copies_pastes_into_an_empty_slot_and_deletes() {
+        use winit::keyboard::{Key, NamedKey};
+        let mut app = crate::app::App::new(None);
+        app.state.project = crate::app::test_project();
+        app.state.control.settle(&mut app.state.project);
+        let path = ParameterPath { owner: PersistentObjectId(7), parameter: ParameterKey::HostParameterCode(0x1F00) };
+        let id = app.state.modulation.add(ModSource::Lfo(Lfo { shape: LfoShape::Triangle, ..Lfo::default() }));
+        app.state.modulation.assign(id, os_model::modulation::ModTarget::new(path));
+        if let Some(m) = app.state.modulation.get_mut(id) {
+            m.name = "Wobble".into();
+            m.enabled = false;
+        }
+        app.state.mod_editor = Some(id);
+        app.state.keyboard_focus = crate::app::KeyboardFocus::Modulators;
+        app.key(&Key::Character("c".into()), true, false);
+        assert_eq!(app.state.mod_clipboard.first().map(|m| m.name.as_str()), Some("Wobble"), "Ctrl+C copies the selected modulator");
+        // Clicking empty slot 4 selects it for the paste.
+        app.state.mod_add_slot = Some(3);
+        app.key(&Key::Character("v".into()), true, false);
+        let pasted = app.state.modulation.modulator_at_slot(3).expect("slot 4 holds the copy");
+        let pasted_id = pasted.id;
+        assert_ne!(pasted_id, id, "the copy has its own id");
+        assert_eq!(pasted.name, "Wobble");
+        assert!(!pasted.enabled, "its enabled state came too");
+        assert_eq!(pasted.targets, app.state.modulation.get(id).unwrap().targets, "and its routings");
+        assert_eq!(app.state.mod_editor, Some(pasted_id), "the pasted modulator's editor opens");
+        assert_eq!(app.state.mod_add_slot, None);
+        app.key(&Key::Named(NamedKey::Delete), false, false);
+        assert_eq!(app.state.modulation.get(pasted_id), None, "Delete removes the selected copy");
+        assert!(app.state.modulation.get(pasted_id).is_none());
+        assert_eq!(app.state.mod_editor, None);
+        assert!(app.state.modulation.get(id).is_some(), "the original stays");
+    }
+
+    /// Clicking a modulator selects it independently of its editor window: clicking the open slot again closes the
+    /// window but leaves it selected, so Delete still removes it.
+    #[test]
+    fn a_selected_modulator_deletes_after_its_editor_toggles_closed() {
+        use winit::keyboard::{Key, NamedKey};
+        let mut app = crate::app::App::new(None);
+        app.state.project = crate::app::test_project();
+        app.state.control.settle(&mut app.state.project);
+        let id = app.state.modulation.add(ModSource::default());
+        let slot = app.state.modulation.get(id).unwrap().slot;
+        app.act(crate::app::Action::Mod(ModAct::Open(id)));
+        assert_eq!((app.state.mod_sel.clone(), app.state.mod_editor), (vec![slot], Some(id)));
+        app.act(crate::app::Action::Mod(ModAct::Open(id)));
+        assert_eq!(app.state.mod_editor, None, "the second click closes the window");
+        assert_eq!(app.state.mod_sel, vec![slot], "but the slot stays selected");
+        app.key(&Key::Named(NamedKey::Delete), false, false);
+        assert!(app.state.modulation.get(id).is_none(), "Delete removes the selected modulator");
+        assert!(app.state.mod_sel.is_empty() && app.state.mod_editor.is_none());
+    }
+
+    /// Shift+arrows grow the selection across slots, Ctrl+C copies every selected modulator, Ctrl+V pastes them into
+    /// the empty slots, and Delete removes the whole selection as one undo step.
+    #[test]
+    fn shift_arrows_select_multiple_modulators_and_copy_paste_delete_them() {
+        use winit::keyboard::{Key, NamedKey};
+        let mut app = crate::app::App::new(None);
+        app.state.project = crate::app::test_project();
+        app.state.control.settle(&mut app.state.project);
+        let ids: Vec<_> = (0..3).map(|_| app.state.modulation.add(ModSource::default())).collect();
+        select_one(&mut app.state, ids[0]);
+        app.shift = true;
+        app.key(&Key::Named(NamedKey::ArrowRight), false, false);
+        assert_eq!(app.state.mod_sel, vec![0, 1], "Shift+Right adds the next modulator");
+        app.key(&Key::Named(NamedKey::ArrowRight), false, false);
+        assert_eq!(app.state.mod_sel, vec![0, 1, 2]);
+        app.shift = false;
+        // Copy the three, click empty slot 4, and paste all three into slots 4, 5 and 6.
+        app.state.mod_add_slot = Some(3);
+        app.key(&Key::Character("c".into()), true, false);
+        assert_eq!(app.state.mod_clipboard.len(), 3);
+        app.key(&Key::Character("v".into()), true, false);
+        assert_eq!(app.state.mod_sel, vec![3, 4, 5]);
+        assert!((3..=5).all(|slot| app.state.modulation.modulator_at_slot(slot).is_some()));
+        app.key(&Key::Named(NamedKey::Delete), false, false);
+        assert!((3..=5).all(|slot| app.state.modulation.modulator_at_slot(slot).is_none()), "Delete removes all pasted copies");
+        crate::playlist::run(&mut app, crate::playlist::Cmd::Undo);
+        assert!(
+            (3..=5).all(|slot| app.state.modulation.modulator_at_slot(slot).is_some()),
+            "one undo restores every modulator in the multi-delete"
+        );
+        assert!(ids.iter().all(|id| app.state.modulation.get(*id).is_some()), "the originals stay");
+    }
+
+    /// Shift-clicking a second slot adds it to the selection without closing the first modulator's editor.
+    #[test]
+    fn shift_clicking_modulators_builds_the_selection() {
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = crate::app::App::new(None);
+        app.state.project = crate::app::test_project();
+        app.state.project.linear_mode = true;
+        app.state.control.settle(&mut app.state.project);
+        let ids: Vec<_> = (0..2).map(|_| app.state.modulation.add(ModSource::default())).collect();
+        let at = |app: &crate::app::App, id| {
+            app.hits
+                .iter()
+                .rev()
+                .find(|h| h.action == crate::app::Action::Mod(ModAct::Open(id)))
+                .map(|h| h.rect)
+                .expect("a modulator slot")
+        };
+        app.paint(&mut c, None);
+        let first = at(&app, ids[0]);
+        app.mouse_move(first.cx(), first.cy());
+        app.mouse_down();
+        assert_eq!(app.state.mod_sel, vec![0]);
+        let second = at(&app, ids[1]);
+        app.shift = true;
+        app.mouse_move(second.cx(), second.cy());
+        app.mouse_down();
+        app.shift = false;
+        assert_eq!(app.state.mod_sel, vec![0, 1], "Shift-click adds the second modulator");
+        assert_eq!(app.state.mod_editor, Some(ids[0]), "the editor stays on the first");
+    }
+
+    /// The editor's rate knob lifts an LFO off its 1 Hz default and the mode button moves between free and synced
+    /// rates without losing the chosen rate.
+    #[test]
+    fn the_rate_knob_moves_up_from_one_hertz() {
+        let lfo = ModSource::Lfo(Lfo::default());
+        let pos = knob_value(lfo, KnobField::Rate);
+        assert!((pos - 0.444).abs() < 0.01, "1 Hz on the free scale: {pos}");
+        let faster = with_knob(lfo, KnobField::Rate, (pos + 0.1).min(1.0));
+        let ModSource::Lfo(faster_lfo) = faster else { unreachable!() };
+        assert!(matches!(faster_lfo.period, Timebase::Free(hz) if hz > 1.0), "{:?}", faster_lfo.period);
+        let synced = toggle_period(faster_lfo.period);
+        assert!(matches!(synced, Timebase::Sync(4)), "free switches to a beat");
+        assert!(matches!(toggle_period(synced), Timebase::Free(hz) if (hz - 1.0).abs() < 0.01));
     }
 }

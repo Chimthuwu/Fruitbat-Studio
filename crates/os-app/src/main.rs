@@ -45,6 +45,7 @@ mod device;
 mod device_rack;
 mod route_picker;
 mod quick_sidechain;
+mod channel_rack;
 mod rack_ui;
 mod launcher;
 mod midi_fx;
@@ -1369,6 +1370,8 @@ fn screenshot(args: &[String]) {
     let mut out = None;
     let mut view = "playlist".to_string();
     let mut rack = true;
+    let mut launcher = false;
+    let mut launcher_clips = 0usize;
     let mut browser = true;
     let mut rack_w: Option<f32> = None;
     let mut rack_roll = false;
@@ -1460,6 +1463,9 @@ fn screenshot(args: &[String]) {
                     wheels.push((x, y, dy));
                 }
             }
+            "--launcher" => launcher = true,
+            // N clips on the first tracks, the first of them playing: the launcher's cells, filled.
+            "--launcher-clips" => launcher_clips = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             "--lane" => lane = it.next().and_then(|v| v.parse().ok()),
             "--pans" => pans = it.next().map(|v| v.split(',').filter_map(|p| p.parse().ok()).collect()),
             "--settings" => settings = it.next().and_then(|v| v.parse().ok()),
@@ -1534,12 +1540,12 @@ fn screenshot(args: &[String]) {
     }
     if let Some(d) = design {
         app.theme = app::design_theme(d, true);
-        os_theme::set_current(&app.theme.colors);
+        app::publish_palette(&app.theme.colors);
     }
     match theme {
         Some(t) if t.as_os_str() == "default" => {
             app.theme = os_theme::Theme::default();
-            os_theme::set_current(&app.theme.colors);
+            app::publish_palette(&app.theme.colors);
         }
         Some(t) => app.load_theme_file_ex(&t, false),
         None => {}
@@ -1583,6 +1589,26 @@ fn screenshot(args: &[String]) {
         "none" => vec![],
         _ => vec![app::Win::Playlist],
     };
+    if launcher {
+        // The Playlist window shows the clip launcher (Tab) with clips in it, so a screenshot can show the cells.
+        app.state.launcher_open = true;
+        // A new project has no tracks: give it three, as their lanes and strips, so the grid has columns.
+        if app.state.project.tracks.is_empty() {
+            for n in 0..3u32 {
+                use os_model::{Id, Track, TrackKind};
+                app.state.project.tracks.push(Track { id: Id(n + 1), kind: TrackKind::Midi, playlist_lane: n + 1, mixer_strip: n as u16 + 1, channel: None });
+            }
+        }
+        for i in 0..launcher_clips {
+            let track = launcher::columns(&app.state).get(i % 3).map(|c| c.id).unwrap_or(1);
+            let scene = i / 3;
+            app.state.launcher.clips.insert((track, scene), launcher::Slot { pattern: 0, ..Default::default() });
+            if i == 0 {
+                let since = 0;
+                app.state.launcher.playing.insert(track, launcher::Playing { scene, since, previous: None });
+            }
+        }
+    }
     for (w, _) in &floats {
         if !app.state.z.contains(w) {
             app.state.z.push(*w);

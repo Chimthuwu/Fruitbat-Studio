@@ -8331,6 +8331,8 @@ impl App {
             // Toolbars > Hide (spec: ui/toolbar-menu.md §5).
             Key::Named(NamedKey::F11) if ctrl => self.toolbar_switch(views::toolbar::Switch::Hide),
             Key::Named(NamedKey::F11) => self.open_settings(views::settings::INFO),
+            // Toggle the modulator rack's visibility (hotkey: Ctrl+M).
+            Key::Character(c) if ctrl && c.eq_ignore_ascii_case("m") => self.act(Action::ModVisibility),
             // Monitor debug panel (views/mondebug.rs) parked 2026-10-09: its values are now the defaults. Uncomment to tune again.
             // Key::Named(NamedKey::F12) => self.state.monitor.debug = !self.state.monitor.debug,
             // spec: ui/close-windows.md; Shift+F12 is Align all channel editors (arrange.rs).

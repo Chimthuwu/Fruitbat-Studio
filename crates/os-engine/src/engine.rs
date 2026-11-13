@@ -35,7 +35,7 @@ mod marks;
 mod notes;
 mod param_auto;
 mod modulation;
-pub use modulation::{ModSnapshot, ModTarget, Modulator, DEFAULT_BASE};
+pub use modulation::{source_value, ModSnapshot, ModTarget, Modulator, DEFAULT_BASE};
 mod multicore;
 pub use multicore::LoadGate;
 mod pdc;
@@ -134,6 +134,10 @@ pub struct Engine {
     /// Pause (`pause`): the channels fade out of the mixer and are then held where they are (`held`) while the mixer
     /// runs on; `resume` fades them back in. Frames left of the fade out / in, and the fades' length.
     held: bool,
+    /// Modulation's position while the channels are held (`paused`): the song stands still, but modulation runs on in
+    /// real time, so a free rate keeps sweeping and a synced one keeps its tempo; it restarts from the tick when
+    /// playback goes on (`render_tick_now`).
+    held_pos: f64,
     fade_out: u32,
     fade_in: u32,
     fade_len: u32,
@@ -728,6 +732,7 @@ impl Engine {
             awake: false,
             tail_done: false,
             held: false,
+            held_pos: 0.0,
             count_in: 0,
             count_in_len: 0,
             nudge: None,
@@ -2161,6 +2166,8 @@ impl Engine {
         self.check_delays();
         self.run_controls(len);
         self.run_automation(len);
+        // Modulation's own clock goes back to the song's when playback does: a pause does not leave it behind.
+        self.held_pos = self.tick as f64;
         self.run_param_automation(len);
         self.run_host_modulation();
         self.run_controllers(len);
@@ -2319,6 +2326,28 @@ impl Engine {
         self.hand_out(self.tick, self.frame, true, false);
     }
 
+    /// Where modulation is: the song's own position while it plays, the held clock while the channels are held
+    /// (`render_held`), so a mapped control keeps moving on a paused or stopped transport.
+    pub(super) fn mod_pos(&self) -> f64 {
+        if self.held {
+            self.held_pos
+        } else {
+            self.tick as f64
+        }
+    }
+
+    /// The tick's modulation while the channels are held (`render_held`): sampled exactly as a playing tick's, on the
+    /// held clock, into the parameter events the mixer and the effects' slots read. The automation stays where it was,
+    /// as the song does not move.
+    fn run_held_modulation(&mut self, len: usize) {
+        if self.mods.is_empty() {
+            return;
+        }
+        self.params.events.clear();
+        self.run_modulation(len);
+        self.run_host_modulation();
+    }
+
     /// A tick's worth of the mixer alone while paused (`pause`): the position, the channels and the automation stay
     /// where they are, the effects run with nothing coming in. It is handed out at the held position: the tick and
     /// the frame the next tick starts on.
@@ -2330,6 +2359,11 @@ impl Engine {
             b.clear();
             b.resize(len * 2, 0.0);
         }
+        // The song stands still, but modulation runs on: a free rate sweeps in real time and a synced one keeps the
+        // project's tempo, so a mapped control moves while the transport is paused (its values reach the mixer's own
+        // parameters and the effects' slots; an instrument's own parameters wait for playback, as no voices run).
+        self.held_pos += len as f64 / self.clock.samples_per_tick().max(1.0);
+        self.run_held_modulation(len);
         self.mix(len, &song);
         self.out.clear();
         self.out.extend_from_slice(&self.bus[0][..len * 2]);

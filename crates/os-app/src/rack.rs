@@ -790,6 +790,50 @@ pub fn set_step(s: &mut State, r: usize, k: u32, on: bool) {
     s.piano.dirty = true;
 }
 
+/// Whether step `k` of a drum lane (`key` on channel `ch`) is on in the current pattern. Unlike [`step_on`], the note's
+/// key identifies the lane, so several drum lanes of one channel keep their own rows.
+pub fn drum_step_on(s: &State, ch: u16, key: u16, k: u32) -> bool {
+    let ps = per_step(s);
+    s.project
+        .pattern(s.pattern)
+        .is_some_and(|p| p.notes.iter().any(|n| n.channel == ch && n.key == key && n.position / ps == k && !n.muted()))
+}
+
+/// Set a drum lane's step on or off in the current pattern. A step's note carries the pad's key through the whole
+/// clip / arrangement path; the lane is not a channel of its own. `Mute removed steps` leaves the note muted, as the
+/// rack's mono step rows do.
+pub fn set_drum_step(s: &mut State, ch: u16, key: u16, k: u32, on: bool) {
+    let ps = per_step(s);
+    let mute = s.rack.opts.contains(MUTE_REMOVED);
+    let p = crate::patterns::pat_mut(s, s.pattern.max(1));
+    let at = |n: &Note| n.channel == ch && n.key == key && n.position / ps == k;
+    let has = p.notes.iter().any(|n| at(n) && !n.muted());
+    if on && !has {
+        if p.notes.iter().any(at) {
+            p.notes.iter_mut().filter(|n| at(n)).for_each(|n| n.set_muted(false));
+        } else {
+            let mut n = Note::step(ch, k * ps);
+            n.key = key;
+            p.notes.push(n);
+            p.notes.sort_by_key(|n| (n.position, n.channel, n.key));
+        }
+    } else if !on && has {
+        if mute {
+            p.notes.iter_mut().filter(|n| at(n)).for_each(|n| n.set_muted(true));
+        } else {
+            p.notes.retain(|n| !at(n));
+        }
+    }
+    s.piano.dirty = true;
+}
+
+/// Clear every step of one channel in the current pattern, leaving the other channels' lanes alone.
+pub fn clear_channel_steps(s: &mut State, ch: u16) {
+    let p = crate::patterns::pat_mut(s, s.pattern.max(1));
+    p.notes.retain(|n| n.channel != ch);
+    s.piano.dirty = true;
+}
+
 /// Before a step-sequencer edit of the current pattern: a "Step seq edit" step of the project's undo history
 /// (`crate::history`; spec: ui/settings-choices.md "Undo history: the four checks (2026-10-16)").
 pub fn snapshot(s: &mut State) {
@@ -1241,6 +1285,7 @@ pub(crate) fn remap_ui(s: &mut State, map: &[Option<usize>]) {
     s.hosted_rows = s.hosted_rows.iter().filter_map(|&r| m(r)).collect();
     s.sample_loads = std::mem::take(&mut s.sample_loads).into_iter().filter_map(|(r, p)| m(r).map(|r| (r, p))).collect();
     s.pending_open = s.pending_open.and_then(m);
+    s.pending_add = s.pending_add.and_then(m);
     s.pending_plugin = s.pending_plugin.and_then(|(r, i)| m(r).map(|r| (r, i)));
     s.piano.clear_selection();
     s.piano.dirty = true;
@@ -3259,6 +3304,24 @@ mod tests {
         s.rack.opts.remove(MUTE_REMOVED);
         set_step(s, 0, 3, false);
         assert!(at(s).is_empty());
+    }
+
+    /// The drum instrument's lanes are one channel: each pad key owns its own row, and clearing the instrument leaves
+    /// the other channels' notes in the same project pattern. This is the data model the STEP / PADS views share.
+    #[test]
+    fn drum_steps_are_keyed_and_clear_only_the_instruments_channel() {
+        let mut app = App::new(None);
+        let s = &mut app.state;
+        let (a, b) = (s.project.channels[0].index, s.project.channels[1].index);
+        set_drum_step(s, a, 36, 4, true);
+        set_drum_step(s, a, 38, 4, true);
+        set_drum_step(s, b, 36, 4, true);
+        assert!(drum_step_on(s, a, 36, 4) && drum_step_on(s, a, 38, 4), "two lanes of one instrument");
+        assert!(!drum_step_on(s, a, 36, 5));
+        assert_eq!(s.project.pattern(s.pattern).unwrap().notes.len(), 3, "one channel, keyed notes");
+        clear_channel_steps(s, a);
+        assert!(!drum_step_on(s, a, 36, 4) && !drum_step_on(s, a, 38, 4));
+        assert!(drum_step_on(s, b, 36, 4), "the other channel's lane survives");
     }
 
     /// Channel button width ▸ Custom opens a box for the percent: the width takes it, clamped to the dots' range, and

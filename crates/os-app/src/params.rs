@@ -152,6 +152,24 @@ pub fn key_of(s: &State, t: Target) -> Option<(usize, usize)> {
     }
 }
 
+/// The list index of parameter `id` of hosted instance `key`: what the parameter menus and `target_of` take. A
+/// plugin's native id need not be its position (hidden parameters are in the list too), so never cast the id.
+pub fn index_of(s: &State, key: usize, id: u32) -> Option<usize> {
+    if let Some(list) = s.params.lists.get(&key) {
+        if let Some(i) = list.params.iter().position(|e| e.id == id) {
+            return Some(i);
+        }
+    }
+    // Before the first parameter tick (and in tests that never run one), the rack's cached controls are the list
+    // the user is looking at. Their position is only a fallback: the full list above is authoritative when present.
+    s.device_rack_params.get(&key)?.iter().position(|p| p.id == id)
+}
+
+/// The automation target of parameter `id` of hosted instance `key`.
+pub fn target_of_id(s: &State, key: usize, id: u32) -> Option<u32> {
+    target_of(s, key, index_of(s, key, id)?)
+}
+
 /// The automation target of parameter `index` of hosted instance `key` (spec §3). A plugin inside a container's is
 /// the container slot's or channel's parameter that names the member and the index (`os_model::target::member_item`).
 pub fn target_of(s: &State, key: usize, index: usize) -> Option<u32> {
@@ -418,6 +436,26 @@ pub enum MenuEntry {
 impl App {
     /// Every plugin tick: keeps the parameter lists of hosted instances and records the parameters their editors moved.
     pub(crate) fn params_tick(&mut self) {
+        // Parameters a modulator drives right now (its routing on, a depth that moves them). The engine writes their
+        // values every tick, so what the plugin reports is the *modulated* value, not the one the user set. Adopting
+        // it would turn the knob under the modulator — and make the next tick modulate from the value the last one
+        // produced — and would record undo steps for movement nobody made. They are left as the user set them.
+        let driven: Vec<(usize, u32)> = {
+            let (s, plugins) = (&self.state, &self.plugins);
+            s.modulation
+                .modulators
+                .iter()
+                .filter(|m| m.enabled)
+                .flat_map(|m| m.targets.iter().filter(|t| t.enabled && t.depth != 0.0))
+                .filter_map(|t| crate::modulation::resolve_path(s, plugins, t.path))
+                .filter_map(|(target, _)| {
+                    let (key, index) = crate::params::key_of(s, os_model::target::decode(target))?;
+                    let id = s.params.lists.get(&key)?.params.get(index)?.id;
+                    Some((key, id))
+                })
+                .collect()
+        };
+        let driven = |key: usize, id: u32| driven.contains(&(key, id));
         let ui = &mut self.state.params;
         ui.lists.retain(|k, _| self.plugins.hosted.contains_key(k));
         let mut moved = None;
@@ -457,6 +495,14 @@ impl App {
                 let mut changed: BTreeMap<u32, (f64, f64)> = BTreeMap::new();
                 let mut loose = false;
                 for e in &events {
+                    // A modulated parameter's event is the engine's, not the user's: nothing to undo, nothing to
+                    // remember as the value an edit moves from.
+                    let driven_id = match *e {
+                        os_host::ParamEvent::Begin(id) | os_host::ParamEvent::Value(id, _) | os_host::ParamEvent::End(id) => driven(key, id),
+                    };
+                    if driven_id {
+                        continue;
+                    }
                     match *e {
                         os_host::ParamEvent::Begin(id) => {
                             let from = l.values.get(&id).copied().or_else(|| p.param_value(id));
@@ -489,12 +535,25 @@ impl App {
                 // back to what was there. Never during a gesture, whose start is kept.
                 let due = l.reread || (events.is_empty() && moved_count && l.read_at.elapsed() >= REREAD_EVERY);
                 if !stale && due && l.open.is_empty() {
-                    l.values = read_values(&*p, &l.params);
+                    let mut fresh = read_values(&*p, &l.params);
+                    // A driven parameter reads back its modulated value: keep the value the user set.
+                    for (&id, &v) in &l.values {
+                        if driven(key, id) {
+                            fresh.insert(id, v);
+                        }
+                    }
+                    l.values = fresh;
                     (l.read_at, l.reread) = (std::time::Instant::now(), false);
                 }
             }
             let sampler = key < crate::plugins::FX_KEY && p.desc().name == crate::plugins::LEMON_SAMPLER;
             for e in events {
+                let driven_id = match &e {
+                    os_host::ParamEvent::Begin(id) | os_host::ParamEvent::Value(id, _) | os_host::ParamEvent::End(id) => driven(key, *id),
+                };
+                if driven_id {
+                    continue;
+                }
                 if let (true, os_host::ParamEvent::Value(id, v)) = (sampler, &e) {
                     if let Some(x) = ui.lists.get(&key).and_then(|l| l.params.iter().find(|x| x.id == *id)) {
                         stretch.push((key, x.name.clone(), *v));

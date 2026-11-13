@@ -788,6 +788,7 @@ mod win32 {
         }
 
         fn paint(&mut self) {
+            os_plugkit::refresh_palette(&mut self.palette);
             let (hdc, ps) = pw::begin_paint(self.hwnd);
             self.logic.paint(&mut self.canvas, &self.palette);
             self.last_raw = self.logic.params.raw_version.load(Ordering::Acquire);
@@ -997,6 +998,7 @@ mod gui {
         }
 
         fn paint(&mut self) {
+            os_plugkit::refresh_palette(&mut self.palette);
             self.dirty = false;
             self.logic.paint(&mut self.canvas, &self.palette);
             self.buf.resize((self.size.0 * self.size.1) as usize, 0);

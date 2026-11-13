@@ -74,6 +74,28 @@ pub fn live_of(p: ParamPtr) -> f32 {
     live_norm(param_addr(p), host).unwrap_or(host)
 }
 
+/// The editor's parameters as its painting names them (view id → the hosted parameter's name), for the rack tile:
+/// the tile reads each control's value through the view id and sets the hosted parameter the name resolves to.
+pub fn ui_settings() -> &'static [(String, String)] {
+    static SETTINGS: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+    SETTINGS.get_or_init(|| {
+        use nih_plug::prelude::Param;
+        let p = SamplerParams::default();
+        p.param_map()
+            .into_iter()
+            .map(|(id, ptr, _)| {
+                let name = match ptr {
+                    ParamPtr::FloatParam(p) => unsafe { (*p).name().to_string() },
+                    ParamPtr::IntParam(p) => unsafe { (*p).name().to_string() },
+                    ParamPtr::BoolParam(p) => unsafe { (*p).name().to_string() },
+                    ParamPtr::EnumParam(p) => unsafe { (*p).name().to_string() },
+                };
+                (id, name)
+            })
+            .collect()
+    })
+}
+
 /// The address `live_set` keys a parameter by.
 pub fn param_addr(p: ParamPtr) -> usize {
     match p {

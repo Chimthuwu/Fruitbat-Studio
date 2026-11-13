@@ -388,19 +388,19 @@ impl Palette {
 /// ui/theme-presets.md "Skins").
 impl Palette {
     pub fn brand_lit(&self, c: Color) -> Color {
-        self.xf.retint.as_ref().map_or(c, |r| r.highlight(c))
+        self.xf.retint.as_ref().map_or_else(|| crate::design::own_brand(self.style.design, c), |r| r.highlight(c))
     }
     pub fn brand_sel(&self, c: Color) -> Color {
-        self.xf.retint.as_ref().map_or(c, |r| r.accent(c))
+        self.xf.retint.as_ref().map_or_else(|| crate::design::own_brand(self.style.design, c), |r| r.accent(c))
     }
     pub fn brand_led(&self, c: Color) -> Color {
-        self.xf.retint.as_ref().map_or(c, |r| r.mute(c))
+        self.xf.retint.as_ref().map_or_else(|| crate::design::own_brand(self.style.design, c), |r| r.mute(c))
     }
     pub fn brand_grey(&self, c: Color) -> Color {
-        self.xf.retint.as_ref().map_or(c, |r| r.surface(c))
+        self.xf.retint.as_ref().map_or_else(|| crate::design::own_brand(self.style.design, c), |r| r.surface(c))
     }
     pub fn brand_ink(&self, c: Color) -> Color {
-        self.xf.retint.as_ref().map_or(c, |r| r.text(c))
+        self.xf.retint.as_ref().map_or_else(|| crate::design::own_brand(self.style.design, c), |r| r.text(c))
     }
 }
 

@@ -120,43 +120,52 @@ pub fn paint(spec: &Spec, c: &mut Canvas, t: &Palette, m: &dyn Model, st: &ViewS
     let mut ui = Ui { c, t, m, st, hits: Vec::new() };
     ui.c.begin_frame(None);
     ui.c.clear(plug::BG);
+    // A dock tile taller than the editor stretches the layout down the tile: the cards, rows and wells spread, the
+    // controls keep their size. In the plugin's own window (canvas = the spec's size) `sy` is 1 and nothing moves.
+    let (_, ch) = ui.c.size();
+    let sy = (ch / spec.size.1.max(1) as f32).max(1.0);
+    let yv = |v: f32| v * sy;
+    let d_rect = |r: Rect| Rect::span(r.x, r.right(), yv(r.y), yv(r.bottom()));
     for card in spec.cards {
-        lemon::plug_panel(ui.c, Rect::span(card.x0, card.x1, card.y0, card.y1));
+        lemon::plug_panel(ui.c, Rect::span(card.x0, card.x1, yv(card.y0), yv(card.y1)));
         if !card.heading.is_empty() {
-            heading(&mut ui, card.x0, card.x1, card.y0 - 12.0, card.heading);
+            heading(&mut ui, card.x0, card.x1, yv(card.y0) - 12.0, card.heading);
         }
     }
     for control in spec.controls {
         match *control {
-            Control::Knob { id, cx, cy, r, caption, bipolar } => knob(&mut ui, id, cx, cy, r, caption, bipolar),
+            Control::Knob { id, cx, cy, r, caption, bipolar } => knob(&mut ui, id, cx, yv(cy), r, caption, bipolar),
             Control::Choice { id, x, top, names } => {
                 let min = spec.index(id).map_or(0, |k| spec.settings[k].range.0);
-                choices(&mut ui, id, x, top, min, names);
+                choices(&mut ui, id, x, yv(top), min, names);
             }
-            Control::Fader { id, x, top, bot, label, col, bipolar, marks } => fader(&mut ui, id, x, top, bot, label, col, bipolar, marks),
+            Control::Fader { id, x, top, bot, label, col, bipolar, marks } =>
+                fader(&mut ui, id, x, yv(top), yv(bot), label, col, bipolar, marks),
             Control::Shape { id, cx, cy } => {
                 let range = spec.index(id).map_or((0, 1), |k| spec.settings[k].range);
-                shape(&mut ui, id, cx, cy, range);
+                shape(&mut ui, id, cx, yv(cy), range);
             }
-            Control::Tile { id, x0, y0, x1, y1, caption } => tile(&mut ui, id, Rect::span(x0, x1, y0, y1), caption),
+            Control::Tile { id, x0, y0, x1, y1, caption } => tile(&mut ui, id, Rect::span(x0, x1, yv(y0), yv(y1)), caption),
             Control::Text { id, x0, y0, x1, y1, show, .. } => {
                 let (text, status) = show(&st.raw);
-                text_field(&mut ui, id, Rect::span(x0, x1, y0, y1), &text, &status);
+                text_field(&mut ui, id, Rect::span(x0, x1, yv(y0), yv(y1)), &text, &status);
             }
         }
     }
     if let Some(d) = &spec.display {
-        lemon::plug_well(ui.c, d.r, 6.0);
+        let r = d_rect(d.r);
+        lemon::plug_well(ui.c, r, 6.0);
         let v = values(spec, m);
-        (d.draw)(ui.c, d.r, &v[..spec.settings.len()]);
+        (d.draw)(ui.c, r, &v[..spec.settings.len()]);
     }
     for &(cx, top, s) in spec.labels {
-        inst::caption(ui.c, ui.t, cx, top, s, false);
+        inst::caption(ui.c, ui.t, cx, yv(top), s, false);
     }
-    let mark = logo(&mut ui, spec);
+    let mark = logo(&mut ui, spec, sy);
     let lh = ui.c.line_height(HINT);
     match (spec.hint, &spec.display) {
-        (Some(mut well), _) => {
+        (Some(well), _) => {
+            let mut well = d_rect(well);
             if well.y < mark.bottom() && mark.y < well.bottom() && well.right() > mark.x - 16.0 {
                 well = Rect::span(well.x, mark.x - 16.0, well.y, well.bottom());
             }
@@ -166,8 +175,9 @@ pub fn paint(spec: &Spec, c: &mut Canvas, t: &Palette, m: &dyn Model, st: &ViewS
             }
         }
         (None, Some(d)) if !hint.is_empty() => {
-            let w = (ui.c.text_width(HINT, hint) + 12.0).min(d.r.w - 8.0);
-            let r = Rect::new(d.r.x + 4.0, d.r.y + 4.0, w, lh + 6.0);
+            let r = d_rect(d.r);
+            let w = (ui.c.text_width(HINT, hint) + 12.0).min(r.w - 8.0);
+            let r = Rect::new(r.x + 4.0, r.y + 4.0, w, lh + 6.0);
             ui.c.fill_rrect(r, 4.0, plug::WELL.with_alpha(220));
             ui.c.text_clip(HINT, r.x + 6.0, r.y + 3.0, r.w - 12.0, brand::TEXT, hint);
         }
@@ -311,8 +321,10 @@ fn text_field(ui: &mut Ui, id: &str, r: Rect, text: &str, status: &str) {
 
 /// The wordmark (as Lemon Delay's): the lemon mark and "LEMON" in lemon beside the effect's name in large grey
 /// capitals, or LEMON over the name (`stacked`), placed by the spec's [`Mark`]; returns where it is.
-fn logo(ui: &mut Ui, spec: &Spec) -> Rect {
+fn logo(ui: &mut Ui, spec: &Spec, sy: f32) -> Rect {
     let Mark { x, y, anchor, stacked } = spec.mark;
+    // The wordmark follows the tile's bottom when the layout is stretched (see `paint`).
+    let y = y * sy;
     let ws = lemon::spaced_width(ui.c, MARK_SMALL, "LEMON", 2.5);
     let (lh_b, lh_s) = (ui.c.line_height(MARK_BIG), ui.c.line_height(MARK_SMALL));
     if stacked {

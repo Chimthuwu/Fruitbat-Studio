@@ -447,9 +447,12 @@ pub struct Modulator {
     pub slot: u8,
 }
 
-/// The project's eight modulator slots.
-pub const PROJECT_SLOTS: usize = 8;
-/// A modulator with no project slot (legacy M1 data, or a graph fuller than eight).
+/// The project's modulator slots in one row (the row above the device rack): the original eighteen, with three more
+/// at the end. The row's "＋" adds another row of these (`ModGraph::rows`).
+pub const PROJECT_SLOTS: usize = 21;
+/// How many rows of slots a project can ask for: the twelve the 8-bit slot numbers can hold.
+pub const MAX_ROWS: u8 = 12;
+/// A modulator with no project slot (legacy M1 data, or a graph fuller than the slots).
 pub const NO_SLOT: u8 = 255;
 
 /// The project's modulation graph: every modulator, in creation order, and the counter that mints ids.
@@ -462,6 +465,9 @@ pub struct ModGraph {
     pub modulators: Vec<Modulator>,
     /// Next [`ModulatorId`] to mint (monotonic, never reused).
     pub next: u32,
+    /// Rows of project slots the strip shows: one until the user asks for another row. A project written before rows
+    /// existed reads as 0, which is one row.
+    pub rows: u8,
 }
 
 impl ModGraph {
@@ -470,17 +476,36 @@ impl ModGraph {
         self.modulators.is_empty()
     }
 
-    /// Adds a modulator with a fresh id, the lowest free project slot (or [`NO_SLOT`] when all eight are taken) and
+    /// Adds a modulator with a fresh id, the lowest free project slot (or [`NO_SLOT`] when all slots are taken) and
     /// no targets yet.
     pub fn add(&mut self, source: ModSource) -> ModulatorId {
         let slot = self.free_slot().unwrap_or(NO_SLOT);
         self.add_with_slot(source, slot)
     }
 
-    /// Adds a modulator into project slot `slot` (`0..PROJECT_SLOTS`). `None` for a slot out of range or already
+    /// The rows of project slots the strip shows (at least one).
+    pub fn rows(&self) -> usize {
+        usize::from(self.rows.max(1))
+    }
+
+    /// The project's slots: [`PROJECT_SLOTS`] in each of [`ModGraph::rows`] rows.
+    pub fn slots(&self) -> usize {
+        PROJECT_SLOTS * self.rows()
+    }
+
+    /// Another row of slots (the strip's "＋"). False at [`MAX_ROWS`].
+    pub fn add_row(&mut self) -> bool {
+        if self.rows() >= usize::from(MAX_ROWS) {
+            return false;
+        }
+        self.rows = self.rows().saturating_add(1) as u8;
+        true
+    }
+
+    /// Adds a modulator into project slot `slot` (`0..slots()`). `None` for a slot out of range or already
     /// taken: a slot is a fixed place, not a list position.
     pub fn add_in_slot(&mut self, slot: u8, source: ModSource) -> Option<ModulatorId> {
-        if usize::from(slot) >= PROJECT_SLOTS || self.modulator_at_slot(slot).is_some() {
+        if usize::from(slot) >= self.slots() || self.modulator_at_slot(slot).is_some() {
             return None;
         }
         Some(self.add_with_slot(source, slot))
@@ -501,7 +526,7 @@ impl ModGraph {
 
     /// The first free project slot, if any.
     pub fn free_slot(&self) -> Option<u8> {
-        (0..PROJECT_SLOTS as u8).find(|s| self.modulator_at_slot(*s).is_none())
+        (0..self.slots() as u8).find(|s| self.modulator_at_slot(*s).is_none())
     }
 
     /// The modulator in project slot `slot`.
@@ -734,6 +759,33 @@ mod tests {
         assert_eq!(g.modulators.len(), 3);
     }
 
+    /// The strip's "＋" adds a row of slots: the project has twice as many places, and a modulator takes one in the
+    /// new row; asking beyond the last row changes nothing.
+    #[test]
+    fn another_row_adds_project_slots() {
+        let mut g = ModGraph::default();
+        assert_eq!((g.rows(), g.slots()), (1, PROJECT_SLOTS));
+        assert!(g.add_row());
+        assert_eq!((g.rows(), g.slots()), (2, PROJECT_SLOTS * 2));
+        let first_in_row_two = PROJECT_SLOTS as u8;
+        let id = g.add_in_slot(first_in_row_two, ModSource::default()).expect("the new row's first slot is free");
+        assert_eq!(g.modulator_at_slot(first_in_row_two).map(|m| m.id), Some(id));
+        // `add` reaches the new row too, filling the lowest free slot of them all.
+        let mut empty = ModGraph::default();
+        empty.add_row();
+        for _ in 0..PROJECT_SLOTS - 1 {
+            empty.add(ModSource::default());
+        }
+        assert_eq!(Some(empty.add(ModSource::default())), empty.modulator_at_slot(PROJECT_SLOTS as u8 - 1).map(|m| m.id));
+        assert_eq!(Some(empty.add(ModSource::default())), empty.modulator_at_slot(PROJECT_SLOTS as u8).map(|m| m.id), "the new row's first slot");
+        // The strip stops at MAX_ROWS rows.
+        while g.rows() < usize::from(MAX_ROWS) {
+            assert!(g.add_row());
+        }
+        assert!(!g.add_row());
+        assert_eq!(g.rows(), usize::from(MAX_ROWS));
+    }
+
     #[test]
     fn a_parameter_takes_one_assignment_per_modulator() {
         let mut g = ModGraph::default();
@@ -750,11 +802,11 @@ mod tests {
         assert_eq!(g.targets_on(path).len(), 1);
     }
 
-    /// The eight project slots are fixed places: a modulator takes one, removing it leaves the slot empty, and a
-    /// ninth modulator has no slot. Switching tracks cannot move them because the graph is project state.
+    /// The project slots are fixed places: a modulator takes one, removing it leaves the slot empty, and a
+    /// modulator beyond the slots has none. Switching tracks cannot move them because the graph is project state.
     #[test]
-    fn eight_project_slots_are_fixed_places() {
-        assert_eq!(PROJECT_SLOTS, 8);
+    fn project_slots_are_fixed_places() {
+        assert_eq!(PROJECT_SLOTS, 21);
         let mut g = ModGraph::default();
         let a = g.add_in_slot(3, ModSource::Lfo(Lfo::default())).expect("slot 3 is free");
         assert_eq!(g.get(a).map(|m| m.slot), Some(3));
@@ -763,12 +815,12 @@ mod tests {
         // `add` fills the lowest free slot, never one that is taken.
         let b = g.add(ModSource::default());
         assert_eq!(g.get(b).map(|m| m.slot), Some(0));
-        for _ in 0..6 {
+        for _ in 0..PROJECT_SLOTS - 2 {
             g.add(ModSource::default());
         }
         assert_eq!(g.free_slot(), None);
-        let ninth = g.add(ModSource::default());
-        assert_eq!(g.get(ninth).map(|m| m.slot), Some(NO_SLOT), "a ninth modulator has no slot");
+        let overflow = g.add(ModSource::default());
+        assert_eq!(g.get(overflow).map(|m| m.slot), Some(NO_SLOT), "a modulator beyond the slots has no slot");
         // Removing frees exactly that slot, and no other modulator moves.
         g.remove(a);
         assert_eq!(g.free_slot(), Some(3));

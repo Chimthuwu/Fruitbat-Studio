@@ -16,6 +16,7 @@ use crate::app::{Action, State, Ui, Win};
 use crate::container::{level_text, member_count, members, CAct};
 use crate::icons::{self, Icon};
 use crate::knobs::KnobId;
+use crate::plugins::Plugins;
 
 pub const W: f32 = 330.0;
 const TITLE_H: f32 = 30.0;
@@ -36,6 +37,10 @@ fn height(n: usize) -> f32 {
 
 pub fn rect(s: &State) -> Rect {
     let (t, k) = s.container.at;
+    // A Channel Rack paints its step editor in this window (`views::channel_rack`), so it takes that window's size.
+    if k == crate::container::CHANNEL && crate::channel_rack::rack_row(s).is_some() {
+        return Rect::new(s.container.pos.0, s.container.pos.1, super::channel_rack::W, super::channel_rack::H);
+    }
     let n = member_count(s, t, k).unwrap_or(0);
     Rect::new(s.container.pos.0, s.container.pos.1, W, height(n))
 }
@@ -44,7 +49,12 @@ pub fn bounds(s: &State) -> Rect {
     rect(s).outset(1.0)
 }
 
-pub fn paint(ui: &mut Ui, s: &State, _f: &FrameInfo) {
+pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, f: &FrameInfo) {
+    // A Channel Rack: the step editor, in place of the member list (its one member is the lanes' sampler).
+    if let Some(row) = crate::channel_rack::rack_row(s) {
+        super::channel_rack::paint(ui, s, plugins, row, rect(s), f);
+        return;
+    }
     let t = ui.t;
     let win = rect(s);
     let (x0, y0) = (win.x, win.y);

@@ -30,15 +30,45 @@ pub use x11 as gui;
 #[cfg(target_os = "macos")]
 pub use mac as gui;
 
-use os_theme::design::Design;
 use os_theme::Palette;
 use os_ui::kit::menu::{MenuItem, MenuStyle};
 use os_ui::Rect;
 
-/// The palette Lemon Studio's plugin editors draw with: always the Lemon design's, whatever design the app or a saved
-/// setting names (the plugins' Classic look is retired, spec ui/lemon-design.md §11.1). Their menus use it too.
+/// The palette the app last published for its plugin editors ([`set_palette`]): `None` until it does, so a test or an
+/// example that runs an editor on its own draws the Lemon design's colours as before.
+static HOST: std::sync::RwLock<Option<Palette>> = std::sync::RwLock::new(None);
+
+/// The palette Lemon Studio's plugin editors draw with: the app's own, which it publishes as it applies a skin or a
+/// theme, so a plugin's window — docked in the rack or popped out on its own — wears the same colours as the rest of the
+/// interface. Their menus use it too. Without one, the Lemon design's (spec ui/lemon-design.md §11.1).
 pub fn palette() -> Palette {
-    os_theme::design::palette(Design::Lemon, None)
+    match HOST.read().ok().and_then(|p| p.clone()) {
+        Some(p) => p,
+        None => os_theme::design::palette(os_theme::design::Design::Lemon, None),
+    }
+}
+
+/// Publishes the palette the app draws with (`App::theme`'s colours) for every plugin editor, docked or in its own
+/// window: they pick it up at their next paint, so a theme change reaches an editor already open.
+pub fn set_palette(p: &Palette) {
+    if let Ok(mut g) = HOST.write() {
+        // An unchanged palette is left alone, so the editors' `palette != crate::palette()` check stays cheap.
+        if g.as_ref() == Some(p) {
+            return;
+        }
+        *g = Some(p.clone());
+    }
+}
+
+/// Brings an open editor's copy of the palette up to date with what the app published, so a theme or skin change
+/// reaches a plugin window that is already open; `true` when it changed (a repaint is then due anyway).
+pub fn refresh_palette(p: &mut Palette) -> bool {
+    let now = palette();
+    if *p == now {
+        return false;
+    }
+    *p = now;
+    true
 }
 
 /// A menu to show: rows, what each does, submenus by row.
@@ -132,6 +162,21 @@ pub fn no_modal() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A plugin's editor — popped out in its own window or docked — draws with the palette the app published, so it
+    /// matches the skin in use; before the app publishes one it draws the Lemon design's, as it always has.
+    #[test]
+    fn the_editors_draw_with_the_palette_the_app_published() {
+        use os_theme::design::{self, Design};
+        let lemon = design::palette(Design::Lemon, None);
+        set_palette(&lemon);
+        assert_eq!(palette(), lemon);
+        let meridian = design::palette(Design::Meridian, None);
+        set_palette(&meridian);
+        assert_eq!(palette(), meridian, "the editors follow the app's skin");
+        assert_ne!(palette(), lemon);
+        set_palette(&lemon);
+    }
 
     /// A 200 × 200 menu at (100, 100) whose row at y 40, 20 high, opened a submenu placed the way the popups place it:
     /// at the row's right end less 2 px (`left` true: flipped to the left of the menu).

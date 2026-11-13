@@ -815,6 +815,7 @@ mod win32 {
         }
 
         fn paint(&mut self) {
+            os_plugkit::refresh_palette(&mut self.palette);
             let (hdc, ps) = pw::begin_paint(self.hwnd);
             let hint = if self.logic.hosted { String::new() } else { self.logic.hint.clone() };
             self.logic.hits = view::paint(&mut self.canvas, &self.palette, &self.logic.vals, &self.logic.view, &hint, self.logic.hosted);
@@ -1105,6 +1106,7 @@ mod gui {
         }
 
         fn paint(&mut self) {
+            os_plugkit::refresh_palette(&mut self.palette);
             self.dirty = false;
             let hint = if self.logic.hosted { String::new() } else { self.logic.hint.clone() };
             self.logic.hits = view::paint(&mut self.canvas, &self.palette, &self.logic.vals, &self.logic.view, &hint, self.logic.hosted);

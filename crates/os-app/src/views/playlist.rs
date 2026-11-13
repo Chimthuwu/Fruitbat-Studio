@@ -276,7 +276,14 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
     // Playhead.
     if f.playing && f.song {
         let x = g.x_of(f.tick as f32);
-        ui.c.fill_rect(Rect::new(x, grid.y, 1.5, grid.h), t.playhead);
+        if t.style.meridian() {
+            // A brass-cored playhead: a thin accent spine behind the precise playhead line, so Meridian's transport
+            // reads at a glance without a glow.
+            ui.c.fill_rect(Rect::new(x - 0.5, grid.y, 2.5, grid.h), t.accent.with_alpha(140));
+            ui.c.fill_rect(Rect::new(x, grid.y, 1.0, grid.h), t.playhead);
+        } else {
+            ui.c.fill_rect(Rect::new(x, grid.y, 1.5, grid.h), t.playhead);
+        }
     }
     ui.c.pop_clip();
 
@@ -459,6 +466,7 @@ fn ruler_paint(ui: &mut Ui, s: &State, g: &PGeom, ruler: Rect, f: &FrameInfo) {
     // not depend on the scroll position, or a scrolled ruler would differ from a repainted one.
     let first_bar = ((g.scroll_x - 48.0) / bar_w).floor().max(0.0) as i32;
     let last_bar = ((g.scroll_x + ruler.w) / bar_w).ceil() as i32 + 1;
+    let meridian = t.style.meridian();
     for b in first_bar.max(sb)..last_bar {
         let n = b - sb;
         if n % every != 0 {
@@ -466,6 +474,23 @@ fn ruler_paint(ui: &mut Ui, s: &State, g: &PGeom, ruler: Rect, f: &FrameInfo) {
         }
         let x = g.xs(f64::from(b) * f64::from(bar_w));
         let downbeat = n % (every * 4) == 0;
+        if meridian {
+            // A technical ruler: a graduated scale at the top (long brass marks at four-bar downbeats, fine
+            // subdivisions between), the bar number set editorially along the bottom in small caps, wide-tracked.
+            let major = downbeat;
+            let tick_h = if major { 10.0 } else { 5.0 };
+            ui.c.fill_rect(
+                Rect::new(x, ruler.y + 1.0, 1.0, tick_h),
+                if major { t.accent } else { t.ruler_text.with_alpha(130) },
+            );
+            if !major {
+                let xh = g.xs(f64::from(b) * f64::from(bar_w) + f64::from(bar_w) / 2.0);
+                ui.c.fill_rect(Rect::new(xh, ruler.y + 1.0, 1.0, 3.0), t.ruler_text.with_alpha(55));
+            }
+            let ink = if major { t.text } else { t.ruler_text };
+            ui.c.text(super::fnt(11.0), x + 2.0, ruler.bottom() - 16.0, ink, &format!("{}", n + 1));
+            continue;
+        }
         let size = if downbeat { 15.0 } else { 13.0 };
         // A tick hierarchy at the ruler's top edge: long lemon marks at four-bar downbeats, short hairlines between.
         ui.c.fill_rect(
@@ -481,8 +506,14 @@ fn ruler_paint(ui: &mut Ui, s: &State, g: &PGeom, ruler: Rect, f: &FrameInfo) {
     let tick = if f.playing && f.song { f.tick as f32 } else { s.playlist.pos as f32 };
     let x = g.x_of(tick);
     let (y0, k) = (ruler.y + 0.5, 9.0);
-    ui.c.fill_polygon(&[(x - 0.5, y0 - 0.5), (x + k + 1.0, y0 - 0.5), (x - 0.5, y0 + k + 1.0)], t.s(0x0b1114));
-    ui.c.fill_polygon(&[(x, y0), (x + k, y0), (x, y0 + k)], t.playhead);
+    if t.style.meridian() {
+        // A brass index marker: the same ◤ flag, but set in the signature brass so the playhead reads as Meridian's.
+        ui.c.fill_polygon(&[(x - 0.5, y0 - 0.5), (x + k + 1.0, y0 - 0.5), (x - 0.5, y0 + k + 1.0)], t.s(0x0b1114));
+        ui.c.fill_polygon(&[(x, y0), (x + k, y0), (x, y0 + k)], t.accent);
+    } else {
+        ui.c.fill_polygon(&[(x - 0.5, y0 - 0.5), (x + k + 1.0, y0 - 0.5), (x - 0.5, y0 + k + 1.0)], t.s(0x0b1114));
+        ui.c.fill_polygon(&[(x, y0), (x + k, y0), (x, y0 + k)], t.playhead);
+    }
     ui.c.pop_clip();
 }
 
@@ -661,6 +692,7 @@ fn clip_paint(ui: &mut Ui, s: &State, g: &PGeom, i: usize, c: &Clip) {
     let darken = |c: Color| c.mix(ui.t.s(0x000000), 0.55);
     let tint = pl::clip_tint(s, c.source).map(rgb);
     let lemon = super::lemon(ui);
+    let meridian = t.style.meridian();
 
     // Title strip: (edge rows, highlight row, gradient top, gradient bottom, text).
     let (edge, high, top, bottom, text, body) = if selected {
@@ -688,7 +720,9 @@ fn clip_paint(ui: &mut Ui, s: &State, g: &PGeom, i: usize, c: &Clip) {
     let outline = dim(t.s(0x03090d));
     let narrow = r.w < 8.0;
     // Rect fills with the top corners knocked out (cheaper than rounded paths for hundreds of clips).
-    if lemon {
+    if meridian {
+        ui.c.fill_rect(r, outline);
+    } else if lemon {
         ui.c.fill_rrect(r, lk::r_btn(t).min(r.w / 2.0).min(r.h / 2.0), outline);
     } else {
         ui.c.fill_rect(r, outline);
@@ -703,8 +737,21 @@ fn clip_paint(ui: &mut Ui, s: &State, g: &PGeom, i: usize, c: &Clip) {
     let title_h = TITLE_H - 2.0;
     // Edge colour behind the strip (its top corners in the outline's colour), then the highlight row and the gradient.
     // Lemon (spec: ui/lemon-design.md §7): a rounded tile with a flat title strip.
-    let ir = (lk::r_btn(t) - 1.0).min(inner.w / 2.0).min(inner.h / 2.0);
-    if lemon {
+    let ir = if meridian { 0.0 } else { (lk::r_btn(t) - 1.0).min(inner.w / 2.0).min(inner.h / 2.0) };
+    if meridian {
+        // A squared clip with a datum rail at the top and a family spine at the left: the information reads as a
+        // technical strip on the timeline, not a rounded card.
+        ui.c.fill_rect(inner, dim(top));
+        if !selected && !c.muted {
+            let rail = match kind {
+                PickKind::Pattern => t.signal,
+                PickKind::Automation => t.warning,
+                _ => tint.or(color).unwrap_or(t.text_dim),
+            };
+            ui.c.fill_rect(Rect::new(inner.x, inner.y, inner.w, 2.0), dim(rail));
+            ui.c.fill_rect(Rect::new(inner.x, inner.y, 2.0, inner.h), dim(rail).with_alpha(150));
+        }
+    } else if lemon {
         ui.c.fill_rrect(inner, ir, dim(top));
         if !selected && !c.muted {
             let rail = match kind {
@@ -732,7 +779,11 @@ fn clip_paint(ui: &mut Ui, s: &State, g: &PGeom, i: usize, c: &Clip) {
     let body_r = Rect::new(inner.x, body_r.y, inner.w, inner.bottom() - body_r.y);
     // The content is measured from the body's true edges (the drawn ones may be pulled in, `clip_draw_rect`).
     let body_at = Body { r: body_r, x: clip_x + f64::from(side), w: f64::from((full_w - 2.0 * side).max(1.0)) };
-    if lemon {
+    if meridian {
+        ui.c.fill_rect(body_r, dim(body));
+        ui.c.fill_rect(Rect::new(body_r.x, body_r.y, body_r.w, 1.0), dim(body.shade(0.06)));
+        ui.c.fill_rect(Rect::new(body_r.x, body_r.bottom() - 1.0, body_r.w, 1.0), dim(body.shade(-0.3)));
+    } else if lemon {
         ui.c.fill_rrect(body_r, ir, dim(body));
         ui.c.fill_rect(Rect::new(body_r.x, body_r.y, body_r.w, ir.min(body_r.h)), dim(body));
     } else {
@@ -1093,6 +1144,7 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
     const INDENT: f32 = 6.0;
     const RADIUS: f32 = 4.0;
     let t = ui.t;
+    let meridian = t.style.meridian();
     let (y, h) = (g.y_of(row), g.rows.height(row));
     let strip = g.rows.strip(row);
     if row == TRACKS {
@@ -1128,7 +1180,7 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
         ui.c.fill_rect(Rect::new(x, y, INDENT, bh), t.s(0x2b3439));
     }
     let (top, bottom) = if super::lemon(ui) { (base, base) } else { (base.shade(0.035), base.shade(-0.03)) };
-    let k = if super::lemon(ui) { lk::r_btn(t) + 1.0 } else { RADIUS }.min(bh / 2.0);
+    let k = if t.style.meridian() { 0.0 } else if super::lemon(ui) { lk::r_btn(t) + 1.0 } else { RADIUS }.min(bh / 2.0);
     ui.c.fill_rect_gradient(hr, top, bottom, k);
     // A signal-coloured index rail: turquoise marks the channel, lemon marks the selected track. It is a structural
     // marker, not an outline, so the header stays calm when nothing is selected.
@@ -1137,6 +1189,12 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
     ui.c.fill_rect(Rect::new(hr.x + 1.0, hr.y + 2.0, 2.0, (bh - 4.0).max(2.0)), rail);
     if selected {
         ui.c.fill_rect(Rect::new(hr.x, hr.bottom() - 2.0, hr.w, 2.0), t.accent_dim);
+    }
+    if meridian && !strip && bh >= 18.0 {
+        // An editorial track index: a two-digit ordinal at the header's left, set in brass — the structural marker
+        // that makes the Playlist read like a drafted score rather than a list.
+        let idx = format!("{:02}", row + 1);
+        ui.c.text_clip(Font::new(9), hr.x + 3.0, hr.y + 3.0, 13.0, t.accent, &idx);
     }
     // Square the corners that continue into the rows above / below.
     if member {
@@ -1167,9 +1225,9 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
     ui.hit(led, Action::PlLed(row), "Mute track (right-click / Ctrl+click: solo)");
     // The lane's mixer strip's own solo and pan (Linear mode): an S beside the mute LED and the pan as a horizontal
     // fader under the name, so the header wears the channel it plays through (Bitwig-style, as the mute does).
-    let strip = lane.and_then(|tr| crate::mixer::track(s, tr.mixer_strip));
-    let solo = strip.map(|_| Rect::new(led.right() + 3.0, led.y, 14.0, 14.0));
-    let pan = strip.and_then(|_| {
+    let mix_strip = lane.and_then(|tr| crate::mixer::track(s, tr.mixer_strip));
+    let solo = mix_strip.map(|_| Rect::new(led.right() + 3.0, led.y, 14.0, 14.0));
+    let pan = mix_strip.and_then(|_| {
         let r = Rect::new(hr.x + 4.0, led.y - 9.0, (led.x - 8.0 - (hr.x + 4.0)).max(0.0), 7.0);
         (r.w >= 26.0 && led.y - hr.y >= 24.0).then_some(r)
     });
@@ -1184,6 +1242,9 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
     let text = if on { text } else { text.shade(-0.35) };
     let editing = matches!(s.playlist.edit.as_ref().map(|e| e.target), Some(pl::EditTarget::TrackName(r)) if r == row);
     let mut name_x = hr.x + 2.0;
+    if meridian && !strip {
+        name_x += 14.0;
+    }
     // The badge's hint names the menu the kinds are chosen in (Linear mode's Insert ▸, spec: model/track-model.md §5).
     let mode_menu = if s.project.linear_mode { "Insert in the menu" } else { "Track mode in the menu" };
     if let Some((letter, kind)) = badge {
@@ -1238,7 +1299,7 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
     } else {
         super::led(ui, led.cx(), led.cy(), on);
     }
-    if let (Some(m), Some(r)) = (strip, pan) {
+    if let (Some(m), Some(r)) = (mix_strip, pan) {
         // The strip's pan as a fader: 0 % at the left edge, 100 % at the right, the thumb where the mixer's knob points.
         let id = crate::knobs::KnobId::MixPan(m.index);
         let v = s.knob(id);
@@ -1251,7 +1312,7 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
         let thumb = if hov { ui.t.accent.shade(0.18) } else { ui.t.accent };
         ui.c.fill_rrect(Rect::new(tx - 2.0, r.y - 1.5, 5.0, r.h + 3.0), 2.0, thumb);
     }
-    if let (Some(m), Some(b)) = (strip, solo) {
+    if let (Some(m), Some(b)) = (mix_strip, solo) {
         // The strip's solo: lit while this lane (or its channel in the mixer) is the soloed one.
         let soloed = s.playlist.solo.as_ref().is_some_and(|(t, _)| *t == row)
             || (m.enabled && s.mixer.solo.as_ref().is_some_and(|(keep, _)| keep.contains(&m.index)));

@@ -836,6 +836,7 @@ pub fn marquee_offset(t: f32, over: f32) -> f32 {
 
 pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
     let t = ui.t;
+    let meridian = t.style.meridian();
     // Measured with the browser top at `WORK_Y`; it moves up with a hidden toolbar (spec: ui/toolbar-menu.md §5).
     let dy = r.y - super::WORK_Y;
     // The panel left of the splitter: 201 px measured, wider as the splitter is dragged (§9).
@@ -869,7 +870,15 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
         let cx = 25.0 + 50.0 * i as f32;
         let rr = Rect::new(cx - 18.0, 108.0 + dy, 36.0, 30.0);
         let hov = ui.hit(rr, Action::BrowserTab(i), TIPS[i]);
-        if i == s.browser_tab {
+        if meridian {
+            // Meridian's browser tabs are a typographic rail: a baseline and a brass datum under the current tab.
+            ui.c.fill_rect(Rect::new(rr.x + 4.0, rr.bottom() - 1.0, rr.w - 8.0, 1.0), t.toolbar_line);
+            if i == s.browser_tab {
+                ui.c.fill_rect(Rect::new(cx - 13.0, rr.bottom() - 2.0, 26.0, 2.0), t.accent);
+            } else if hov {
+                ui.c.fill_rect(Rect::new(rr.x + 7.0, rr.bottom() - 1.0, rr.w - 14.0, 1.0), t.text_faint);
+            }
+        } else if i == s.browser_tab {
             // A seated module rather than an outlined button: a raised well and a short lemon datum.
             ui.c.fill_rrect(rr, 3.0, t.browser_row_hi);
             ui.c.fill_rect(Rect::new(cx - 9.0, rr.y + 2.0, 18.0, 2.0), t.browser_tab_outline);
@@ -1078,9 +1087,15 @@ pub fn menu_at(s: &State) -> (f32, f32) {
 fn search_box(ui: &mut Ui, s: &State, r: Rect) {
     let t = ui.t;
     ui.hit(r, Action::BrowserSearch, "Search the browser (Enter = find next, Esc = clear)");
-    ui.c.fill_rrect(r, 3.0, t.sunken);
-    if s.browser_search_focus {
-        ui.c.stroke_rrect(r, 3.0, 1.0, t.browser_search);
+    if t.style.meridian() {
+        ui.c.fill_rect(r, t.sunken);
+        ui.c.fill_rect(Rect::new(r.x, r.y, 2.0, r.h), if s.browser_search_focus { t.accent } else { t.toolbar_edge });
+        ui.c.fill_rect(Rect::new(r.x, r.bottom() - 1.0, r.w, 1.0), if s.browser_search_focus { t.accent } else { t.toolbar_line });
+    } else {
+        ui.c.fill_rrect(r, 3.0, t.sunken);
+        if s.browser_search_focus {
+            ui.c.stroke_rrect(r, 3.0, 1.0, t.browser_search);
+        }
     }
     let f = os_ui::Font::new(14);
     let text_w = r.w - 26.0;

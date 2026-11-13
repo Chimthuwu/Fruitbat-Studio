@@ -880,8 +880,9 @@ impl Plugins {
     }
 
     /// The user just added the instance under `key` (a new channel's plugin, a new effect in a slot): its window opens
-    /// detached while "Open new plugin windows floating" is on. Instances a project brings open docked, as before (spec:
-    /// ui/settings-choices.md "Miscellaneous: naming, detached plugins and startup").
+    /// detached while "Open new plugin windows floating" is on (adding opens no window by itself; the device rack's
+    /// popout does). Instances a project brings open docked, as before (spec: ui/settings-choices.md "Miscellaneous:
+    /// naming, detached plugins and startup").
     pub fn added(&mut self, key: usize) {
         let on = crate::prefs::check(&crate::prefs::DETACH_NEW);
         if let Some(h) = self.hosted.get_mut(&key) {

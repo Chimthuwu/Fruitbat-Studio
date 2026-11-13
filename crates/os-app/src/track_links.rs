@@ -647,12 +647,16 @@ mod tests {
         let items = mode_items(&app.state, 0, |m| Cmd::TrackMode(0, m));
         assert_eq!(items.iter().map(|i| i.label.as_ref()).collect::<Vec<_>>(), ["Audio track", "MIDI track"]);
         let menu = crate::playlist::track_menu(&app.state, 0, 0.0, 0.0);
-        assert_eq!(menu.items[3].label.as_ref(), "Insert");
+        assert!(menu.items.iter().any(|i| i.label.as_ref() == "Insert"), "linear mode offers the inserts");
+        assert!(menu.items.iter().any(|i| i.label.as_ref() == "Auto name and color from first clip"), "and Auto name");
         // Classic mode's menu keeps Track mode and its items.
         app.state.project.linear_mode = false;
         let classic = mode_items(&app.state, 0, |m| Cmd::TrackMode(0, m));
         assert_eq!(classic[0].label.as_ref(), "Unassigned");
-        assert_eq!(crate::playlist::track_menu(&app.state, 0, 0.0, 0.0).items[3].label.as_ref(), "Track mode");
+        assert!(
+            crate::playlist::track_menu(&app.state, 0, 0.0, 0.0).items.iter().any(|i| i.label.as_ref() == "Track mode"),
+            "Classic mode's menu keeps Track mode"
+        );
         // Insert MIDI track: lane, strip and channel together.
         app.state.project.linear_mode = true;
         let steps = app.state.history.at();

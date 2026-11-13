@@ -45,6 +45,8 @@ pub enum MenuCmd {
     Redo,
     MorePlugins,
     Sampler,
+    /// ADD ▸ Channel Rack: the step sequencer as one group instrument on one track (`crate::channel_rack`).
+    ChannelRack,
     /// ADD ▸ MIDI Out: a Lemon MIDI Out channel (spec: plugins/midi-out.md §6.2).
     MidiOut,
     AudioClip,
@@ -269,8 +271,9 @@ const ADD_PLUGINS: &[Item] = &[
     it("More plugins...", "").on().cmd(MenuCmd::MorePlugins),
     SEP,
     head("Misc"),
-    // ADD ▸ Channel (Sampler, MIDI Out — the channel rack's add path) is out of the UI until the channel rack
-    // is rebuilt as a group instrument (todo.md): channels are made as track instruments instead.
+    // The Channel Rack is back as one group instrument on one track (crate::channel_rack); the plain Sampler channel
+    // entries stay out of ADD (channels are made as track instruments instead).
+    it("Channel Rack", "").on().cmd(MenuCmd::ChannelRack),
     it("Audio clip", "").on().cmd(MenuCmd::AudioClip),
     it("Automation clip", "").on().cmd(MenuCmd::AutomationClip),
     it("Layer", "").on().cmd(MenuCmd::Layer),

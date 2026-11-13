@@ -1153,6 +1153,7 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
     let tint = track.and_then(|m| m.color).map(super::rgb);
     let body = tint.map_or(body, |c| body.mix(c, 0.22));
     let lemon = super::lemon(ui);
+    let meridian = t.style.meridian();
     let finish = crate::views::mixer_finish::Finish::current();
     if finish.on() {
         // One of the console finishes from the Michael Lane Edition (Settings ▸ General ▸ Mixer style).
@@ -1162,6 +1163,17 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
         if let Some(c) = tint {
             ui.c.fill_rect(card, c.with_alpha(26));
         }
+    } else if meridian {
+        // Meridian: strips are full-height machined columns separated by a gutter, not floating cards. A colour spine
+        // at the left edge and a brass cap on the selected strip carry identity without rounding the geometry.
+        let card = Rect::new(left + 1.0, ly.y(HEAD_Y1) + 1.0, w - 2.0, bottom - ly.y(HEAD_Y1) - 1.0);
+        ui.c.fill_rect(card, ui.t.s(0x0d1013));
+        ui.c.fill_rect(Rect::new(card.x + 1.0, card.y, card.w - 2.0, card.h), body);
+        ui.c.fill_rect(Rect::new(card.x, card.y, 2.0, card.h), tint.unwrap_or(ui.t.s(0x333a42)));
+        if selected {
+            ui.c.fill_rect(Rect::new(card.x, card.y, card.w, 2.0), t.accent);
+        }
+        ui.c.fill_rect(Rect::new(card.right() - 1.0, card.y, 1.0, card.h), ui.t.s(0x080a0d));
     } else if lemon {
         // Lemon (spec: ui/lemon-design.md §8): each strip is a rounded card on the dark gap colour.
         let card = Rect::new(left, ly.y(HEAD_Y1) + 1.0, w, bottom - ly.y(HEAD_Y1) - 1.0);
@@ -1179,7 +1191,10 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
     if n != 0 {
         let hr = Rect::new(left, ly.y(HEAD_Y0), w, ly.y(HEAD_Y1) - ly.y(HEAD_Y0) + 1.0);
         ui.c.fill_rect(hr, tint.map_or(ui.t.s(0x2b2e30), |c| ui.t.s(0x2b2e30).mix(c, 0.35)));
-        if selected && lemon {
+        if selected && meridian {
+            ui.c.fill_rect(hr, t.accent);
+            ui.c.fill_rect(Rect::new(hr.x, hr.y, hr.w, 1.0), t.brand_lit(os_theme::design::lemon::HIGHLIGHT));
+        } else if selected && lemon {
             lk::lit_in(ui.c, ui.t, Rect::new(hr.x + 3.0, hr.y + 2.0, hr.w - 6.0, hr.h - 4.0), lk::r_btn(t), false);
         } else if selected {
             // Hatched header for the selected strip.
@@ -1195,8 +1210,16 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
     }
 
     // Dark head panel (name, LED, pan) with a rounded bottom.
-    ui.c.fill_rrect(Rect::new(left + 1.0, ly.y(PANEL_Y0), w - 2.0, ly.y(PANEL_Y1) - ly.y(PANEL_Y0)), 9.0, ui.t.s(0x1d1f21));
-    ui.c.fill_rect(Rect::new(left + 1.0, ly.y(PANEL_Y0), w - 2.0, 12.0), ui.t.s(0x1d1f21));
+    if meridian {
+        // A squared recessed head: a top hairline and a darker field, no rounded bottom.
+        let head = Rect::new(left + 1.0, ly.y(PANEL_Y0), w - 2.0, ly.y(PANEL_Y1) - ly.y(PANEL_Y0));
+        ui.c.fill_rect(head, ui.t.s(0x111519));
+        ui.c.fill_rect(Rect::new(head.x, head.y, head.w, 1.0), ui.t.s(0x2c3239));
+        ui.c.fill_rect(Rect::new(head.x, head.bottom() - 1.0, head.w, 1.0), ui.t.s(0x080a0d));
+    } else {
+        ui.c.fill_rrect(Rect::new(left + 1.0, ly.y(PANEL_Y0), w - 2.0, ly.y(PANEL_Y1) - ly.y(PANEL_Y0)), 9.0, ui.t.s(0x1d1f21));
+        ui.c.fill_rect(Rect::new(left + 1.0, ly.y(PANEL_Y0), w - 2.0, 12.0), ui.t.s(0x1d1f21));
+    }
 
     // The strip's panel button: the Analog Channel Strip's console shown or hidden for this channel alone, whatever
     // the layout (`mx::console_shown`).
@@ -1252,8 +1275,13 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
         // Meter slot with its tick marks; the selected strip gets a green frame.
         meter_body(ui, s, n, meter, lemon, Some(ly));
         if selected {
-            let (rim, rim_w) = if lemon { (t.accent_dim, 1.0) } else { (t.accent, 2.0) };
-            ui.c.stroke_rrect(Rect::new(meter.x - 1.0, meter.y - 2.0, meter.w + 2.0, meter.h + 4.0), if lemon { lk::r_btn(t) } else { 1.0 }, rim_w, rim);
+            if meridian {
+                ui.c.stroke_rrect(Rect::new(meter.x - 1.0, meter.y - 2.0, meter.w + 2.0, meter.h + 4.0), 0.0, 1.0, t.accent);
+                ui.c.fill_rect(Rect::new(meter.x - 1.0, meter.y - 4.0, 9.0, 2.0), t.accent);
+            } else {
+                let (rim, rim_w) = if lemon { (t.accent_dim, 1.0) } else { (t.accent, 2.0) };
+                ui.c.stroke_rrect(Rect::new(meter.x - 1.0, meter.y - 2.0, meter.w + 2.0, meter.h + 4.0), if lemon { lk::r_btn(t) } else { 1.0 }, rim_w, rim);
+            }
         }
 
         // Name, rotated, reading upward from the bottom of the meter.
@@ -1331,8 +1359,15 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
     // Fader: a recessed 6 px channel with a darker groove down its middle, gain marks, and a handle that stands off
     // the strip (green on the selected strip, with the track lit below it).
     let track_y0 = ly.y(TRACK_Y0);
-    ui.c.fill_rrect(Rect::new(mx - 3.0, track_y0, 6.0, track_y1 - track_y0), 3.0, ui.t.s(0x101213));
-    ui.c.fill_rect(Rect::new(mx - 1.0, track_y0 + 2.0, 2.0, (track_y1 - track_y0 - 4.0).max(0.0)), ui.t.s(0x191b1d));
+    if meridian {
+        // A milled groove: square edges, a bright datum at 0 dB and fine index ticks already drawn by `fader_marks`.
+        ui.c.fill_rect(Rect::new(mx - 2.5, track_y0, 5.0, track_y1 - track_y0), ui.t.s(0x080a0d));
+        ui.c.fill_rect(Rect::new(mx - 1.0, track_y0 + 1.0, 2.0, (track_y1 - track_y0 - 2.0).max(0.0)), ui.t.s(0x171b20));
+        ui.c.fill_rect(Rect::new(mx - 4.0, ly.y(HANDLE_0DB) - 1.0, 8.0, 1.0), t.accent_dim);
+    } else {
+        ui.c.fill_rrect(Rect::new(mx - 3.0, track_y0, 6.0, track_y1 - track_y0), 3.0, ui.t.s(0x101213));
+        ui.c.fill_rect(Rect::new(mx - 1.0, track_y0 + 2.0, 2.0, (track_y1 - track_y0 - 4.0).max(0.0)), ui.t.s(0x191b1d));
+    }
     fader_marks(ui, mx, track_y1, ly);
     let v = track.and_then(|m| m.volume).unwrap_or(0.8) as f32;
     // max/min, not clamp: a very short window gives track_y1 < ly.y(TRACK_Y0) (clamp would panic).
@@ -1465,7 +1500,8 @@ fn fader_value(db: f32) -> f32 {
 }
 
 /// Fader handle centred on (cx, cy): a 19 × 26 cap with three milled grooves and a centre line, seated in a recess —
-/// a physical fader's cap rather than a small slider. Green on the selected strip.
+/// a physical fader's cap rather than a small slider. The selected strip's cap takes the palette's accent, so a skin or
+/// theme recolours it (Citrus's own accent is the green the cap always had).
 fn fader_handle(ui: &mut Ui, cx: f32, cy: f32, selected: bool, hov: bool) {
     if crate::views::mixer_finish::Finish::current().on() {
         return crate::views::mixer_finish::fader(ui, cx, cy, selected, hov);
@@ -1474,7 +1510,7 @@ fn fader_handle(ui: &mut Ui, cx: f32, cy: f32, selected: bool, hov: bool) {
     let h = Rect::new(cx - 9.0, cy - 12.5, 18.0, 25.0);
     ui.c.fill_rrect(h.outset(1.5), 4.0, t.s(0x0c0e0f));
     let (top, mid, low) = if selected {
-        (Color::rgb(0xc8f56e), Color::rgb(0x8fd236), Color::rgb(0x3f7a10))
+        (t.accent.shade(0.30), t.accent, t.accent.shade(-0.55))
     } else if hov {
         (t.s(0x7a7e81), t.s(0x55595c), t.s(0x2a2d30))
     } else {
@@ -1486,7 +1522,7 @@ fn fader_handle(ui: &mut Ui, cx: f32, cy: f32, selected: bool, hov: bool) {
     for k in 0..3 {
         ui.c.fill_rect(Rect::new(h.x + 3.0, h.y + 4.5 + 3.5 * k as f32, h.w - 6.0, 1.0), groove);
     }
-    ui.c.fill_rect(Rect::new(h.x, cy, h.w, 1.5), if selected { t.s(0x1f3d08) } else { t.s(0x151719) });
+    ui.c.fill_rect(Rect::new(h.x, cy, h.w, 1.5), if selected { t.accent.shade(-0.70) } else { t.s(0x151719) });
 }
 
 fn slot_panel(ui: &mut Ui, s: &State, r: Rect) {

@@ -117,6 +117,9 @@ pub struct Look<'a> {
     /// Spectrum level per column (dB), when monitoring.
     pub spectrum: Option<&'a [f32]>,
     pub rate: f64,
+    /// The fader bank and its knobs. The plugin's window always shows it; a device rack tile can hide it and
+    /// reveal it from its header, leaving the graph and the bottom row in the dock.
+    pub faders: bool,
 }
 
 /// The token's centre of band `k` (pass / band filters sit on the 0 dB line).
@@ -143,6 +146,23 @@ pub fn paint(c: &mut Canvas, look: &Look, vs: &ViewState) -> Vec<Hit> {
     c.fill_rect(Rect::new(0.0, 0.0, W as f32, H as f32), plug::BG);
     let small = Font::new(9).bold();
     let label = Color::rgb(0x8f8f8f);
+    // Hiding the fader bank lets the graph take the full editor width; the window's layout is unchanged.
+    // A dock tile taller than the editor stretches its layout down the tile: the graph and the faders grow, the footer
+    // keeps its design height at the bottom, and the dB scale spans the plot's new height. In the plugin's own window
+    // (canvas = W x H) `extra` is 0 and every coordinate is the design's (spec §1).
+    let (_, ch) = c.size();
+    let extra = (ch - H as f32).max(0.0);
+    let plot = if look.faders {
+        Rect::span(PLOT_X0, PLOT_X1, 33.0, 279.0 + extra)
+    } else {
+        Rect::span(PLOT_X0, W as f32 - 7.0, 33.0, 279.0 + extra)
+    };
+    let plot_right = plot.right();
+    let x_of = |n: f64| PLOT_X0 + (plot_right - PLOT_X0) * n.clamp(0.0, 1.0) as f32;
+    // The graph's dB scale follows the plot's height (0 dB at its middle).
+    let zero_y = plot.cy();
+    let ppd = plot.h / 36.0;
+    let y_of = |db: f64| zero_y - db as f32 * ppd;
     // Rounded chips (octaves, ranges, frequencies).
     let chip = |c: &mut Canvas, r: Rect, col: Color| c.fill_rrect(r, 3.0, col);
 
@@ -150,7 +170,7 @@ pub fn paint(c: &mut Canvas, look: &Look, vs: &ViewState) -> Vec<Hit> {
     let fx = |hz: f64| x_of(eq::freq_pos(hz));
     let mut edges = vec![PLOT_X0];
     edges.extend((1..=9).map(|o| fx(c_hz(o))));
-    edges.push(PLOT_X1 + 1.0);
+    edges.push(plot_right + 1.0);
     for (i, w) in edges.windows(2).enumerate() {
         let r = Rect::new(w[0], 7.0, (w[1] - w[0] - 1.0).max(0.0), 10.0);
         chip(c, r, Color::rgb(0x353535));
@@ -160,16 +180,16 @@ pub fn paint(c: &mut Canvas, look: &Look, vs: &ViewState) -> Vec<Hit> {
     }
     let ranges = [(20.0, 40.0, ""), (40.0, 80.0, "SUB"), (80.0, 250.0, "BASS"), (250.0, 500.0, "LOW MID"), (500.0, 2000.0, "MID"), (2000.0, 4000.0, "HIGH MID"), (4000.0, 6000.0, "PRS"), (6000.0, 20000.0, "TREBLE")];
     for (a, b, name) in ranges {
-        let (x0, x1) = (fx(a), if b >= 20000.0 { PLOT_X1 + 1.0 } else { fx(b) });
+        let (x0, x1) = (fx(a), if b >= 20000.0 { plot_right + 1.0 } else { fx(b) });
         let r = Rect::new(x0, 20.0, (x1 - x0 - 1.0).max(0.0), 10.0);
         chip(c, r, Color::rgb(0x3d3d3d));
         c.text_center(small, Rect::new(r.x, r.y - 1.0, r.w, r.h), Color::rgb(0xbdbdbd), name);
     }
 
     // Plot.
-    lemon::plug_well(c, PLOT.outset(1.0), 6.0);
-    c.push_clip(PLOT.inset(0.5));
-    hits.push(Hit { r: PLOT, t: Target::Graph });
+    lemon::plug_well(c, plot.outset(1.0), 6.0);
+    c.push_clip(plot.inset(0.5));
+    hits.push(Hit { r: plot, t: Target::Graph });
     for i in 0..=24 {
         let db = 18.0 - 1.5 * f64::from(i);
         let y = y_of(db).round();
@@ -179,7 +199,7 @@ pub fn paint(c: &mut Canvas, look: &Look, vs: &ViewState) -> Vec<Hit> {
             true => Color::rgb(0x2c2c2c),
             false => Color::rgb(0x232323),
         };
-        c.fill_rect(Rect::new(PLOT.x, y, PLOT.w, 1.0), col);
+        c.fill_rect(Rect::new(plot.x, y, plot.w, 1.0), col);
     }
     // Every 10 Hz to 100, every 100 Hz to 1k, every 1 kHz to 10k, then 20 kHz; decades brighter.
     let grid = [10.0, 100.0, 1000.0, 10000.0]
@@ -189,7 +209,7 @@ pub fn paint(c: &mut Canvas, look: &Look, vs: &ViewState) -> Vec<Hit> {
     for (hz, decade) in grid {
         let x = fx(hz).round();
         let col = if decade { Color::rgb(0x353535) } else { Color::rgb(0x272727) };
-        c.fill_rect(Rect::new(x, PLOT.y, 1.0, PLOT.h), col);
+        c.fill_rect(Rect::new(x, plot.y, 1.0, plot.h), col);
     }
     c.pop_clip();
 
@@ -197,13 +217,13 @@ pub fn paint(c: &mut Canvas, look: &Look, vs: &ViewState) -> Vec<Hit> {
     let range_db = [60.0, 90.0, 120.0][(params::opt(look.extra, Opt::Range) - 1).clamp(0, 2) as usize];
     if let Some(sp) = look.spectrum {
         let n = sp.len().max(2);
-        let mut pts = vec![(PLOT.x, PLOT.bottom())];
+        let mut pts = vec![(plot.x, plot.bottom())];
         for (i, &db) in sp.iter().enumerate() {
-            let x = PLOT.x + PLOT.w * i as f32 / (n - 1) as f32;
-            let y = PLOT.y + PLOT.h * (-db / range_db).clamp(0.0, 1.0);
+            let x = plot.x + plot.w * i as f32 / (n - 1) as f32;
+            let y = plot.y + plot.h * (-db / range_db).clamp(0.0, 1.0);
             pts.push((x, y));
         }
-        pts.push((PLOT.right(), PLOT.bottom()));
+        pts.push((plot.right(), plot.bottom()));
         if flag(look.extra, params::F_HISTOGRAM) {
             c.fill_polygon(&pts, Color::rgb(0x5a5a5a).with_alpha(110));
         }
@@ -211,11 +231,11 @@ pub fn paint(c: &mut Canvas, look: &Look, vs: &ViewState) -> Vec<Hit> {
         if flag(look.extra, params::F_HEATMAP) {
             let pos = params::opt(look.extra, Opt::HeatmapPosition);
             let (y0, h, a) = match pos {
-                0 => (PLOT.y, 12.0, 220.0),
-                1 => (PLOT.bottom() - 12.0, 12.0, 220.0),
-                _ => (PLOT.y, PLOT.h, 40.0),
+                0 => (plot.y, 12.0, 220.0),
+                1 => (plot.bottom() - 12.0, 12.0, 220.0),
+                _ => (plot.y, plot.h, 40.0),
             };
-            let cell_x = |i: usize| PLOT.x + PLOT.w * i as f32 / n as f32;
+            let cell_x = |i: usize| plot.x + plot.w * i as f32 / n as f32;
             for (i, &db) in sp.iter().enumerate() {
                 let x = cell_x(i);
                 let v = (1.0 + db / range_db).clamp(0.0, 1.0);
@@ -231,7 +251,7 @@ pub fn paint(c: &mut Canvas, look: &Look, vs: &ViewState) -> Vec<Hit> {
         (0..COLS)
             .map(|i| {
                 let n = i as f64 / (COLS - 1) as f64;
-                let y = y_of(f(freq_hz(n))).clamp(PLOT.y - 2.0, PLOT.bottom() + 2.0);
+                let y = y_of(f(freq_hz(n))).clamp(plot.y - 2.0, plot.bottom() + 2.0);
                 (x_of(n), y)
             })
             .collect()
@@ -244,9 +264,9 @@ pub fn paint(c: &mut Canvas, look: &Look, vs: &ViewState) -> Vec<Hit> {
         let col = band_color(k);
         // Filled to the 0 dB line.
         let mut fill = pts.clone();
-        fill.push((PLOT.right(), ZERO_Y));
-        fill.push((PLOT.x, ZERO_Y));
-        c.push_clip(PLOT);
+        fill.push((plot.right(), zero_y));
+        fill.push((plot.x, zero_y));
+        c.push_clip(plot);
         c.fill_polygon(&fill, col.with_alpha(40));
         c.polyline(&pts, 1.2, col.with_alpha(230));
         c.pop_clip();
@@ -254,9 +274,9 @@ pub fn paint(c: &mut Canvas, look: &Look, vs: &ViewState) -> Vec<Hit> {
     let total = s.curve(design);
     let total = curve_of(&|hz| total.db(hz));
     let mut fill = total.clone();
-    fill.push((PLOT.right(), ZERO_Y));
-    fill.push((PLOT.x, ZERO_Y));
-    c.push_clip(PLOT);
+    fill.push((plot.right(), zero_y));
+    fill.push((plot.x, zero_y));
+    c.push_clip(plot);
     c.fill_polygon(&fill, brand::MAIN.with_alpha(26));
     c.polyline(&total, 1.8, brand::MAIN);
     c.pop_clip();
@@ -264,15 +284,16 @@ pub fn paint(c: &mut Canvas, look: &Look, vs: &ViewState) -> Vec<Hit> {
     // Frequency labels and the dB scale.
     let marks = [20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0];
     for w in marks.windows(2) {
-        let (x0, x1) = (fx(w[0]), if w[1] >= 20000.0 { PLOT_X1 + 1.0 } else { fx(w[1]) });
-        let r = Rect::new(x0, 282.0, (x1 - x0 - 1.0).max(0.0), 10.0);
+        let (x0, x1) = (fx(w[0]), if w[1] >= 20000.0 { plot_right + 1.0 } else { fx(w[1]) });
+        let r = Rect::new(x0, 282.0 + extra, (x1 - x0 - 1.0).max(0.0), 10.0);
         chip(c, r, Color::rgb(0x353535));
         let txt = if w[0] >= 1000.0 { format!("{}k", w[0] / 1000.0) } else { format!("{}", w[0]) };
         c.text(small, r.x + 3.0, r.y - 1.0, label, &txt);
     }
     for db in [18, 12, 6, 0, -6, -12, -18] {
         let s = if db > 0 { format!("+{db}") } else { db.to_string() };
-        c.text_right(Font::new(9), 522.0, y_of(f64::from(db)) - 6.0, label, &s);
+        let x = if look.faders { 522.0 } else { plot_right - 4.0 };
+        c.text_right(Font::new(9), x, y_of(f64::from(db)) - 6.0, label, &s);
     }
 
     // Tokens (on top of the curves).
@@ -282,7 +303,7 @@ pub fn paint(c: &mut Canvas, look: &Look, vs: &ViewState) -> Vec<Hit> {
             if b.kind == eq::DISABLED {
                 continue;
             }
-            let (x, y) = token_pos(s, k);
+            let (x, y) = (x_of(b.freq), y_of(if has_level(b.kind) { b.db } else { 0.0 }));
             let lit = !has_level(b.kind) || b.db.abs() > 0.005;
             let alpha = if !s.audible(k) { 0.35 } else if lit { 1.0 } else { 0.62 };
             let big = vs.active == Some(k);
@@ -290,7 +311,7 @@ pub fn paint(c: &mut Canvas, look: &Look, vs: &ViewState) -> Vec<Hit> {
             hits.push(Hit { r: Rect::new(x - 10.0, y - 10.0, 20.0, 20.0), t: Target::Token(k) });
             if big {
                 let f = Font::new(11);
-                let ry = (y + 13.0).min(PLOT.bottom() - 26.0);
+                let ry = (y + 13.0).min(plot.bottom() - 26.0);
                 // The readout on a dark chip.
                 c.fill_rrect(Rect::new(x - 26.0, ry + 1.0, 52.0, 25.0), 5.0, Color::rgb(0x141414).with_alpha(210));
                 let col = band_color(k);
@@ -300,8 +321,9 @@ pub fn paint(c: &mut Canvas, look: &Look, vs: &ViewState) -> Vec<Hit> {
         }
     }
 
+    if look.faders {
     // Main fader.
-    let main_r = Rect::new(MAIN_X, TRACK_TOP, 13.0, TRACK_BOTTOM - TRACK_TOP + 1.0);
+    let main_r = Rect::new(MAIN_X, TRACK_TOP, 13.0, TRACK_BOTTOM + extra - TRACK_TOP + 1.0);
     let mst = st(vs, main_r, Target::Fader(MAIN_FADER));
     keq::slot(c, main_r, mst);
     keq::handle(c, main_r.cx(), y_of(s.main_db), brand::MAIN, mst);
@@ -312,10 +334,10 @@ pub fn paint(c: &mut Canvas, look: &Look, vs: &ViewState) -> Vec<Hit> {
         let b = &s.bands[k];
         let x = band_x(k);
         let col = band_color(k);
-        let track = Rect::new(x, 18.0, 13.0, TRACK_BOTTOM - 18.0 + 1.0);
+        let track = Rect::new(x, 18.0, 13.0, TRACK_BOTTOM + extra - 18.0 + 1.0);
         let fst = st(vs, track, Target::Fader(k));
         // The slot starts under the type tab.
-        keq::slot(c, Rect::new(x, 27.0, 13.0, TRACK_BOTTOM - 27.0 + 1.0), fst);
+        keq::slot(c, Rect::new(x, 27.0, 13.0, TRACK_BOTTOM + extra - 27.0 + 1.0), fst);
         let tab = Rect::new(x, 4.0, 13.0, 22.0);
         let tab_st = st(vs, tab, Target::TypeTab(k));
         let tab_col = if tab_st.hover || tab_st.pressed { col.shade(0.15) } else { col };
@@ -330,14 +352,14 @@ pub fn paint(c: &mut Canvas, look: &Look, vs: &ViewState) -> Vec<Hit> {
             hits.push(Hit { r: Rect::new(x, TRACK_TOP + 2.0, 13.0, TRACK_BOTTOM - TRACK_TOP - 1.0), t: Target::Fader(k) });
         }
         // Mute / solo switch.
-        let sw = Rect::new(x, 294.0, 13.0, 5.0);
+        let sw = Rect::new(x, 294.0 + extra, 13.0, 5.0);
         let sst = st(vs, sw.outset(2.0), Target::Switch(k));
         let swc = if s.audible(k) { col } else { Color::rgb(0x3d3d3d) };
-        c.fill_rrect(Rect::new(x, 293.0, 13.0, 6.0), 3.0, if sst.hover { swc.mix(Color::rgb(0xffffff), 0.25) } else { swc });
+        c.fill_rrect(Rect::new(x, 293.0 + extra, 13.0, 6.0), 3.0, if sst.hover { swc.mix(Color::rgb(0xffffff), 0.25) } else { swc });
         hits.push(Hit { r: sw.outset(2.0), t: Target::Switch(k) });
         // Knobs.
         let cx = x + 6.5;
-        for (y, tgt, v) in [(FREQ_Y, Target::Freq(k), b.freq), (BW_Y, Target::Bw(k), b.width)] {
+        for (y, tgt, v) in [(FREQ_Y + extra, Target::Freq(k), b.freq), (BW_Y + extra, Target::Bw(k), b.width)] {
             let r = Rect::new(cx - KNOB_R - 1.0, y - KNOB_R - 1.0, 2.0 * KNOB_R + 2.0, 2.0 * KNOB_R + 2.0);
             keq::arc_knob(c, cx, y, KNOB_R, v as f32, col, st(vs, r, tgt));
             hits.push(Hit { r, t: tgt });
@@ -345,9 +367,9 @@ pub fn paint(c: &mut Canvas, look: &Look, vs: &ViewState) -> Vec<Hit> {
     }
     let cap = Font::condensed(12, 0).bold();
     let cap_col = Color::rgb(0x7a7a7a);
-    c.text_right(cap, 545.0, FREQ_Y - 8.0, cap_col, "FREQ");
-    c.text_right(cap, 545.0, BW_Y - 8.0, cap_col, "BW");
-    let ph = Rect::new(524.0, 289.0, 16.0, 14.0);
+    c.text_right(cap, 545.0, FREQ_Y + extra - 8.0, cap_col, "FREQ");
+    c.text_right(cap, 545.0, BW_Y + extra - 8.0, cap_col, "BW");
+    let ph = Rect::new(524.0, 289.0 + extra, 16.0, 14.0);
     let pst = st(vs, ph, Target::Phones);
     let on = flag(look.extra, params::F_SOLO_SHIFT);
     let pcol = match (on, pst.hover) {
@@ -355,11 +377,12 @@ pub fn paint(c: &mut Canvas, look: &Look, vs: &ViewState) -> Vec<Hit> {
         (false, true) => brand::TEXT,
         (false, false) => Color::rgb(0x8f8f8f),
     };
-    headphones(c, 532.0, 296.0, pcol);
+    headphones(c, 532.0, 296.0 + extra, pcol);
     hits.push(Hit { r: ph, t: Target::Phones });
+    }
 
     // Wordmark.
-    lemon::wordmark(c, 9.0, 303.0, true, "PARAMETRIC EQ", Font::condensed(25, 0), Font::condensed(11, 0).bold());
+    lemon::wordmark(c, 9.0, 303.0 + extra, true, "PARAMETRIC EQ", Font::condensed(25, 0), Font::condensed(11, 0).bold());
 
     // Bottom buttons.
     let mut button = |c: &mut Canvas, cx: f32, cy: f32, r: f32, tgt: Target, lit: bool| -> State {
@@ -369,45 +392,45 @@ pub fn paint(c: &mut Canvas, look: &Look, vs: &ViewState) -> Vec<Hit> {
         hits.push(Hit { r: rect, t: tgt });
         s
     };
-    let s1 = button(c, 261.0, 324.0, 11.0, Target::Options, false);
-    kit::triangle(c, 262.0, 324.0, 6.0, kit::Dir::Right, keq::ink(s1));
+    let s1 = button(c, 261.0, 324.0 + extra, 11.0, Target::Options, false);
+    kit::triangle(c, 262.0, 324.0 + extra, 6.0, kit::Dir::Right, keq::ink(s1));
     let lin = flag(look.extra, params::F_LIN);
-    let s2 = button(c, 298.0, 328.0, 15.0, Target::Lin, lin);
-    c.text_center(Font::condensed(13, 0).bold(), Rect::new(283.0, 320.0, 30.0, 16.0), keq::ink(s2), "LIN");
+    let s2 = button(c, 298.0, 328.0 + extra, 15.0, Target::Lin, lin);
+    c.text_center(Font::condensed(13, 0).bold(), Rect::new(283.0, 320.0 + extra, 30.0, 16.0), keq::ink(s2), "LIN");
     // Bit 0 = on; the mode (bits 1..8) stays while it is off: 1 HQ+, 0 Legacy or Enhanced (flag 0x02).
     let hq = byte(look.extra, params::HQ_BYTE);
-    let s3 = button(c, 337.0, 328.0, 15.0, Target::Hq, hq & 1 != 0);
+    let s3 = button(c, 337.0, 328.0 + extra, 15.0, Target::Hq, hq & 1 != 0);
     let sub = match hq >> 1 {
         1 => "+",
         0 if flag(look.extra, params::F_HQ_ENHANCED) => "E",
         0 => "L",
         _ => "",
     };
-    let hx = c.text(Font::condensed(13, 0).bold(), 326.0, 319.0, keq::ink(s3), "HQ");
-    c.text(Font::new(8).bold(), 326.0 + hx, 327.0, keq::ink(s3), sub);
+    let hx = c.text(Font::condensed(13, 0).bold(), 326.0, 319.0 + extra, keq::ink(s3), "HQ");
+    c.text(Font::new(8).bold(), 326.0 + hx, 327.0 + extra, keq::ink(s3), sub);
     let tok = byte(look.extra, params::TOKENS_BYTE) != 0;
     // Lit while the tokens show.
-    let s4 = button(c, 377.0, 328.0, 15.0, Target::Tokens, tok);
-    kit::tick(c, Rect::new(370.0, 321.0, 14.0, 14.0), keq::ink(s4));
+    let s4 = button(c, 377.0, 328.0 + extra, 15.0, Target::Tokens, tok);
+    kit::tick(c, Rect::new(370.0, 321.0 + extra, 14.0, 14.0), keq::ink(s4));
     let mon = byte(look.extra, params::MONITOR_BYTE);
     for (i, mx) in [409.0, 424.0, 440.0].into_iter().enumerate() {
-        let s5 = button(c, mx, 322.0, 6.5, Target::Monitor(i as u8), mon == i as u8);
+        let s5 = button(c, mx, 322.0 + extra, 6.5, Target::Monitor(i as u8), mon == i as u8);
         let g = keq::ink(s5);
         match i {
-            0 => c.fill_rect(Rect::new(mx - 2.5, 321.5, 5.0, 1.2), g),
-            1 => c.fill_rect(Rect::new(mx - 0.6, 319.5, 1.2, 5.0), g),
-            _ => c.stroke_circle(mx, 322.0, 2.5, 1.2, g),
+            0 => c.fill_rect(Rect::new(mx - 2.5, 321.5 + extra, 5.0, 1.2), g),
+            1 => c.fill_rect(Rect::new(mx - 0.6, 319.5 + extra, 1.2, 5.0), g),
+            _ => c.stroke_circle(mx, 322.0 + extra, 2.5, 1.2, g),
         }
     }
     let lab = Font::condensed(11, 0).bold();
     let lab_col = Color::rgb(0x8f8f8f);
-    c.text_center(lab, Rect::new(394.0, 333.0, 60.0, 13.0), lab_col, "MONITOR");
-    let s6 = button(c, 467.0, 321.0, 10.0, Target::Store, false);
-    kit::triangle(c, 467.0, 322.0, 6.0, kit::Dir::Down, keq::ink(s6));
-    let s7 = button(c, 491.0, 321.0, 10.0, Target::Flip, false);
-    kit::triangle(c, 491.0, 318.5, 5.0, kit::Dir::Up, keq::ink(s7));
-    kit::triangle(c, 491.0, 324.0, 5.0, kit::Dir::Down, keq::ink(s7));
-    c.text_center(lab, Rect::new(449.0, 333.0, 60.0, 13.0), lab_col, "COMPARE");
+    c.text_center(lab, Rect::new(394.0, 333.0 + extra, 60.0, 13.0), lab_col, "MONITOR");
+    let s6 = button(c, 467.0, 321.0 + extra, 10.0, Target::Store, false);
+    kit::triangle(c, 467.0, 322.0 + extra, 6.0, kit::Dir::Down, keq::ink(s6));
+    let s7 = button(c, 491.0, 321.0 + extra, 10.0, Target::Flip, false);
+    kit::triangle(c, 491.0, 318.5 + extra, 5.0, kit::Dir::Up, keq::ink(s7));
+    kit::triangle(c, 491.0, 324.0 + extra, 5.0, kit::Dir::Down, keq::ink(s7));
+    c.text_center(lab, Rect::new(449.0, 333.0 + extra, 60.0, 13.0), lab_col, "COMPARE");
     hits
 }
 
@@ -483,6 +506,22 @@ fn headphones(c: &mut Canvas, cx: f32, cy: f32, col: Color) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The dock can hide the fader bank: the graph and band tokens stay, every fader / type / FREQ / BW / phones
+    /// hit goes. The window passes `faders: true` and keeps the full editor.
+    #[test]
+    fn the_fader_bank_can_be_hidden() {
+        let extra = params::default_state();
+        let look = Look { s: Settings::default(), extra: &extra, spectrum: None, rate: 48_000.0, faders: false };
+        let mut c = Canvas::new(W, H, 1.0).expect("a canvas");
+        let hits = paint(&mut c, &look, &ViewState::default());
+        assert!(hits.iter().any(|h| h.t == Target::Graph), "the graph stays");
+        assert!(hits.iter().any(|h| matches!(h.t, Target::Token(_))), "the band tokens stay");
+        assert!(
+            hits.iter().all(|h| !matches!(h.t, Target::Fader(_) | Target::TypeTab(_) | Target::Freq(_) | Target::Bw(_) | Target::Phones)),
+            "no fader-bank control is hit when hidden"
+        );
+    }
 
     #[test]
     fn scales_follow_the_measurements() {

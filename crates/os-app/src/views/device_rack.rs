@@ -11,11 +11,11 @@ use os_ui::{Color, Rect, kit};
 
 use crate::app::{Action, State};
 use crate::plugins::Plugins;
-use crate::rack_ui::{EDITOR_TAB, EDITOR_SUBTAB, EDITOR_BANK, EDITOR_PAD, EDITOR_OPEN};
-use crate::device_rack::{self, Device, DeviceKind, RackParam, HEADER_H, RackAct};
+use crate::rack_ui::{DrumMode, EDITOR_TAB, EDITOR_SUBTAB, EDITOR_BANK, EDITOR_PAD, EDITOR_OPEN, EDITOR_EQ_TOKEN, EDITOR_EQ_GRAPH};
+use crate::device_rack::{self, Device, DeviceKind, RackParam, HEADER_H, TILE_HEAD, RackAct};
 use crate::history::ChannelControl;
 use crate::icons::{self, Icon};
-use crate::views::{Ui, fnt};
+use crate::views::{Ui, fnt, FrameInfo};
 
 /// The rack's panel rect in the window: the full width, its height at the bottom edge (`device_rack::height`).
 pub fn panel_rect(s: &State, w: f32, h: f32) -> Rect {
@@ -25,31 +25,54 @@ pub fn panel_rect(s: &State, w: f32, h: f32) -> Rect {
 /// The splitter strip along the panel's top edge (6 px, like the browser's).
 const SPLITTER: f32 = 6.0;
 
-/// Height of the project-modulator row between the rack header and the device headers: a label, eight slots and a
-/// hairline. The row is fixed; only the tile body below it moves.
+/// Height of the project-modulator strip above the rack panel: a label, the slot row and a hairline. It sits in the
+/// workspace above the rack, not inside it, so the device tiles keep the rack's whole body.
 pub(crate) const MOD_H: f32 = 92.0;
 
-/// The row's height for the current state (none while the rack is collapsed).
+/// Height of a slot row, the gap between rows, and the trailing "＋" that asks for another row.
+const MOD_SLOT_H: f32 = 72.0;
+const MOD_ROW_GAP: f32 = 6.0;
+const MOD_ADD_W: f32 = 26.0;
+
+/// The strip's height for the current state: one row, plus another row's worth for each extra row (none while the
+/// rack is collapsed).
 pub(crate) fn mod_row_h(s: &State) -> f32 {
     if s.device_rack_collapsed {
         0.0
     } else {
-        MOD_H
+        MOD_H + (s.modulation.rows() as f32 - 1.0) * (MOD_SLOT_H + MOD_ROW_GAP)
     }
 }
 
-/// The eight slot rects in a row `r` wide, and the add/editor overlays' anchor. The slots shrink to fit a narrow
-/// window rather than overflowing the rack.
+/// The project-modulator slot rects in a strip `r` wide, in reading order (row by row), and the add/editor overlays'
+/// anchor. The slots shrink to fit a narrow window rather than overflowing the rack, and the last one leaves the
+/// column for the "＋" that adds a row.
 pub(crate) fn mod_slots(s: &State, r: Rect) -> Vec<Rect> {
     if s.device_rack_collapsed {
         return Vec::new();
     }
-    let row = Rect::new(r.x, r.y + HEADER_H, r.w, MOD_H);
+    let row = mod_row_rect(s, r);
     let gap = 5.0;
-    let w = ((row.w - 14.0 - gap * 7.0) / 8.0).clamp(46.0, 84.0);
-    let y = row.y + 16.0;
-    let h = (MOD_H - 20.0).max(1.0);
-    (0..8).map(|i| Rect::new(row.x + 7.0 + i as f32 * (w + gap), y, w, h)).collect()
+    let n = os_model::modulation::PROJECT_SLOTS;
+    let w = ((row.w - 14.0 - gap * (n as f32 - 1.0) - MOD_ADD_W - gap) / n as f32).clamp(24.0, 84.0);
+    (0..s.modulation.slots())
+        .map(|i| {
+            let (col, line) = (i % n, i / n);
+            let y = row.y + 16.0 + line as f32 * (MOD_SLOT_H + MOD_ROW_GAP);
+            Rect::new(row.x + 7.0 + col as f32 * (w + gap), y, w, MOD_SLOT_H)
+        })
+        .collect()
+}
+
+/// The "＋" after the last slot of the last row: another row of slots (`ModAct::AddRow`).
+pub(crate) fn mod_add_row_rect(s: &State, r: Rect) -> Option<Rect> {
+    let last = mod_slots(s, r).last().copied()?;
+    Some(Rect::new(last.right() + 5.0, last.y + (last.h - 30.0) / 2.0, MOD_ADD_W, 30.0))
+}
+
+/// The modulator strip's rect, immediately above the rack panel `r` (none while the rack is collapsed).
+pub(crate) fn mod_row_rect(s: &State, r: Rect) -> Rect {
+    Rect::new(r.x, r.y - mod_row_h(s), r.w, mod_row_h(s))
 }
 
 /// Gap between tiles, holding the "+" insert buttons (before the first, between every
@@ -59,8 +82,8 @@ const GAP: f32 = 22.0;
 /// The device tiles over `r` (the panel rect) as (device, tile) pairs, left to right in signal-flow order; the
 /// empty leftmost tile on a MIDI track is the MIDI FX placeholder (§8 is a later milestone).
 pub(crate) fn layout(s: &State, r: Rect) -> Vec<(Device, Rect)> {
-    let top = r.y + HEADER_H + mod_row_h(s);
-    if r.h <= HEADER_H + mod_row_h(s) {
+    let top = r.y + HEADER_H;
+    if r.h <= HEADER_H {
         return Vec::new();
     }
     let body = Rect::new(r.x, top, r.w, (r.bottom() - top).max(0.0));
@@ -95,7 +118,7 @@ fn plugin_name<'a>(s: &'a State, d: &'a Device) -> &'a str {
 /// The chain's content width over a panel `w` wide: every tile plus the gap after it.
 pub(crate) fn content_w(s: &State) -> f32 {
     let r = panel_rect(s, s.screen.0, s.screen.1);
-    let body_h = (r.h - HEADER_H - mod_row_h(s)).max(0.0);
+    let body_h = (r.h - HEADER_H).max(0.0);
     device_rack::rack_chain(s).iter().map(|d| tile_width(s, d, editor_h(body_h)) + GAP).sum()
 }
 
@@ -166,16 +189,16 @@ pub fn device_keys(s: &State) -> Vec<usize> {
 /// the whole tile — or the header would make the editor taller than it really is, and the editor would be drawn
 /// height-limited inside a body-sized image: a column of its background down the tile's right edge.
 fn editor_h(body_h: f32) -> f32 {
-    (body_h - HEADER_H).max(1.0)
+    (body_h - TILE_HEAD).max(1.0)
 }
 
 /// A tile's editor body: what is under its header.
 fn body(tile: Rect) -> Rect {
-    Rect::new(tile.x, tile.y + HEADER_H, tile.w, (tile.h - HEADER_H).max(0.0))
+    Rect::new(tile.x, tile.y + TILE_HEAD, tile.w, (tile.h - TILE_HEAD).max(0.0))
 }
 
 /// Paints the rack panel over `r` (its splitter, header and device tiles).
-pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, r: Rect) {
+pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, r: Rect, f: &FrameInfo) {
     let t = ui.t;
     ui.c.fill_rect(r, t.s(0x1a1d1f));
     // The splitter: a drag on it resizes the rack, a double click gives back the default height.
@@ -299,14 +322,13 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, r: Rect) {
     let mut gx = r.x;
     for (i, (d, tile)) in tiles.iter().enumerate() {
         gap_button(ui, gx, tile.y, slot_after(i), tile.h);
-        tile_paint(ui, s, plugins, i, d.clone(), *tile);
+        tile_paint(ui, s, plugins, i, d.clone(), *tile, f);
         gx = tile.right();
     }
-    gap_button(ui, gx, r.y + HEADER_H + mod_row_h(s), None, tiles.first().map_or(r.h - HEADER_H - mod_row_h(s), |(_, t)| t.h));
+    gap_button(ui, gx, r.y + HEADER_H, None, tiles.first().map_or(r.h - HEADER_H, |(_, t)| t.h));
     drop_highlight(ui, s, &tiles);
     // The modulator row over the device headers, and its editor / menus over everything (the handoff §2).
-    mod_row_paint(ui, s, r);
-    mod_overlays_paint(ui, s, r);
+    mod_row_paint(ui, s, r, f);
 }
 
 /// A "+" gap button at x: opens the device browser for the slot that follows it (`None` = first empty slot).
@@ -320,22 +342,36 @@ fn gap_button(ui: &mut Ui, x: f32, y: f32, slot: Option<u8>, h: f32) {
 
 /// A device tile: a header (name, enable light, wrench, menu) over a body of the device's own controls. A
 /// selected tile's header is brighter: the header bar is clickable and selects (§7).
-fn tile_paint(ui: &mut Ui, s: &State, plugins: &Plugins, i: usize, d: Device, tile: Rect) {
+fn tile_paint(ui: &mut Ui, s: &State, plugins: &Plugins, i: usize, d: Device, tile: Rect, f: &FrameInfo) {
     let t = ui.t;
+    let meridian = t.style.meridian();
     let selected = device_rack::tile_selected(s, i);
     // The tile: a raised surface with a hairline between header and body.
-    ui.c.fill_rect(tile, t.s(0x222629));
+    ui.c.fill_rect(tile, if meridian { t.s(0x14181d) } else { t.s(0x222629) });
     ui.c.stroke_rrect(tile, 0.0, 1.0, t.splitter_dark);
-    let head = Rect::new(tile.x, tile.y, tile.w, HEADER_H);
+    let head = Rect::new(tile.x, tile.y, tile.w, TILE_HEAD);
     // The kind's gradient behind the header's content, veiled so the LED and name stay readable (the pairs are
     // constants in `device_rack` so user theming can rewire them later). The selected tile's veil is lighter,
     // so its bar reads slightly brighter.
     let (top, bottom) = device_rack::header_gradient(d.kind);
-    ui.c.fill_rect_gradient(head, t.s(top), t.s(bottom), 0.0);
-    ui.c.fill_rect(head, os_ui::Color::rgb(0).with_alpha(if selected { 60 } else { 110 }));
-    // A hard kind strip at the left edge: the device's family is readable before the name is.
-    ui.c.fill_rect(Rect::new(tile.x, head.y, 3.0, head.h), t.s(top).shade(-0.12));
+    if meridian {
+        // A flat instrument header: the family is a saturated spine at the left, the rest is ink. Selection is a
+        // brass cap under the header, not a lighter veil.
+        ui.c.fill_rect(head, t.s(0x191e24));
+        ui.c.fill_rect(Rect::new(tile.x, head.y, 4.0, head.h), t.s(top));
+        ui.c.fill_rect(Rect::new(tile.x + 4.0, head.y, 1.0, head.h), t.s(top).shade(-0.25));
+        ui.c.fill_rect(Rect::new(tile.x, head.bottom() - 1.0, tile.w, 1.0), t.s(0x080a0d));
+    } else {
+        ui.c.fill_rect_gradient(head, t.s(top), t.s(bottom), 0.0);
+        ui.c.fill_rect(head, os_ui::Color::rgb(0).with_alpha(if selected { 60 } else { 110 }));
+        // A hard kind strip at the left edge: the device's family is readable before the name is.
+        ui.c.fill_rect(Rect::new(tile.x, head.y, 3.0, head.h), t.s(top).shade(-0.12));
+    }
     if selected {
+        // The header lights up as a whole, not just its lower edge: the accent veil (and outline) is the
+        // selected device's visual indication, the same in every skin.
+        ui.c.fill_rect(head, t.accent.with_alpha(if meridian { 30 } else { 42 }));
+        ui.c.stroke_rrect(head, 0.0, 1.0, t.accent.with_alpha(190));
         ui.c.fill_rect(Rect::new(tile.x, head.bottom() - 2.0, tile.w, 2.0), t.accent);
     }
     ui.c.fill_rect(
@@ -346,6 +382,10 @@ fn tile_paint(ui: &mut Ui, s: &State, plugins: &Plugins, i: usize, d: Device, ti
     // still drags left/right to reorder (FX tiles swap mixer slots). The LED and buttons below win their clicks.
     if d.key.is_some() || matches!(d.kind, DeviceKind::Container { .. }) {
         ui.hit(head, Action::DeviceRack(RackAct::SelectTile(i)), if selected { "Selected: click another tile to select it, Shift+click to extend the selection" } else { "Click to select this device, Shift+click to extend the selection; drag to reorder" });
+        // Anywhere in the tile that is not a control selects it too (the controls' own hits are registered
+        // later and win over this one).
+        let body = Rect::new(tile.x, head.bottom(), tile.w, (tile.bottom() - head.bottom()).max(0.0));
+        ui.hit(body, Action::DeviceRack(RackAct::FocusTile(i)), if selected { "Selected device" } else { "Click to select this device" });
     }
     // The enable light: a click switches the device (the channel or the mixer slot).
     let (cx, cy) = (tile.x + 12.0, head.cy());
@@ -369,22 +409,19 @@ fn tile_paint(ui: &mut Ui, s: &State, plugins: &Plugins, i: usize, d: Device, ti
     // gives up the room it takes.
     let flip = Rect::new(popout.x - 22.0, cy - 9.5, 19.0, 19.0);
     let drum = d.key.is_some_and(|_| matches!(crate::rack_ui::ui(plugin_name(s, &d)), Some(crate::rack_ui::Ui::Drum)));
-    // The Trio's pages are the tile's to show, its editor being hosted here: three buttons beside the pop-out, where
-    // the editor's own strip row keeps them in its window.
-    let trio = d.key.is_some_and(|_| matches!(crate::rack_ui::ui(plugin_name(s, &d)), Some(crate::rack_ui::Ui::Trio)));
-    // The button cluster's left edge — the trio's pages, the drum's flip, or the pop-out alone — and the channel's
-    // knobs in front of it, which the name gives room to (only an instrument has a channel behind its tile).
-    let cluster = tile.right()
-        - if drum {
-            66.0
-        } else if trio {
-            110.0
-        } else {
-            44.0
-        };
+    // The EQ's dock hides its fader bank by default; its header button reveals it in place.
+    let eq = d.key.is_some_and(|_| matches!(crate::rack_ui::ui(plugin_name(s, &d)), Some(crate::rack_ui::Ui::Eq)));
+    // The button cluster's left edge — the drum's flip or the pop-out alone — and the channel's knobs in front of it,
+    // which the name gives room to (only an instrument has a channel behind its tile). A docked editor keeps its own
+    // page strip in the body (the Trio and Sampler both do), so the tile adds no page buttons here.
+    let cluster = tile.right() - if drum { 66.0 } else { 44.0 } - if eq { 56.0 } else { 0.0 };
     let knobs = matches!(d.kind, DeviceKind::Instrument(_)).then(|| cluster - 8.0 - KNOB_STEP * 3.0);
     let room = knobs.unwrap_or(cluster) - 6.0 - (tile.x + 24.0);
-    ui.c.text_clip(fnt(14.0), tile.x + 24.0, cy - 8.0, room.max(12.0), t.text, &d.name);
+    if meridian {
+        ui.c.text_clip(os_ui::Font::condensed(12, 4).bold(), tile.x + 28.0, cy - 8.0, room.max(12.0), t.text, &d.name.to_uppercase());
+    } else {
+        ui.c.text_clip(fnt(14.0), tile.x + 24.0, cy - 8.0, room.max(12.0), t.text, &d.name);
+    }
     // The pop-out arrow: pop the device's editor out to its own floating window (or dock it back, lit
     // while it is out). An out-arrow, not a wrench — the wrench is the device wrapper's own symbol
     // (the plugin window's Misc tab), so the tile's button says what it does instead.
@@ -414,29 +451,6 @@ fn tile_paint(ui: &mut Ui, s: &State, plugins: &Plugins, i: usize, d: Device, ti
         _ => {}
     }
     // The drum machine's flip: its pads, or the other half of its UI (the cards), in place — no pop-out.
-    if trio {
-        let key = d.key.unwrap();
-        let tab = match s.rack_ui_cache.borrow().view(&key) {
-            Some(crate::rack_ui::TileView::Trio(v)) => v.tab,
-            _ => 0,
-        };
-        // The same three pages, in the editor's order: oscillators, envelopes, the custom shape's sample.
-        for (n, icon, hint) in [
-            (0u8, Icon::Plug, "Oscillators"),
-            (1, Icon::Timeline, "Envelopes, LFOs and filter"),
-            (2, Icon::Wave, "Custom shape sample"),
-        ] {
-            let r = Rect::new(popout.x - 22.0 * f32::from(3 - n), cy - 9.5, 19.0, 19.0);
-            header_icon_button(
-                ui,
-                r,
-                icon,
-                tab == n,
-                Action::DeviceRack(RackAct::EditorTab { key, n }),
-                hint,
-            );
-        }
-    }
     if drum {
         let key = d.key.unwrap();
         let flipped = matches!(
@@ -461,11 +475,29 @@ fn tile_paint(ui: &mut Ui, s: &State, plugins: &Plugins, i: usize, d: Device, ti
     {
         ui.c.text(fnt(13.0), menu.x, menu.y, t.text, "v");
     }
+    // The EQ's fader-bank drawer: hidden in the dock unless this is on. The pop-out always shows the full editor.
+    if eq {
+        let key = d.key.unwrap();
+        let on = matches!(s.rack_ui_cache.borrow().view(&key), Some(crate::rack_ui::TileView::Eq { faders: true }));
+        let b = Rect::new(tile.right() - 100.0, cy - 8.0, 52.0, 16.0);
+        let hov = ui.hit(
+            b,
+            Action::DeviceRack(RackAct::EditorFaders { key }),
+            if on { "Hide the EQ's fader bank" } else { "Show the EQ's fader bank" },
+        );
+        ui.c.fill_rrect(b, 3.0, if on { t.accent.with_alpha(150) } else if hov { t.s(0x333a3e) } else { t.s(0x252a2d) });
+        ui.c.text_center(fnt(9.0), b, if on { t.glyph } else { t.text_dim }, "FADERS");
+    }
     // The channel's PAN / VOL / PITCH, in the header beside the name.
     if let (DeviceKind::Instrument(row), Some(left)) = (d.kind, knobs) {
         channel_knobs(ui, s, row, left, cy);
     }
     let body = body(tile);
+    if meridian {
+        ui.c.fill_rect(body, t.s(0x0d1013));
+        ui.c.stroke_rrect(body.inset(1.0), 0.0, 1.0, t.toolbar_line);
+        ui.c.fill_rect(Rect::new(body.x + 1.0, body.y + 1.0, body.w - 2.0, 1.0), t.toolbar_edge.with_alpha(90));
+    }
     // The empty instrument slot: the whole tile opens the device browser (the instrument section of it).
     if d.kind == DeviceKind::NoInstrument {
         ui.c.fill_rect(body, t.s(0x131718));
@@ -482,7 +514,7 @@ fn tile_paint(ui: &mut Ui, s: &State, plugins: &Plugins, i: usize, d: Device, ti
     }
     // The device's own controls, drawn here rather than by an embedded native window (see
     // `device_rack::sync_embed`): the same names, sections and value texts its editor shows.
-    controls(ui, s, plugins, &d, body);
+    controls(ui, s, plugins, &d, body, f);
 }
 
 /// A container tile's body: the members in chain order ("1. Lemon Limiter"), and the empty container's hint.
@@ -516,7 +548,7 @@ fn container_body(ui: &mut Ui, s: &State, body: Rect, t: u16, k: u8) {
 /// down sets it through the channel's undo-aware path. Each knob carries its own word (VOL, PAN) or its value (the
 /// pitch's semitones) in its own colour, so the row needs no caption. Those words and colours are a stopgap — user-set
 /// labels and colours are on `todo.md`.
-pub(crate) const KNOB_STEP: f32 = 34.0;
+pub(crate) const KNOB_STEP: f32 = 28.0;
 
 fn channel_knobs(ui: &mut Ui, s: &State, row: usize, left: f32, cy: f32) {
     let Some(ch) = s.project.channels.get(row) else { return };
@@ -538,7 +570,7 @@ fn channel_knobs(ui: &mut Ui, s: &State, row: usize, left: f32, cy: f32) {
             Action::DeviceRack(RackAct::ChannelKnob { row, which, v }),
             format!("{label}: drag up / down to set it, double click to reset it"),
         );
-        header_knob(ui, cell.cx(), cy, 13.0, v.clamp(0.0, 1.0) as f32, bipolar, Color::rgb(accent), &text, font, hov);
+        header_knob(ui, cell.cx(), cy, 12.0, v.clamp(0.0, 1.0) as f32, bipolar, Color::rgb(accent), &text, font, hov);
     }
 }
 
@@ -644,7 +676,7 @@ pub(crate) fn param_dial(s: &State, key: usize, id: u32) -> Option<Rect> {
 /// A tile's body: the device's own controls, as its editor shows them — a section header per parameter group, then
 /// a cell per parameter (its name, a dial or a switch, and the plugin's own value text). More controls than the
 /// body fits scroll with the wheel (the wheel's `scroll_max` clamp); a bar on the right edge says so.
-fn controls(ui: &mut Ui, s: &State, plugins: &Plugins, d: &Device, body: Rect) {
+fn controls(ui: &mut Ui, s: &State, plugins: &Plugins, d: &Device, body: Rect, f: &FrameInfo) {
     let t = ui.t;
     ui.c.fill_rect(body, t.s(0x131718));
     ui.c.stroke_rrect(body.inset(1.0), 2.0, 1.0, t.splitter_dark);
@@ -655,7 +687,7 @@ fn controls(ui: &mut Ui, s: &State, plugins: &Plugins, d: &Device, body: Rect) {
     // The plugin's own editor, drawn by the app: the same panels, dials, switches and wordmark its window shows
     // (`crate::rack_ui`). A plugin without a shared editor (an instrument, a third-party plugin) keeps the grid.
     if let Some(editor) = crate::rack_ui::ui(plugin_name(s, d)) {
-        editor_body(ui, s, plugins, key, editor, body);
+        editor_body(ui, s, plugins, key, editor, body, f);
         return;
     }
     let params: &[RackParam] = s.device_rack_params.get(&key).map_or(&[], |v| v.as_slice());
@@ -681,7 +713,7 @@ fn controls(ui: &mut Ui, s: &State, plugins: &Plugins, d: &Device, body: Rect) {
         if cell.bottom() <= body.y || cell.y >= body.bottom() {
             continue;
         }
-        cell_paint(ui, s, key, *i, &params[*i], *cell, body);
+        cell_paint(ui, s, key, &params[*i], *cell, body);
     }
     // The scroll bar: how much of the control list the body is showing, and where.
     if max > 0.0 {
@@ -697,7 +729,196 @@ fn controls(ui: &mut Ui, s: &State, plugins: &Plugins, d: &Device, body: Rect) {
 /// A tile body showing the device's own editor: the plugin's UI (`crate::rack_ui`) filling the body — stretched to
 /// the space the tile has, so no bars sit beside it — with every dial, switch and selector of it live on the hosted
 /// parameter it names.
-fn editor_body(ui: &mut Ui, s: &State, plugins: &Plugins, key: usize, editor: crate::rack_ui::Ui, body: Rect) {
+fn editor_body(ui: &mut Ui, s: &State, plugins: &Plugins, key: usize, editor: crate::rack_ui::Ui, body: Rect, f: &FrameInfo) {
+    if matches!(editor, crate::rack_ui::Ui::Drum) {
+        drum_editor_body(ui, s, plugins, key, body, f);
+        return;
+    }
+    editor_image_body(ui, s, plugins, key, editor, body);
+}
+
+/// The drum instrument's interface: a STEP / PADS switch over either the real pattern grid or the hosted pad grid.
+/// Both edit and play the same hosted sampler and the same project patterns, so switching never touches playback.
+fn drum_editor_body(ui: &mut Ui, s: &State, plugins: &Plugins, key: usize, body: Rect, f: &FrameInfo) {
+    s.rack_ui_cache.borrow_mut().ensure(&key, crate::rack_ui::Ui::Drum);
+    let t = ui.t;
+    let (mode, bank, lane, page) = match s.rack_ui_cache.borrow().view(&key) {
+        Some(crate::rack_ui::TileView::Drum { mode, view, lane, page, .. }) => (*mode, view.bank, *lane, *page),
+        _ => (DrumMode::Step, 0, 0, 0),
+    };
+    // The interface switch is always the first row: the two views are one instrument, never two devices.
+    let bar = Rect::new(body.x + 4.0, body.y + 3.0, (body.w - 8.0).max(1.0), 18.0);
+    let mut x = bar.x;
+    for (label, m) in [("STEP", DrumMode::Step), ("PADS", DrumMode::Pads)] {
+        let b = Rect::new(x, bar.y, 52.0, 18.0);
+        let on = mode == m;
+        let hov = ui.hit(
+            b,
+            Action::DeviceRack(RackAct::EditorMode { key, mode: m }),
+            if m == DrumMode::Step { "Program the pattern on the step grid" } else { "Play the same lanes on performance pads" },
+        );
+        ui.c.fill_rrect(b, 2.0, if on { t.accent } else if hov { t.s(0x2b3134) } else { t.s(0x202628) });
+        ui.c.text_center(fnt(10.0), b, if on { t.s(0x0b0f10) } else { t.text_dim }, label);
+        x += 56.0;
+    }
+    // The bank is the same in both interfaces: sixteen lanes at a time of the drum instrument's 32.
+    let bk = Rect::new(x + 4.0, bar.y, 22.0, 18.0);
+    let bh = ui.hit(bk, Action::DeviceRack(RackAct::EditorBank { key, n: (1 - bank.min(1)) as u8 }), "Switch pad bank A / B");
+    ui.c.fill_rrect(bk, 2.0, if bh { t.s(0x2b3134) } else { t.s(0x202628) });
+    ui.c.text_center(fnt(10.0), bk, t.text, if bank == 0 { "A" } else { "B" });
+    let rest = Rect::new(body.x, bar.bottom() + 2.0, body.w, (body.bottom() - bar.bottom() - 2.0).max(1.0));
+    if mode == DrumMode::Step {
+        drum_step_body(ui, s, plugins, key, rest, f, bank, lane, page);
+    } else {
+        editor_image_body(ui, s, plugins, key, crate::rack_ui::Ui::Drum, rest);
+    }
+}
+
+/// Mode A: the lane panel and the pattern grid. Every cell is a real note of the current project pattern, keyed to the
+/// pad's MIDI key, so one clip launches the whole pattern and no lane becomes a track or mixer channel.
+fn drum_step_body(ui: &mut Ui, s: &State, plugins: &Plugins, key: usize, body: Rect, f: &FrameInfo, bank: usize, lane: usize, page: u32) {
+    let t = ui.t;
+    ui.c.fill_rect(body, t.s(0x101416));
+    let lane_w = (body.w * 0.31).clamp(84.0, 148.0);
+    let step_w = ((body.w - lane_w - 8.0) / 16.0).max(5.0);
+    // Pattern row: navigation, identity, length in bars, page and clear. The pattern is the project's, as every clip
+    // references it; the instrument's rows are the notes on its own channel.
+    let row = Rect::new(body.x + 4.0, body.y + 2.0, (body.w - 8.0).max(1.0), 20.0);
+    let mut x = row.x;
+    for (label, d) in [("‹", -1), ("›", 1)] {
+        let b = Rect::new(x, row.y, 18.0, 18.0);
+        let hov = ui.hit(b, Action::DeviceRack(RackAct::EditorPattern { d }), "Previous / next pattern");
+        ui.c.fill_rrect(b, 2.0, if hov { t.s(0x343b3f) } else { t.s(0x202628) });
+        ui.c.text_center(fnt(12.0), b, t.text, label);
+        x += 20.0;
+    }
+    let name = format!("P{}  {}", s.pattern, crate::patterns::name_of(s, s.pattern));
+    let name_w = (row.right() - x - 216.0).max(20.0);
+    ui.c.text_clip(fnt(11.0), x + 4.0, row.y + 3.0, name_w, t.text, &name);
+    // Length in bars (`Auto` when no explicit length); the step grid itself supports up to 32 bars.
+    let bars = crate::rack::explicit_len(s).map_or(0, |n| n.div_ceil(crate::rack::bar_steps(s).max(1)));
+    let len_txt = if bars == 0 { "Auto".to_string() } else { format!("{bars} bar{}", if bars == 1 { "" } else { "s" }) };
+    let mut rx = row.right() - 212.0;
+    for (label, d) in [("−", -1), ("+", 1)] {
+        let b = Rect::new(rx, row.y, 18.0, 18.0);
+        let hv = ui.hit(b, Action::DeviceRack(RackAct::EditorLength { bars: bars as i32 + d }), "Pattern length in bars (0 = Auto)");
+        ui.c.fill_rrect(b, 2.0, if hv { t.s(0x343b3f) } else { t.s(0x202628) });
+        ui.c.text_center(fnt(12.0), b, t.text, label);
+        rx += 20.0;
+    }
+    ui.c.text_clip(fnt(10.0), rx, row.y + 4.0, 48.0, t.text_dim, &len_txt);
+    let pages = crate::rack::pattern_steps(s).div_ceil(16).max(1);
+    let p = page.min(pages.saturating_sub(1));
+    rx = row.right() - 126.0;
+    ui.c.text(fnt(9.0), rx, row.y + 4.0, t.text_dim, &format!("{}/{}", p + 1, pages));
+    rx = row.right() - 102.0;
+    for (label, np, ok) in [("‹", p.saturating_sub(1), p > 0), ("›", (p + 1).min(pages - 1), p + 1 < pages)] {
+        let b = Rect::new(rx, row.y, 15.0, 18.0);
+        let hv = ok && ui.hit(b, Action::DeviceRack(RackAct::EditorPage { key, page: np }), "Previous / next 16 steps");
+        ui.c.fill_rrect(b, 2.0, if hv { t.s(0x343b3f) } else { t.s(0x202628) });
+        ui.c.text_center(fnt(10.0), b, if ok { t.text } else { t.text_faint }, label);
+        rx += 16.0;
+    }
+    // Duplicate the project pattern, so a beat and its fill stay independent; Clear touches this instrument's channel
+    // only, leaving other channels' notes in the pattern.
+    let dup = Rect::new(row.right() - 70.0, row.y, 30.0, 18.0);
+    let dh = ui.hit(dup, Action::DeviceRack(RackAct::EditorDuplicate), "Duplicate the current pattern");
+    ui.c.fill_rrect(dup, 2.0, if dh { t.s(0x343b3f) } else { t.s(0x202628) });
+    ui.c.text_center(fnt(8.5), dup, t.text_dim, "DUP");
+    let clear = Rect::new(row.right() - 38.0, row.y, 38.0, 18.0);
+    let ch = ui.hit(clear, Action::DeviceRack(RackAct::EditorStepClear { key }), "Clear this instrument's steps in the current pattern");
+    ui.c.fill_rrect(clear, 2.0, if ch { t.s(0x4a3030) } else { t.s(0x2a2020) });
+    ui.c.text_center(fnt(9.0), clear, if ch { t.text } else { t.text_dim }, "CLEAR");
+    // Step numbers and beat / bar divisions.
+    let grid = Rect::new(body.x + 4.0, row.bottom() + 3.0, (body.w - 8.0).max(1.0), (body.bottom() - row.bottom() - 5.0).max(1.0));
+    let head_h = 12.0;
+    let cols_x = grid.x + lane_w;
+    let first = p * 16;
+    let total = crate::rack::pattern_steps(s).max(1);
+    let per = crate::rack::per_step(s);
+    let beat = crate::rack::beat_steps(s).max(1);
+    let cur = if f.playing {
+        let tick = if f.song { crate::piano::pattern_tick_in_song(s, f.tick) } else { Some(f.tick) };
+        tick.map(|t| ((t.max(0.0) as u32) / per) % total)
+    } else {
+        None
+    };
+    for i in 0..16u32 {
+        let step = first + i;
+        let x0 = cols_x + i as f32 * step_w;
+        let bg = if step >= total { t.s(0x171b1d) } else if (step / beat) % 2 == 0 { t.s(0x1b2123) } else { t.s(0x161b1d) };
+        ui.c.fill_rect(Rect::new(x0, grid.y, step_w, grid.h), bg);
+        if step < total {
+            ui.c.text_center(fnt(8.0), Rect::new(x0, grid.y, step_w, head_h), t.text_faint, &(step + 1).to_string());
+        }
+        if i % beat == 0 {
+            ui.c.fill_rect(Rect::new(x0, grid.y, 1.0, grid.h), t.s(0x3a4448));
+        }
+    }
+    // The hosted sampler's pads are the lane definitions. They are read from its live saved state, the same one the
+    // pads interface draws, so a reassigned key is the same row in both views.
+    let lanes = crate::rack_ui::drum_state(plugins, key).pads();
+    let rows = 16usize;
+    let row_h = ((grid.h - head_h) / rows as f32).max(6.0);
+    let channel = crate::device_rack::instrument_row(s, key).and_then(|r| s.project.channels.get(r)).map(|c| c.index);
+    for row_i in 0..rows {
+        let pad_i = bank * 16 + row_i;
+        let pad = lanes.get(pad_i);
+        let y = grid.y + head_h + row_i as f32 * row_h;
+        let selected = pad_i == lane;
+        if selected {
+            ui.c.fill_rect(Rect::new(grid.x, y, grid.w, row_h), t.accent.with_alpha(18));
+        }
+        let label = Rect::new(grid.x, y, lane_w - 2.0, row_h);
+        let lh = ui.hit(label, Action::DeviceRack(RackAct::EditorLane { key, lane: pad_i }), "Select this lane; its steps are the same in both interfaces");
+        if lh || selected {
+            ui.c.fill_rect(label, t.s(0x25302c));
+        }
+        let (nm, ky) = pad.map_or((format!("Pad {}", pad_i + 1), 60), |p| {
+            (if p.name.is_empty() { format!("Pad {}", pad_i + 1) } else { p.name.clone() }, p.key)
+        });
+        ui.c.text_clip(fnt(9.5), label.x + 4.0, y + (row_h - 11.0) * 0.5, label.w - 30.0, if selected { t.text } else { t.text_dim }, &nm);
+        ui.c.text(fnt(8.0), label.right() - 24.0, y + (row_h - 9.0) * 0.5, t.text_faint, &ky.to_string());
+        if row_i + 1 < rows {
+            ui.c.fill_rect(Rect::new(grid.x, y + row_h, grid.w, 1.0), t.s(0x101416));
+        }
+        let Some(ch) = channel else { continue };
+        let pad_key = ky.clamp(0, 127) as u16;
+        for i in 0..16u32 {
+            let step = first + i;
+            if step >= total {
+                continue;
+            }
+            let x0 = cols_x + i as f32 * step_w;
+            let on = crate::rack::drum_step_on(s, ch, pad_key, step);
+            let cell = Rect::new(x0 + 1.0, y + 1.0, (step_w - 2.0).max(1.0), (row_h - 2.0).max(1.0));
+            let hv = ui.hit(
+                cell,
+                Action::DeviceRack(RackAct::EditorStep { key, lane: pad_i, step, on: !on }),
+                if on { "Turn this step off" } else { "Turn this step on" },
+            );
+            let fill = if on {
+                if selected { t.accent } else { t.accent.with_alpha(205) }
+            } else if hv {
+                t.s(0x394347)
+            } else {
+                t.s(0x252c2f)
+            };
+            ui.c.fill_rrect(cell, 1.5, fill);
+            if on {
+                ui.c.fill_rect(Rect::new(cell.x + 1.0, cell.y + 1.0, (cell.w - 2.0).max(1.0), 1.0), t.s(0xd8ff9a));
+            }
+        }
+    }
+    // The playhead: one clear column, drawn over the cells, not a second clock.
+    if let Some(k) = cur.filter(|k| (*k >= first) && (*k < first + 16)) {
+        let x0 = cols_x + (k - first) as f32 * step_w;
+        ui.c.fill_rect(Rect::new(x0, grid.y + head_h, step_w, grid.h - head_h), t.s(0x00d5c0).with_alpha(34));
+        ui.c.fill_rect(Rect::new(x0, grid.y + head_h, step_w, 2.0), t.s(0x00d5c0));
+    }
+}
+
+fn editor_image_body(ui: &mut Ui, s: &State, plugins: &Plugins, key: usize, editor: crate::rack_ui::Ui, body: Rect) {
     let t = ui.t;
     let params: &[crate::device_rack::RackParam] = s.device_rack_params.get(&key).map_or(&[], |v| v.as_slice());
     let (ew, eh) = editor.size();
@@ -728,7 +949,7 @@ fn editor_body(ui: &mut Ui, s: &State, plugins: &Plugins, key: usize, editor: cr
     for (hr, id, v) in &img.hits {
         let cell = Rect::new(r.x + hr.x * kx, r.y + hr.y * ky, (hr.w * kx).max(2.0), (hr.h * ky).max(2.0));
         if let Some(index) = params.iter().position(|p| p.id == *id) {
-            if let Some(target) = crate::params::target_of(s, key, index) {
+            if let Some(target) = crate::params::target_of_id(s, key, *id) {
                 if !crate::modulation::routings_on(s, target).is_empty() {
                     driven.push((cell, target, params[index].value.clamp(0.0, 1.0) as f32));
                 }
@@ -739,6 +960,10 @@ fn editor_body(ui: &mut Ui, s: &State, plugins: &Plugins, key: usize, editor: cr
             RackAct::EditorTab { key, n }
         } else if *id == EDITOR_SUBTAB {
             RackAct::EditorSubTab { key, n }
+        } else if *id == EDITOR_EQ_TOKEN {
+            RackAct::EditorEqToken { key, band: n as usize }
+        } else if *id == EDITOR_EQ_GRAPH {
+            RackAct::EditorEqGraph { key }
         } else if *id == EDITOR_BANK {
             RackAct::EditorBank { key, n }
         } else if *id == EDITOR_PAD {
@@ -752,8 +977,10 @@ fn editor_body(ui: &mut Ui, s: &State, plugins: &Plugins, key: usize, editor: cr
                 None => RackAct::ParamSet { key, id: *id, v: p.map_or(0.0, |p| p.value) },
             }
         };
-        let hint = if matches!(*id, EDITOR_TAB | EDITOR_SUBTAB | EDITOR_BANK | EDITOR_PAD | EDITOR_OPEN) {
+        let hint = if matches!(*id, EDITOR_TAB | EDITOR_SUBTAB | EDITOR_BANK | EDITOR_PAD | EDITOR_OPEN | EDITOR_EQ_GRAPH) {
             String::new()
+        } else if *id == EDITOR_EQ_TOKEN {
+            format!("Drag band {} to set its frequency and gain", n + 1)
         } else {
             let p = params.iter().find(|p| p.id == *id);
             p.map_or(String::new(), |p| p.text.clone())
@@ -774,18 +1001,21 @@ fn editor_body(ui: &mut Ui, s: &State, plugins: &Plugins, key: usize, editor: cr
 }
 
 /// One control cell: its name, a dial (or a switch for a two-state parameter) and the plugin's own value text.
-fn cell_paint(ui: &mut Ui, s: &State, key: usize, index: usize, p: &RackParam, cell: Rect, body: Rect) {
+fn cell_paint(ui: &mut Ui, s: &State, key: usize, p: &RackParam, cell: Rect, body: Rect) {
     let t = ui.t;
     let cx = cell.cx();
     // Routing mode tints every control project modulation can reach (the handoff §4.1). This is the same predicate
     // that decides whether the drag assigns, so a tint never lies.
-    let target = crate::params::target_of(s, key, index);
+    let target = crate::params::target_of_id(s, key, p.id);
     let eligible = s.mod_routing.is_some() && target.is_some_and(|t| crate::modulation::is_modulatable(s, t));
+    // The tint is the colour of the modulator being routed (its tile's own colour), not the theme's, so the control
+    // you are about to drive matches the slot you picked: an LFO, a random or a follower each read as themselves.
+    let ink = s.mod_routing.and_then(|id| s.modulation.get(id)).map_or(t.modulation, |m| mod_accent(t.modulation, &m.source));
     if eligible {
-        ui.c.fill_rrect(cell, 2.0, ui.t.modulation.with_alpha(30));
-        ui.c.stroke_rrect(cell, 2.0, 1.0, ui.t.modulation.with_alpha(110));
+        ui.c.fill_rrect(cell, 2.0, ink.with_alpha(30));
+        ui.c.stroke_rrect(cell, 2.0, 1.0, ink.with_alpha(110));
     }
-    ui.c.text_clip(fnt(11.0), cell.x + 2.0, cell.y + 1.0, CELL_W - 4.0, if eligible { Color::rgb(0x9ff5ea) } else { t.text_dim }, &p.name);
+    ui.c.text_clip(fnt(11.0), cell.x + 2.0, cell.y + 1.0, CELL_W - 4.0, if eligible { ink } else { t.text_dim }, &p.name);
     // Clamped to the body like the paint: a row the body's top edge cuts through does not take the header's clicks.
     let hit = Rect::new(cell.x + 4.0, cell.y + 18.0, CELL_W - 8.0, CELL_H - 20.0).intersect(&body);
     // A switch flips on the press; a dial starts at its value and follows a vertical drag (the one set path,
@@ -827,11 +1057,16 @@ fn cell_paint(ui: &mut Ui, s: &State, key: usize, index: usize, p: &RackParam, c
 const ARC_START: f32 = 2.356_194_5;
 const ARC_SWEEP: f32 = 4.712_389;
 
-/// One assignment's ink, by its place in the list: the first is warm, the next cool, so two sources on one control
-/// stay apart.
-fn mod_ink(base: Color, n: usize, enabled: bool) -> Color {
-    const INK: [u8; 3] = [255, 220, 200];
-    base.with_alpha(if enabled { INK[n % INK.len()] } else { 70 })
+/// One assignment's ink: the modulator's own colour (`mod_accent`, the one its tile, its plot and its patch point
+/// carry), with the second and third sources on one control a little paler so two arcs stay apart.
+fn mod_ink(colour: Color, n: usize, enabled: bool) -> Color {
+    const ALPHA: [u8; 3] = [255, 220, 200];
+    colour.with_alpha(if enabled { ALPHA[n % ALPHA.len()] } else { 70 })
+}
+
+/// A modulator's ink by id, from its source: what routing mode's tint and every arc is drawn in.
+fn mod_colour(s: &State, base: Color, id: os_model::modulation::ModulatorId) -> Color {
+    s.modulation.get(id).map_or(base, |m| mod_accent(base, &m.source))
 }
 
 /// The arcs a control's assignments draw round a knob (`r0` is the first arc's radius): one per source, from the
@@ -846,7 +1081,7 @@ pub(crate) fn mod_arcs(ui: &mut Ui, s: &State, target: u32, cx: f32, cy: f32, r0
         let r = r0 + n as f32 * 2.5;
         let a0 = ARC_START + base * ARC_SWEEP;
         let a1 = ARC_START + (base + depth).clamp(-1.5, 2.5) * ARC_SWEEP;
-        let c = mod_ink(ui.t.modulation, n, *enabled);
+        let c = mod_ink(mod_colour(s, ui.t.modulation, *id), n, *enabled);
         ui.c.arc(cx, cy, r, a0.min(a1), (a1 - a0).abs(), 2.0, c);
         // The endpoint handle: drag up / down for more or less depth on this one source.
         let (hx, hy) = (cx + r * a1.cos(), cy + r * a1.sin());
@@ -876,7 +1111,7 @@ pub(crate) fn mod_fader(ui: &mut Ui, s: &State, target: u32, x: f32, base: f32, 
     let y0 = y_at(base);
     for (n, (id, depth, enabled)) in routings.iter().enumerate() {
         let y1 = y_at(base + depth);
-        let c = mod_ink(ui.t.modulation, n, *enabled);
+        let c = mod_ink(mod_colour(s, ui.t.modulation, *id), n, *enabled);
         let xx = x + 4.0 + n as f32 * 2.5;
         ui.c.line(xx, y0, xx, y1, 2.0, c);
         let hr = Rect::new(xx - 4.0, y1 - 4.0, 8.0, 8.0);
@@ -961,25 +1196,32 @@ fn route_flash() -> u8 {
     (140.0 + 115.0 * (0.5 + 0.5 * phase.sin())) as u8
 }
 
-/// The eight project-modulator slots over the device headers. They are project state, so every track shows the same
-/// eight; only the devices below them change with the selection.
-pub(crate) fn mod_row_paint(ui: &mut Ui, s: &State, r: Rect) {
+/// The project-modulator slots in the strip above the rack panel. They are project state, so every track shows the
+/// same slots; only the devices below them change with the selection.
+pub(crate) fn mod_row_paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
     if s.device_rack_collapsed {
         return;
     }
     let t = ui.t;
-    let row = Rect::new(r.x, r.y + HEADER_H, r.w, MOD_H);
+    let row = mod_row_rect(s, r);
     if row.h <= 0.0 {
         return;
     }
     ui.c.fill_rect(row, t.s(0x15181a));
     ui.c.fill_rect(Rect::new(row.x, row.bottom() - 1.0, row.w, 1.0), t.splitter_dark);
     ui.c.text(fnt(10.5), row.x + 8.0, row.y + 2.0, t.text_dim, "PROJECT MODULATORS");
-    if s.modulation.modulators.is_empty() {
+    // Toggle modulator rack visibility button (click to collapse/expand the modulator row).
+    let vis_rect = Rect::new(row.right() - 28.0, row.y + 4.0, 20.0, 16.0);
+    let vis_hov = ui.hit(vis_rect, Action::ModVisibility, "Toggle modulator rack visibility");
+    let vis_face = if s.device_rack_collapsed { t.s(0x3a4046) } else { t.s(0x2a3137) };
+    ui.c.fill_rrect(vis_rect, 2.0, vis_face);
+    ui.c.stroke_rrect(vis_rect, 2.0, 1.0, if vis_hov { t.glyph } else { t.splitter_dark });
+    ui.c.text_center(fnt(10.0), vis_rect, if s.device_rack_collapsed { t.glyph } else { t.s(0x1b1f21) }, "◉");
+    if s.device_rack_collapsed {
         ui.c.text(fnt(10.0), row.x + 138.0, row.y + 2.0, t.text_faint, "click a + to add an LFO, Random or Audio Follower");
     }
     // The plots follow the snapshot; sampling once a frame at ~30 Hz is what the handoff asks for.
-    s.mod_hist.borrow_mut().sample(s);
+    s.mod_hist.borrow_mut().sample(s, f.playing, f.tempo);
     ui.c.push_clip(row);
     for (i, slot) in mod_slots(s, r).into_iter().enumerate() {
         if slot.x + slot.w > row.right() - 2.0 {
@@ -987,39 +1229,46 @@ pub(crate) fn mod_row_paint(ui: &mut Ui, s: &State, r: Rect) {
         }
         match s.modulation.modulator_at_slot(i as u8) {
             Some(m) => mod_slot_paint(ui, s, slot, i as u8, m),
-            None => mod_empty_slot(ui, slot, i as u8),
+            None => mod_empty_slot(ui, s, slot, i as u8),
         }
+    }
+    if let Some(plus) = mod_add_row_rect(s, r).filter(|p| p.right() <= row.right() - 2.0) {
+        mod_add_row_button(ui, s, plus);
     }
     ui.c.pop_clip();
 }
 
-/// An occupied slot: its name, a live scrolling plot of its actual output, its rate, and the patch-point button.
+/// The colour a modulator's kind uses: the themed modulation accent for an LFO, a green-yellow random and a violet
+/// follower so the three read apart at a glance.
+pub(crate) fn mod_accent(base: Color, source: &os_model::modulation::ModSource) -> Color {
+    match source {
+        os_model::modulation::ModSource::Random(_) => Color::rgb(0xc6ff53),
+        os_model::modulation::ModSource::AudioFollower(_) => Color::rgb(0xae65ff),
+        _ => base,
+    }
+}
+
+/// An occupied slot: a live scrolling plot of its output, its rate, and the patch-point button, in its kind's colour.
 fn mod_slot_paint(ui: &mut Ui, s: &State, r: Rect, slot: u8, m: &os_model::modulation::Modulator) {
     let t = ui.t;
     let id = m.id;
+    let accent = mod_accent(t.modulation, &m.source);
     let routing = s.mod_routing == Some(id);
+    let selected = s.mod_sel.contains(&slot) || s.mod_editor == Some(id);
     let edge = if routing {
-        ui.t.modulation.with_alpha(route_flash())
-    } else if s.mod_editor == Some(id) {
-        ui.t.modulation.with_alpha(170)
+        accent.with_alpha(route_flash())
+    } else if selected {
+        accent.with_alpha(170)
     } else {
         t.splitter_dark
     };
     ui.c.fill_rrect(r, 3.0, if m.enabled { t.s(0x202528) } else { t.s(0x1a1d1f) });
-    ui.c.stroke_rrect(r, 3.0, if routing || s.mod_editor == Some(id) { 1.6 } else { 1.0 }, edge);
+    ui.c.stroke_rrect(r, 3.0, if routing || selected { 1.6 } else { 1.0 }, edge);
     // Click the tile to open its graphical editor; the buttons added below win their own clicks.
     let _ = ui.hit(r, Action::Mod(crate::modulation::ModAct::Open(id)), format!("{}: click to open its editor", crate::modulation::name_of(m)));
-    // The name and the enable light.
-    let ink = if m.enabled { t.text } else { t.text_faint };
-    ui.c.text_clip(fnt(10.5), r.x + 5.0, r.y + 2.0, (r.w - 26.0).max(8.0), ink, &crate::modulation::name_of(m));
-    let led = Rect::new(r.right() - 16.0, r.y + 2.0, 12.0, 12.0);
-    let lhov = ui.hit(led, Action::Mod(crate::modulation::ModAct::Enable(id)), if m.enabled { "On: click to turn it off" } else { "Off: click to turn it on" });
-    ui.c.fill_circle(led.cx(), led.cy(), 4.0, if m.enabled { ui.t.modulation.with_alpha(230) } else { t.s(0x30363a) });
-    if lhov {
-        ui.c.stroke_circle(led.cx(), led.cy(), 5.5, 1.0, t.glyph);
-    }
-    // The live plot: the last ~2 s of actual output, not a drawing of the waveform.
-    let plot = Rect::new(r.x + 4.0, r.y + 16.0, (r.w - 8.0).max(6.0), (r.h - 36.0).max(8.0));
+    // The live plot: the last ~2 s of actual output (a source preview while stopped), not a drawing of the
+    // waveform. The tile carries no name, so the plot gets the top of the slot.
+    let plot = Rect::new(r.x + 4.0, r.y + 4.0, (r.w - 8.0).max(6.0), (r.h - 24.0).max(8.0));
     ui.c.fill_rect(plot, t.s(0x101315));
     ui.c.line(plot.x, plot.cy(), plot.right(), plot.cy(), 1.0, t.s(0x242a2d));
     let hist = s.mod_hist.borrow();
@@ -1031,8 +1280,15 @@ fn mod_slot_paint(ui: &mut Ui, s: &State, r: Rect, slot: u8, m: &os_model::modul
             .map(|(i, &v)| (plot.x + plot.w * i as f32 / (n - 1) as f32, plot.bottom() - v.clamp(0.0, 1.0) * plot.h))
             .collect();
         if pts.len() > 1 {
-            ui.c.polyline(&pts, 1.4, ui.t.modulation.with_alpha(if m.enabled { 235 } else { 90 }));
+            ui.c.polyline(&pts, 1.4, accent.with_alpha(if m.enabled { 235 } else { 90 }));
         }
+    }
+    // The enable light, over the plot's top-right corner.
+    let led = Rect::new(r.right() - 16.0, r.y + 2.0, 12.0, 12.0);
+    let lhov = ui.hit(led, Action::Mod(crate::modulation::ModAct::Enable(id)), if m.enabled { "On: click to turn it off" } else { "Off: click to turn it on" });
+    ui.c.fill_circle(led.cx(), led.cy(), 4.0, if m.enabled { accent.with_alpha(230) } else { t.s(0x30363a) });
+    if lhov {
+        ui.c.stroke_circle(led.cx(), led.cy(), 5.5, 1.0, t.glyph);
     }
     // The rate / band line, and the patch-point button (the handoff's assignment mechanic).
     ui.c.text_clip(fnt(9.5), r.x + 5.0, r.bottom() - 14.0, (r.w - 28.0).max(8.0), t.text_dim, &slot_text(m));
@@ -1040,31 +1296,48 @@ fn mod_slot_paint(ui: &mut Ui, s: &State, r: Rect, slot: u8, m: &os_model::modul
     let phov = ui.hit(
         patch,
         Action::Mod(crate::modulation::ModAct::Route(id)),
-        if routing { "Routing mode: click a tinted control and drag; Esc cancels" } else { "Route this modulator: click, then drag any blue-tinted control" },
+        if routing { "Routing mode: click a tinted control and drag; Esc cancels" } else { "Route this modulator: click, then drag a control tinted in its colour" },
     );
-    let dot = ui.t.modulation.with_alpha(if routing { route_flash() } else if phov { 255 } else { 150 });
+    let dot = accent.with_alpha(if routing { route_flash() } else if phov { 255 } else { 150 });
     ui.c.fill_circle(patch.cx(), patch.cy(), 3.3, dot);
     ui.c.line(patch.cx(), patch.cy(), patch.right() - 2.0, patch.cy() - 4.0, 1.4, dot);
     ui.c.line(patch.right() - 2.0, patch.cy() - 4.0, patch.right() - 2.0, patch.cy() - 8.0, 1.2, dot);
     let _ = slot;
 }
 
+/// The "＋" after the last slot: not an empty slot, but the strip's growth — another row of slots. It reads apart
+/// from the empty slots' plain "+": a framed button with a bar under the plus, in the modulation accent.
+fn mod_add_row_button(ui: &mut Ui, _s: &State, r: Rect) {
+    let t = ui.t;
+    let hov = ui.hit(r, Action::Mod(crate::modulation::ModAct::AddRow), "Add another row of modulator slots");
+    // A row control, not a slot: its face is tinted with the modulation colour, its frame and its plus are accent, and
+    // the bar under the plus reads as "another row" rather than "one more modulator here".
+    let face = t.s(0x1b1f21).mix(t.modulation, if hov { 0.18 } else { 0.10 });
+    ui.c.fill_rrect(r, 3.0, face);
+    ui.c.stroke_rrect(r, 3.0, 1.0, t.modulation.with_alpha(if hov { 230 } else { 150 }));
+    ui.c.text_center(fnt(15.0), Rect::new(r.x, r.cy() - 10.0, r.w, 16.0), t.modulation.with_alpha(220), "+");
+    ui.c.fill_rect(Rect::new(r.cx() - 6.0, r.cy() + 4.0, 12.0, 2.0), t.modulation.with_alpha(if hov { 250 } else { 190 }));
+}
+
 /// An empty slot's "+" (the add menu opens from it).
-fn mod_empty_slot(ui: &mut Ui, r: Rect, slot: u8) {
+fn mod_empty_slot(ui: &mut Ui, s: &State, r: Rect, slot: u8) {
     let t = ui.t;
     let hov = ui.hit(r, Action::Mod(crate::modulation::ModAct::AddMenu(slot)), "Add a project modulator (LFO, Random or Audio Follower)");
+    let cursor = s.mod_cursor == Some(slot);
     ui.c.fill_rrect(r, 3.0, if hov { t.s(0x232a2e) } else { t.s(0x1b1f21) });
-    ui.c.stroke_rrect(r, 3.0, 1.0, t.splitter_dark);
+    ui.c.stroke_rrect(r, 3.0, if cursor { 1.6 } else { 1.0 }, if cursor { ui.t.modulation.with_alpha(170) } else { t.splitter_dark });
     ui.c.text_center(fnt(17.0), Rect::new(r.x, r.cy() - 9.0, r.w, 18.0), t.text_dim, "+");
 }
 
-/// The add menu, the slot editor, and the slot's right-click menu, over the rack.
-pub(crate) fn mod_overlays_paint(ui: &mut Ui, s: &State, r: Rect) {
+/// The empty slot's add menu. It is painted by the main window after its windows, not inside the rack's clipped
+/// panel, so an open picker can stand above the playlist and mixer instead of being cut off by the rack edge.
+pub(crate) fn mod_add_menu_paint(ui: &mut Ui, s: &State, r: Rect) {
     let slots = mod_slots(s, r);
     if let Some(slot) = s.mod_add_slot {
         if let Some(&anchor) = slots.get(usize::from(slot)) {
             let w = 148.0;
-            let m = Rect::new(anchor.x.min(r.right() - w - 2.0), anchor.bottom() + 2.0, w, 3.0 * 21.0 + 55.0);
+            let h = 3.0 * 21.0 + 55.0;
+            let m = Rect::new(anchor.x.min(r.right() - w - 2.0), (anchor.y - h - 2.0).max(2.0), w, h);
             ui.c.fill_rrect(m, 3.0, ui.t.s(0x26292c));
             ui.c.stroke_rrect(m, 3.0, 1.0, ui.t.splitter_dark);
             ui.c.text(fnt(10.0), m.x + 8.0, m.y + 4.0, ui.t.text_dim, "NEW PROJECT MODULATOR");
@@ -1089,20 +1362,34 @@ pub(crate) fn mod_overlays_paint(ui: &mut Ui, s: &State, r: Rect) {
             }
         }
     }
-    if let Some(id) = s.mod_editor {
-        if let Some(m) = s.modulation.get(id) {
-            if let Some(&anchor) = slots.get(usize::from(m.slot)) {
-                mod_editor_paint(ui, s, m, anchor, r);
-            }
-        }
+}
+
+/// Size of the modulator editor's own native window (always on top of the app's windows).
+pub(crate) const MOD_EDITOR_W: f32 = 252.0;
+pub(crate) const MOD_EDITOR_H: f32 = 168.0;
+
+/// The editor as the whole of its always-on-top native window.
+pub(crate) fn mod_editor_window(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator) {
+    // The anchoring/clamping rect is two px wider on each side, so the usual 2 px edge clamp lands the panel at
+    // (0, 0) and it fills the native window without a clipped right edge.
+    let r = Rect::new(-2.0, 0.0, MOD_EDITOR_W + 4.0, MOD_EDITOR_H);
+    // Anchored just under the editor's own bottom: the panel lands at (0, 0) inside the window.
+    let anchor = Rect::new(0.0, MOD_EDITOR_H + 4.0, 0.0, 0.0);
+    mod_editor_paint(ui, s, m, anchor, r);
+    // The slot's options menu lives in this same always-on-top window, so the piano roll, playlist and detached
+    // windows cannot cover its buttons.
+    if let Some(menu) = s.mod_menu.and_then(|id| s.modulation.get(id)) {
+        mod_menu_window(ui, s, menu);
     }
-    if let Some(id) = s.mod_menu {
-        if let Some(m) = s.modulation.get(id) {
-            if let Some(&anchor) = slots.get(usize::from(m.slot)) {
-                mod_menu_paint(ui, s, m, anchor, r);
-            }
-        }
-    }
+}
+
+/// The slot's options menu inside the always-on-top editor window, at its top-left.
+fn mod_menu_window(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator) {
+    let r = Rect::new(0.0, 0.0, MOD_EDITOR_W, MOD_EDITOR_H);
+    let h = mod_menu_h(m);
+    // `mod_menu_paint` places the panel just above its anchor: this one puts it at (4, 4).
+    let anchor = Rect::new(4.0, 4.0 + h + 2.0, 0.0, 0.0);
+    mod_menu_paint(ui, s, m, anchor, r);
 }
 
 /// One modulator's graphical editor: its type, its shape / rate, and the knobs its type has. Not a dropdown list —
@@ -1110,13 +1397,15 @@ pub(crate) fn mod_overlays_paint(ui: &mut Ui, s: &State, r: Rect) {
 fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator, anchor: Rect, r: Rect) {
     use os_model::modulation::ModSource;
     let t = ui.t;
-    let w = 252.0;
-    let h = 168.0;
+    let accent = mod_accent(t.modulation, &m.source);
+    let w = MOD_EDITOR_W;
+    let h = MOD_EDITOR_H;
     let x = anchor.x.min(r.right() - w - 2.0).max(r.x + 2.0);
-    let y = (anchor.bottom() + 2.0).min(r.bottom() - h - 2.0).max(r.y + 2.0);
+    // Above the slot strip, over the workspace: the editor never covers the device tiles below the rack header.
+    let y = (anchor.y - h - 4.0).max(2.0);
     let panel = Rect::new(x, y, w, h);
     ui.c.fill_rrect(panel, 4.0, t.s(0x22272a));
-    ui.c.stroke_rrect(panel, 4.0, 1.0, ui.t.modulation.with_alpha(150));
+    ui.c.stroke_rrect(panel, 4.0, 1.0, accent.with_alpha(150));
     // The title is the name field: clicking it edits the name in place (the same inline box track and slot names use).
     let title = Rect::new(panel.x + 5.0, panel.y + 2.0, panel.w - 30.0, 18.0);
     let th = ui.hit(title, Action::Mod(crate::modulation::ModAct::Rename(m.id, (title.x, title.y))), "Click to rename this modulator");
@@ -1134,7 +1423,7 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
         let b = Rect::new(bx, panel.y + 22.0, 74.0, 17.0);
         let on = crate::modulation::Kind::of(m.source) == kind;
         let hov = ui.hit(b, Action::Mod(crate::modulation::ModAct::Kind(m.id, kind)), kind.label());
-        ui.c.fill_rrect(b, 2.0, if on { ui.t.modulation.with_alpha(190) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
+        ui.c.fill_rrect(b, 2.0, if on { accent.with_alpha(190) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
         ui.c.text_center(fnt(10.5), b, if on { t.glyph } else { t.text_dim }, kind.label());
         bx += 78.0;
     }
@@ -1152,7 +1441,7 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
             mod_knob(ui, s, m.id, crate::modulation::KnobField::Offset, "offset", panel.x + 126.0, cy + 42.0);
             let b = Rect::new(panel.x + 168.0, cy + 30.0, 74.0, 18.0);
             let hov = ui.hit(b, Action::Mod(crate::modulation::ModAct::ToggleBipolar(m.id)), "Bipolar / unipolar output");
-            ui.c.fill_rrect(b, 2.0, if l.bipolar { ui.t.modulation.with_alpha(150) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
+            ui.c.fill_rrect(b, 2.0, if l.bipolar { accent.with_alpha(150) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
             ui.c.text_center(fnt(9.5), b, t.text, if l.bipolar { "bipolar" } else { "unipolar" });
         }
         ModSource::Random(rd) => {
@@ -1163,7 +1452,7 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
             ui.c.text_center(fnt(9.5), b, t.text, if rd.distribution == os_model::modulation::Distribution::Uniform { "uniform" } else { "gaussian" });
             let b = Rect::new(panel.x + 86.0, cy + 22.0, 86.0, 18.0);
             let hov = ui.hit(b, Action::Mod(crate::modulation::ModAct::ToggleInterpolate(m.id)), "Hold or interpolate");
-            ui.c.fill_rrect(b, 2.0, if rd.interpolate { ui.t.modulation.with_alpha(150) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
+            ui.c.fill_rrect(b, 2.0, if rd.interpolate { accent.with_alpha(150) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
             ui.c.text_center(fnt(9.5), b, t.text, if rd.interpolate { "interpolated" } else { "hold" });
             mod_knob(ui, s, m.id, crate::modulation::KnobField::Amount, "amount", panel.x + 30.0, cy + 58.0);
             mod_knob(ui, s, m.id, crate::modulation::KnobField::Smooth, "smoothing", panel.x + 78.0, cy + 58.0);
@@ -1197,29 +1486,43 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
     // The footer: the routing button and the on / off switch, so the editor can start the same gesture as the tile.
     let route = Rect::new(panel.x + 8.0, panel.bottom() - 26.0, 92.0, 19.0);
     let on = s.mod_routing == Some(m.id);
-    let hov = ui.hit(route, Action::Mod(crate::modulation::ModAct::Route(m.id)), "Route this modulator: click, then drag a blue-tinted control");
-    ui.c.fill_rrect(route, 2.0, if on { ui.t.modulation.with_alpha(route_flash()) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
+    let hov = ui.hit(route, Action::Mod(crate::modulation::ModAct::Route(m.id)), "Route this modulator: click, then drag a control tinted in its colour");
+    ui.c.fill_rrect(route, 2.0, if on { accent.with_alpha(route_flash()) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
     ui.c.text_center(fnt(10.0), route, t.text, if on { "routing..." } else { "route to..." });
     let sw = Rect::new(panel.right() - 68.0, panel.bottom() - 26.0, 60.0, 19.0);
     let hov = ui.hit(sw, Action::Mod(crate::modulation::ModAct::Enable(m.id)), "On / off");
-    ui.c.fill_rrect(sw, 2.0, if m.enabled { ui.t.modulation.with_alpha(150) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
+    ui.c.fill_rrect(sw, 2.0, if m.enabled { accent.with_alpha(150) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
     ui.c.text_center(fnt(10.0), sw, t.text, if m.enabled { "on" } else { "off" });
 }
 
-/// The rate stepper: the current musical rate and -/+ buttons.
+/// The rate knob: the current musical rate, a drag knob and its sync / free mode button.
 fn rate_paint(ui: &mut Ui, id: os_model::modulation::ModulatorId, x: f32, y: f32, period: os_model::modulation::Timebase) {
     let t = ui.t;
     let label = crate::modulation::rate_text(period);
-    ui.c.text(fnt(10.5), x, y + 2.0, t.text, &label);
-    let minus = Rect::new(x + 54.0, y, 16.0, 17.0);
-    let plus = Rect::new(x + 72.0, y, 16.0, 17.0);
-    for (r, d, s) in [(minus, -1, "-"), (plus, 1, "+")] {
-        let hov = ui.hit(r, Action::Mod(crate::modulation::ModAct::RateStep(id, d)), "Slower / faster");
-        ui.c.fill_rrect(r, 2.0, if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
-        ui.c.text_center(fnt(11.0), r, t.text, s);
-    }
-    let mode = Rect::new(x + 92.0, y + 1.0, 34.0, 15.0);
-    let hov = ui.hit(mode, Action::Mod(crate::modulation::ModAct::RateStep(id, 0)), "Sync / free is picked by the rate");
+    let knob = Rect::new(x, y - 2.0, 24.0, 21.0);
+    let hov = ui.hit(
+        knob,
+        Action::Mod(crate::modulation::ModAct::Knob(id, crate::modulation::KnobField::Rate)),
+        format!("Rate: {label} - drag up / down"),
+    );
+    kit::knob(
+        ui.c,
+        t,
+        knob.cx(),
+        knob.cy(),
+        8.0,
+        crate::modulation::rate_pos(period),
+        false,
+        kit::KnobLook::Ring,
+        kit::State::hover(hov),
+    );
+    ui.c.text(fnt(10.5), x + 28.0, y + 2.0, t.text, &label);
+    let mode = Rect::new(x + 88.0, y + 1.0, 38.0, 15.0);
+    let hov = ui.hit(
+        mode,
+        Action::Mod(crate::modulation::ModAct::RateMode(id)),
+        "Tempo sync / free Hz",
+    );
     ui.c.fill_rrect(mode, 2.0, if hov { t.s(0x333a3e) } else { t.s(0x23282b) });
     ui.c.text_center(
         fnt(8.5),
@@ -1242,31 +1545,29 @@ fn mod_knob(ui: &mut Ui, s: &State, id: os_model::modulation::ModulatorId, field
 }
 
 /// A slot's right-click menu: on / off, clear routings, reroll the seed, remove.
-fn mod_menu_paint(ui: &mut Ui, _s: &State, m: &os_model::modulation::Modulator, anchor: Rect, r: Rect) {
+fn mod_menu_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator, anchor: Rect, r: Rect) {
     let t = ui.t;
     let w = 136.0;
-    let h = if matches!(m.source, os_model::modulation::ModSource::Random(_)) { 5.0 * 21.0 + 4.0 } else { 4.0 * 21.0 + 4.0 };
-    let panel = Rect::new(anchor.x.min(r.right() - w - 2.0), anchor.bottom() + 2.0, w, h);
+    let h = mod_menu_h(m);
+    let panel = Rect::new(anchor.x.min(r.right() - w - 2.0), (anchor.y - h - 2.0).max(2.0), w, h);
     ui.c.fill_rrect(panel, 3.0, t.s(0x26292c));
     ui.c.stroke_rrect(panel, 3.0, 1.0, t.splitter_dark);
-    let item = |ui: &mut Ui, y: f32, label: &str, act: Action| {
+    let mut y = panel.y + 2.0;
+    // The rows come from `modulation::menu_items`, so the keyboard (Enter, then arrows) walks exactly what is drawn.
+    for (i, (label, action)) in crate::modulation::menu_items(m).into_iter().enumerate() {
         let row = Rect::new(panel.x + 2.0, y, panel.w - 4.0, 20.0);
-        let hov = ui.hit(row, act, label.to_string());
-        if hov {
+        let hov = ui.hit(row, Action::Mod(action), label.clone());
+        if hov || (s.mod_menu == Some(m.id) && s.mod_menu_sel == i) {
             ui.c.fill_rect(row, t.s(0x333a3e));
         }
-        ui.c.text(fnt(11.5), row.x + 8.0, row.y + 2.0, t.text, label);
-    };
-    let mut y = panel.y + 2.0;
-    item(ui, y, if m.enabled { "Disable" } else { "Enable" }, Action::Mod(crate::modulation::ModAct::Enable(m.id)));
-    y += 21.0;
-    if matches!(m.source, os_model::modulation::ModSource::Random(_)) {
-        item(ui, y, "Reroll seed", Action::Mod(crate::modulation::ModAct::RerollSeed(m.id)));
+        ui.c.text(fnt(11.5), row.x + 8.0, row.y + 2.0, t.text, &label);
         y += 21.0;
     }
-    item(ui, y, "Clear routings", Action::Mod(crate::modulation::ModAct::Clear(m.id)));
-    y += 21.0;
-    item(ui, y, "Remove modulator", Action::Mod(crate::modulation::ModAct::Remove(m.id)));
+}
+
+/// Height of the options menu: a 21 px row each, from the same list the rows are drawn from.
+fn mod_menu_h(m: &os_model::modulation::Modulator) -> f32 {
+    crate::modulation::menu_items(m).len() as f32 * 21.0 + 4.0
 }
 
 /// An open device header menu, over the windows: Pop out (or Dock, per where the editor is now).
@@ -1284,7 +1585,7 @@ pub fn paint_menu(ui: &mut Ui, s: &State) {
     let t = ui.t;
     let kind = d.kind;
     let n = 2 + usize::from(matches!(kind, DeviceKind::Instrument(_)));
-    let m = Rect::new(tile.right() - 80.0, tile.y + HEADER_H, 80.0, n as f32 * 22.0 + 4.0);
+    let m = Rect::new(tile.right() - 80.0, tile.y + TILE_HEAD, 80.0, n as f32 * 22.0 + 4.0);
     ui.c.fill_rrect(m, 3.0, t.s(0x26292c));
     ui.c.stroke_rrect(m, 3.0, 1.0, t.splitter_dark);
     // A click anywhere else dismisses it.

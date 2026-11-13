@@ -483,7 +483,7 @@ impl Engine {
         if self.mods.is_empty() {
             return;
         }
-        let now = self.tick as f64;
+        let now = self.mod_pos();
         let ppq = f64::from(self.ppq.max(1));
         let secs_per_tick = self.tick_len() as f64 / f64::from(self.rate.max(1));
         let (beats, secs) = (now / ppq, now * secs_per_tick);
@@ -609,7 +609,7 @@ impl Engine {
             return;
         }
         let len = frames.max(1) as f64;
-        let now = self.tick as f64;
+        let now = self.mod_pos();
         let secs_per_tick = self.tick_len() as f64 / f64::from(self.rate.max(1));
         let ppq = f64::from(self.ppq.max(1));
         for step in (0..frames).step_by(PARAM_STEP) {
@@ -801,6 +801,38 @@ mod tests {
         e.set_modulation(vec![off, host]);
         run(&mut e, 24000, 1000);
         assert!(probe.lock().unwrap().seen.is_empty());
+    }
+
+    /// Pausing holds the song and its automation, not the modulation: a mapped fader keeps sweeping on the held clock,
+    /// so a modulator can be set up and watched with the transport stopped (and its values still reach the effects).
+    #[test]
+    fn modulation_runs_while_the_transport_is_paused() {
+        let p = project(0);
+        let mut e = Engine::new(&p, &mut SampleLibrary::new(None), 48000, PlayMode::Pattern(1));
+        // A step sequence that walks up and down, so the fader has somewhere to go.
+        let steps = Steps { values: [0, 20, 40, 60, 80, 100, 80, 60, 40, 20, 0, 20, 40, 60, 80, 100], period: Timebase::Sync(1), smooth: false };
+        e.set_modulation(vec![Modulator {
+            id: 1,
+            source: ModSource::Steps(steps),
+            enabled: true,
+            targets: vec![ModTarget { target: Target::MixerVolume(1), depth: 0.5, curve: Curve::Linear, polarity: Polarity::Bipolar, enabled: true }],
+        }]);
+        e.pause();
+        let mut seen = Vec::new();
+        // The pause fades the channels out over a few ticks first; then they are held.
+        for _ in 0..40 {
+            e.render_tick();
+            if let Some(v) = e.tracks[1].mod_vol {
+                seen.push(v);
+            }
+        }
+        assert!(!seen.is_empty(), "the fader is driven while the transport is held");
+        assert!(seen.windows(2).any(|w| w[0] != w[1]), "and keeps moving: {seen:?}");
+        assert_eq!(e.tracks[1].vol, 12800, "the authored fader is still the base");
+        // Playback goes on: modulation carries on from the song's own position.
+        e.resume();
+        e.render_tick();
+        assert!(e.tracks[1].mod_vol.is_some(), "still driven on the way back in");
     }
 
     /// The shapes read at their own points: a sine starts halfway and peaks a quarter in, a triangle runs its full

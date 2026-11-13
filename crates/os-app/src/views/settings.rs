@@ -1302,7 +1302,14 @@ fn tab_rects(ui: &mut Ui, r: Rect) -> Vec<Rect> {
 fn paint_group(ui: &mut Ui, s: &State, gr: &Group, r: Rect, open: bool, clip: Rect) {
     let t = ui.t;
     let lemon = super::lemon(ui);
-    if lemon {
+    let meridian = t.style.meridian();
+    if meridian {
+        // A section of a printed manual: flat field, a brass spine and a ruled header. No rounded card.
+        ui.c.fill_rect(r, t.s(0x14181d));
+        ui.c.fill_rect(Rect::new(r.x, r.y, 2.0, r.h), t.accent_dim);
+        ui.c.fill_rect(Rect::new(r.x + 2.0, r.y, r.w - 2.0, 1.0), t.toolbar_edge.with_alpha(130));
+        ui.c.fill_rect(Rect::new(r.x + 2.0, r.bottom() - 1.0, r.w - 2.0, 1.0), t.toolbar_line);
+    } else if lemon {
         lk::outlined(ui.c, r, lk::r_panel(t) - 2.0, t.s(0x1c1e21), t.s(0x25272a));
     } else {
         ui.c.fill_rect(r, t.s(0x1c1e21));
@@ -1310,17 +1317,21 @@ fn paint_group(ui: &mut Ui, s: &State, gr: &Group, r: Rect, open: bool, clip: Re
     }
     let mut y = r.y + 8.0;
     if !gr.title.is_empty() {
-        let f = Font::new(13).bold();
-        let tw = ui.c.text_width(f, gr.title);
+        let f = if meridian { Font::condensed(11, 6).bold() } else { Font::new(13).bold() };
+        let title = if meridian { gr.title.to_uppercase() } else { gr.title.to_string() };
+        let tw = ui.c.text_width(f, &title);
         let hdr = Rect::new(r.x + 1.0, r.y + 1.0, tw + 14.0, 24.0);
-        if !lemon {
+        if meridian {
+            ui.c.fill_rect(Rect::new(r.x + 2.0, r.y + 1.0, r.w - 3.0, 23.0), t.s(0x191e24));
+            ui.c.fill_rect(Rect::new(r.x + 2.0, r.y + 24.0, r.w - 3.0, 1.0), t.toolbar_line);
+        } else if !lemon {
             ui.c.fill_rect(hdr, t.s(0x222427));
             for k in 0..6 {
                 let k = k as f32;
                 ui.c.fill_rect(Rect::new(hdr.right() + k, hdr.y, 1.0, hdr.h - k * 4.0), t.s(0x222427));
             }
         }
-        ui.c.text(f, r.x + if lemon { 8.0 } else { 4.0 }, r.y + 4.0, if lemon { t.accent } else { t.text }, gr.title);
+        ui.c.text(f, r.x + if lemon { 8.0 } else { 4.0 }, r.y + 4.0, if meridian { t.text } else if lemon { t.accent } else { t.text }, &title);
         if !gr.note.is_empty() {
             ui.c.text(Font::new(13), r.x + if lemon { 8.0 } else { 4.0 } + tw, r.y + 4.0, t.text_dim, gr.note);
         }
@@ -1608,7 +1619,7 @@ fn paint_row_at(ui: &mut Ui, s: &State, group: &'static str, row: &Row, g: Rect,
                 let b = Rect::new(x0 + col * TILE_PITCH_X, y + 4.0 + rowi * TILE_PITCH_Y, TILE_W, TILE_H);
                 let (act, hint) = match kind {
                     TileList::Skins => (SAct::Skin(i), "Use this skin: its shapes and own colours"),
-                    TileList::Themes if i < os_theme::Design::ALL.len() => {
+                    TileList::Themes if i < os_theme::Design::THEME_SKINS.len() => {
                         (SAct::Preset(i), "Use this skin's own colours, on either skin (right-click to duplicate)")
                     }
                     TileList::Themes if i >= s.settings.user_from => {
@@ -1618,15 +1629,19 @@ fn paint_row_at(ui: &mut Ui, s: &State, group: &'static str, row: &Row, g: Rect,
                 };
                 let hov = ui.hit(b, Action::Settings(act), hint);
                 let lemon = super::lemon(ui);
-                let rad = if lemon { lk::r_btn(t) } else { 0.0 };
+                let meridian = t.style.meridian();
+                let rad = if meridian { 0.0 } else if lemon { lk::r_btn(t) } else { 0.0 };
                 let frame = if i == *sel {
-                    if lemon { t.brand_sel(os_theme::design::lemon::MAIN) } else { t.a(0x2d7cd0) }
+                    if meridian { t.accent } else if lemon { t.brand_sel(os_theme::design::lemon::MAIN) } else { t.a(0x2d7cd0) }
                 } else if hov {
-                    if lemon { t.brand_grey(os_theme::design::lemon::DARK_HIGHLIGHT) } else { t.s(0x5a5c5e) }
+                    if meridian { t.toolbar_edge } else if lemon { t.brand_grey(os_theme::design::lemon::DARK_HIGHLIGHT) } else { t.s(0x5a5c5e) }
                 } else {
                     t.s(0x161819)
                 };
                 ui.c.fill_rrect(b, rad + 2.0, frame);
+                if meridian {
+                    ui.c.fill_rect(Rect::new(b.x, b.y, b.w, 2.0), if i == *sel { t.brand_lit(os_theme::design::lemon::HIGHLIGHT) } else { t.toolbar_line });
+                }
                 let inner = b.inset(2.0);
                 let pr = Rect::new(inner.x, inner.y, inner.w, TILE_PREVIEW_H);
                 match previews.get(i) {

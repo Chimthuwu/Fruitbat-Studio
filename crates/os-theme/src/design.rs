@@ -20,21 +20,37 @@ use crate::{Color, Palette};
 /// A skin: the look's shapes and base colours (Settings > Theme > Skins).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Design {
-    /// The measured default look (named Classic before 2026-10-17).
+    /// Meridian: Lemonwig's default look. Ink and bone surfaces, a brass signature, squared instrument faces and
+    /// editorial display type.
     #[default]
+    Meridian,
+    /// The measured look (named Classic before 2026-10-17).
     Citrus,
-    /// Lemon Studio's own look: lemon on neutral greys, rounded squares.
+    /// Lemon Studio's original look: pale lemon on neutral greys, rounded squares.
     Lemon,
+    /// The graphite, turquoise-signal Lemon redesign.
+    Industrial,
 }
 
 impl Design {
     /// In the order Settings > Theme > Skins shows them.
-    pub const ALL: [Design; 2] = [Design::Lemon, Design::Citrus];
+    pub const ALL: [Design; 4] = [Design::Meridian, Design::Lemon, Design::Industrial, Design::Citrus];
+
+    /// The skins that contribute an own-colours entry to the Themes list. Meridian is a skin only: its look is not
+    /// presented as a colour theme, so selecting a theme never appears to select a skin.
+    pub const THEME_SKINS: [Design; 3] = [Design::Lemon, Design::Industrial, Design::Citrus];
+
+    /// The Themes-list index of this skin's own colours, when it has one.
+    pub fn theme_index(self) -> Option<usize> {
+        Self::THEME_SKINS.iter().position(|d| *d == self)
+    }
 
     pub fn name(self) -> &'static str {
         match self {
+            Design::Meridian => "Meridian",
             Design::Citrus => "Citrus",
             Design::Lemon => "Lemon",
+            Design::Industrial => "Lemon Industrial",
         }
     }
 
@@ -53,8 +69,10 @@ impl Design {
 
     pub fn style(self) -> Style {
         match self {
+            Design::Meridian => Style::MERIDIAN,
             Design::Citrus => Style::CITRUS,
             Design::Lemon => Style::LEMON,
+            Design::Industrial => Style::INDUSTRIAL,
         }
     }
 }
@@ -72,15 +90,24 @@ pub struct Style {
 }
 
 impl Style {
+    pub const MERIDIAN: Style = Style { design: Design::Meridian, radius: 2.0, radius_small: 1.5, radius_panel: 5.0 };
     pub const CITRUS: Style = Style { design: Design::Citrus, radius: 3.0, radius_small: 2.5, radius_panel: 4.0 };
-    pub const LEMON: Style = Style { design: Design::Lemon, radius: 2.5, radius_small: 2.0, radius_panel: 4.0 };
+    pub const LEMON: Style = Style { design: Design::Lemon, radius: 6.0, radius_small: 4.0, radius_panel: 10.0 };
+    pub const INDUSTRIAL: Style = Style { design: Design::Industrial, radius: 2.5, radius_small: 2.0, radius_panel: 4.0 };
 
     pub fn is(&self, d: Design) -> bool {
         self.design == d
     }
 
+    /// The modern widget kit's treatment. Meridian, Lemon and Industrial draw it, each with its own geometry and
+    /// colours; Citrus keeps the measured kit.
     pub fn lemon(&self) -> bool {
-        self.design == Design::Lemon
+        matches!(self.design, Design::Meridian | Design::Lemon | Design::Industrial)
+    }
+
+    /// Meridian's own component geometry: squared faces, rail edges and editorial displays.
+    pub fn meridian(&self) -> bool {
+        self.design == Design::Meridian
     }
 }
 
@@ -179,38 +206,98 @@ pub fn classic_keys() -> Keys {
     }
 }
 
-/// The Lemon brand palette: LEMON — INDUSTRIAL INSTRUMENT (2026-11-13). Graphite surfaces, a restrained lemon
-/// signature and turquoise for signal flow and modulation; orange and coral are reserved for warnings and clipping.
+/// The original Lemon brand palette (owner's base colours, 2026-10-12).
 pub mod lemon {
     use crate::Color;
-    /// Signature lemon: "on" controls, selection, the playhead, lit steps.
-    pub const MAIN: Color = Color::rgb(0xb8f34a);
+    /// Main colour (pale yellow): "on" controls, selection, the playhead, lit steps.
+    pub const MAIN: Color = Color::rgb(0xffe066);
     /// Highlight: the bright top of lit controls, hover on lit controls, selected notes.
-    pub const HIGHLIGHT: Color = Color::rgb(0xd9ff96);
-    /// Dark: the main surface (toolbar, panels).
-    pub const DARK: Color = Color::rgb(0x171e20);
+    pub const HIGHLIGHT: Color = Color::rgb(0xfff1b8);
+    /// Dark: the main surface (toolbar).
+    pub const DARK: Color = Color::rgb(0x3b3b3b);
     /// Dark highlight: raised faces on hover, hairlines, knob tracks.
-    pub const DARK_HIGHLIGHT: Color = Color::rgb(0x2e3a3d);
+    pub const DARK_HIGHLIGHT: Color = Color::rgb(0x666666);
     /// Coloured dark: glyphs and text on lemon, unlit LEDs, hovered menu rows.
-    pub const COLORED_DARK: Color = Color::rgb(0x101416);
+    pub const COLORED_DARK: Color = Color::rgb(0x473900);
     /// In-between: a darker lemon for edges of lit controls and meter bodies.
-    pub const DEEP: Color = Color::rgb(0x86a62f);
+    pub const DEEP: Color = Color::rgb(0xc9a92c);
     /// Text on the greys.
+    pub const TEXT: Color = Color::rgb(0xececec);
+}
+
+/// The Lemon Industrial palette: graphite surfaces, a restrained lime signature and turquoise for signal flow and
+/// modulation; orange and coral are reserved for warnings and clipping.
+pub mod industrial {
+    use crate::Color;
+    pub const MAIN: Color = Color::rgb(0xb8f34a);
+    pub const HIGHLIGHT: Color = Color::rgb(0xd9ff96);
+    pub const DARK: Color = Color::rgb(0x171e20);
+    pub const DARK_HIGHLIGHT: Color = Color::rgb(0x2e3a3d);
+    pub const COLORED_DARK: Color = Color::rgb(0x101416);
+    pub const DEEP: Color = Color::rgb(0x86a62f);
     pub const TEXT: Color = Color::rgb(0xe5e9e5);
-    /// Signal flow: audio activity, routing, meters above the floor.
     pub const SIGNAL: Color = Color::rgb(0x00d5c0);
-    /// Project modulation: arcs, depth handles, routing mode.
     pub const MODULATION: Color = Color::rgb(0x00d5c0);
-    /// Warnings: pending, armed, out of range.
     pub const WARNING: Color = Color::rgb(0xf49b48);
-    /// Clipping / peak hold.
     pub const CLIPPING: Color = Color::rgb(0xe65e72);
 }
 
-/// Lemon: Classic lightness -> Industrial Instrument lightness. Classic's toolbar (0.19) lands on the graphite panel
-/// (#171e20, 0.17), raised 0.33 greys on the elevated surface (#20282b, 0.22) and the near-black lists sink to about
-/// #0c1012. Every token still keeps its relative place, so fine hairlines stay fine and deep wells stay deep.
+/// Meridian: ink, bone and brass. It is the default skin but not a colour theme: a theme recolours it through the same
+/// surfaces, text and key roles as every other skin.
+pub mod meridian {
+    use crate::Color;
+    pub const MAIN: Color = Color::rgb(0xd8b26a);
+    pub const HIGHLIGHT: Color = Color::rgb(0xf2e2ba);
+    pub const DARK: Color = Color::rgb(0x14171b);
+    pub const DARK_HIGHLIGHT: Color = Color::rgb(0x2c3239);
+    pub const COLORED_DARK: Color = Color::rgb(0x1a1408);
+    pub const DEEP: Color = Color::rgb(0x997238);
+    pub const TEXT: Color = Color::rgb(0xe9e4d8);
+    pub const SIGNAL: Color = Color::rgb(0x72d3c2);
+    pub const MODULATION: Color = Color::rgb(0xbf9cf2);
+    pub const WARNING: Color = Color::rgb(0xe39b55);
+    pub const CLIPPING: Color = Color::rgb(0xe26872);
+}
+
+/// Meridian's ramp: the toolbar lands on ink (#14171b, 0.09), lists sink toward black-blue and raised faces lift to a
+/// soft slate. The whole ladder is compressed so panels read as one machined surface rather than stacked cards.
+const MERIDIAN_RAMP: &[(f32, f32)] = &[
+    (0.0, 0.025),
+    (0.03, 0.035),
+    (0.06, 0.05),
+    (0.10, 0.07),
+    (0.13, 0.085),
+    (0.155, 0.10),
+    (0.19, 0.12),
+    (0.23, 0.145),
+    (0.27, 0.17),
+    (0.33, 0.21),
+    (0.5, 0.40),
+    (0.8, 0.78),
+    (1.0, 1.0),
+];
+
+/// Original Lemon: Classic's toolbar (0.19) lands on DARK (#3b3b3b, 0.231) and the raised 0.33 greys on
+/// DARK_HIGHLIGHT (#666666, 0.40); the near-black lists and rulers lift to about #151515.
 const LEMON_RAMP: &[(f32, f32)] = &[
+    (0.0, 0.07),
+    (0.03, 0.085),
+    (0.06, 0.10),
+    (0.10, 0.125),
+    (0.13, 0.15),
+    (0.155, 0.18),
+    (0.19, 0.231),
+    (0.23, 0.285),
+    (0.27, 0.33),
+    (0.33, 0.40),
+    (0.5, 0.56),
+    (0.8, 0.84),
+    (1.0, 1.0),
+];
+
+/// Lemon Industrial: Classic's toolbar (0.19) lands on the graphite panel (#171e20, 0.17), raised 0.33 greys on the
+/// elevated surface (#20282b, 0.22) and the near-black lists sink to about #0c1012.
+const INDUSTRIAL_RAMP: &[(f32, f32)] = &[
     (0.0, 0.035),
     (0.03, 0.055),
     (0.06, 0.075),
@@ -229,14 +316,32 @@ const LEMON_RAMP: &[(f32, f32)] = &[
 fn map_of(d: Design) -> Option<DesignMap> {// This code is a part of L e m o n S t u d i o.
     match d {
         Design::Citrus => None,
+        Design::Meridian => Some(DesignMap {
+            ramp: MERIDIAN_RAMP,
+            tint: (216.0, 0.10),
+            accent: meridian::MAIN,
+            highlight: meridian::HIGHLIGHT,
+            mute: meridian::MAIN,
+            text: meridian::TEXT,
+            text_bg: meridian::DARK,
+        }),
         Design::Lemon => Some(DesignMap {
             ramp: LEMON_RAMP,
-            tint: (168.0, 0.0),
+            tint: (48.0, 0.0),
             accent: lemon::MAIN,
             highlight: lemon::MAIN,
             mute: lemon::MAIN,
             text: lemon::TEXT,
             text_bg: lemon::DARK,
+        }),
+        Design::Industrial => Some(DesignMap {
+            ramp: INDUSTRIAL_RAMP,
+            tint: (168.0, 0.0),
+            accent: industrial::MAIN,
+            highlight: industrial::MAIN,
+            mute: industrial::MAIN,
+            text: industrial::TEXT,
+            text_bg: industrial::DARK,
         }),
     }
 }
@@ -244,12 +349,275 @@ fn map_of(d: Design) -> Option<DesignMap> {// This code is a part of L e m o n S
 /// Tokens a design sets outright (the ones the role map can't get right: signal colours, notes, keys, steps).
 fn overrides(d: Design) -> Vec<(&'static str, Color)> {
     let c = Color::rgb;
-    use lemon::*;
     match d {
         Design::Citrus => vec![],
-        Design::Lemon => vec![
-            ("toolbar", DARK),
-            ("toolbar_line", c(0x0f1416)),
+        Design::Meridian => {
+            use meridian::*;
+            vec![
+                ("toolbar", DARK),
+                ("toolbar_line", c(0x0c0e11)),
+                ("toolbar_edge", c(0x333a42)),
+                ("sunken", c(0x0e1114)),
+                ("sunken_dark", c(0x0a0c0f)),
+                ("time_panel", c(0x101317)),
+                ("menu_panel", c(0x181c21)),
+                ("menu_text", c(0xb9b1a1)),
+                ("news_panel", c(0x1b2026)),
+                ("button", c(0x1d2228)),
+                ("button_hi", c(0x2a3138)),
+                ("glyph", TEXT),
+                ("glyph_dim", c(0x8e887c)),
+                ("text", TEXT),
+                ("text_dim", c(0xb4ac9d)),
+                ("text_faint", c(0x79746a)),
+                ("on_top", HIGHLIGHT),
+                ("on_bottom", MAIN),
+                ("on_glyph", COLORED_DARK),
+                ("pill", MAIN),
+                ("pill_text", COLORED_DARK),
+                ("record", CLIPPING),
+                ("tempo_box", c(0x0e1114)),
+                ("accent", MAIN),
+                ("accent_dim", c(0x5c4a29)),
+                ("workspace", c(0x0d1013)),
+                ("watermark", c(0x171b20)),
+                ("version_text", c(0x4a4b4a)),
+                ("browser_title", c(0x171b20)),
+                ("browser_tabs", c(0x11151a)),
+                ("browser_tab_outline", MAIN),
+                ("browser_list", c(0x0b0e11)),
+                ("browser_row_hi", c(0x20262d)),
+                ("browser_folder", c(0xd8d2c6)),
+                ("browser_footer", c(0x14181d)),
+                ("browser_search", MAIN),
+                ("cat_project", MAIN),
+                ("cat_recent", SIGNAL),
+                ("cat_plugin_db", c(0x9aa4ad)),
+                ("cat_plugin_presets", c(0x9d92b0)),
+                ("cat_channel_presets", c(0x92a59b)),
+                ("cat_mixer_presets", c(0x8e9baa)),
+                ("splitter", c(0x11151a)),
+                ("splitter_dark", c(0x090b0e)),
+                ("window_title", c(0x151a1f)),
+                ("window_title_float", c(0x151a1f)),
+                ("window_title_hi", c(0x29313a)),
+                ("window_body", c(0x14181d)),
+                ("window_border", c(0x080a0d)),
+                ("picker", c(0x151a1f)),
+                ("track_header", c(0x1a2026)),
+                ("overview", c(0x4b5157)),
+                ("ruler", c(0x0c0f12)),
+                ("ruler_text", c(0xb4ac9d)),
+                ("grid", c(0x12161a)),
+                ("grid_alt", c(0x171c21)),
+                ("grid_gap", c(0x0b0e11)),
+                ("grid_bar", c(0x080a0d)),
+                ("scrollbar", c(0x11151a)),
+                ("playhead", MAIN),
+                ("mixer_bg", c(0x0d1013)),
+                ("mixer_strip", c(0x171c21)),
+                ("mixer_strip_dark", c(0x111519)),
+                ("mixer_panel", c(0x1a2026)),
+                ("slot", c(0x1b2128)),
+                ("slot_text", c(0x79746a)),
+                ("slot_text_used", c(0xe3ddd1)),
+                ("fader_handle", c(0x9a927f)),
+                ("meter_low", c(0x2c7f74)),
+                ("meter_high", SIGNAL),
+                ("meter_clip", CLIPPING),
+                ("signal", SIGNAL),
+                ("modulation", MODULATION),
+                ("warning", WARNING),
+                ("clipping", CLIPPING),
+                ("rack_row_box", c(0x181d23)),
+                ("name_button", c(0x20262d)),
+                ("name_button_sel", c(0x2b323a)),
+                ("name_text", TEXT),
+                ("rack_inset", c(0x0d1013)),
+                ("rack_inset_border", c(0x080a0d)),
+                ("rack_control_border", c(0x080a0d)),
+                ("step_a", c(0x3d434a)),
+                ("step_b", c(0x4b4437)),
+                ("step_dim_a", c(0x2a3036)),
+                ("step_dim_b", c(0x322e27)),
+                ("step_dim_border", c(0x242a30)),
+                ("step_on", MAIN),
+                ("add_hover", MAIN),
+                ("menu_drop", c(0x151a1f)),
+                ("menu_drop_hi", c(0x2a3138)),
+                ("menu_drop_text", TEXT),
+                ("menu_drop_disabled", c(0x79746a)),
+                ("menu_pop", c(0x151a1f)),
+                ("menu_pop_border", c(0x080a0d)),
+                ("menu_pop_hi", c(0x2a3138)),
+                ("menu_pop_text", TEXT),
+                ("menu_pop_shortcut", c(0xb4ac9d)),
+                ("menu_pop_dim", c(0x79746a)),
+                ("menu_pop_head", c(0x101317)),
+                ("menu_pop_head_text", c(0xb4ac9d)),
+                ("clip", c(0x9c7c46)),
+                ("pr_row", c(0x1a2026)),
+                ("pr_row_black", c(0x14191e)),
+                ("pr_row_sel", c(0x2a2721)),
+                ("pr_row_black_sel", c(0x231f19)),
+                ("pr_bar", c(0x0b0e11)),
+                ("note_top", c(0xd8b26a)),
+                ("note_bottom", c(0xa9843f)),
+                ("note_rim", c(0x5c4520)),
+                ("note_text", c(0x1a1408)),
+                ("note_sel_top", c(0xf2e2ba)),
+                ("note_sel_bottom", c(0xd8b26a)),
+                ("note_sel_rim", c(0x5c4520)),
+                ("note_sel_text", c(0x1a1408)),
+                ("key_white", c(0xe7e0d3)),
+                ("key_white_left", c(0xc9c1b2)),
+                ("key_black", c(0x2f353c)),
+                ("key_black_left", c(0x1b2026)),
+                ("key_c", c(0xd6cec0)),
+                ("key_label", c(0x6d675c)),
+                ("key_lit", c(0xa9e4d8)),
+                ("key_lit_left", c(0x62bfb0)),
+                ("key_lit_edge", c(0x2a7a70)),
+                ("key_black_lit", c(0x3f9e91)),
+                ("key_black_lit_left", c(0x1d5c55)),
+                ("velocity", SIGNAL),
+                ("velocity_dot", c(0x1f5c55)),
+            ]
+        }
+        Design::Lemon => {
+            use lemon::*;
+            vec![
+                ("toolbar", DARK),
+                ("toolbar_line", c(0x2a2a2a)),
+                ("toolbar_edge", c(0x4a4a4a)),
+                ("sunken", c(0x2b2b2b)),
+                ("sunken_dark", c(0x232323)),
+                ("time_panel", c(0x232323)),
+                ("menu_panel", c(0x333333)),
+                ("menu_text", TEXT),
+                ("news_panel", c(0x333333)),
+                ("button", c(0x474747)),
+                ("button_hi", c(0x555555)),
+                ("glyph", c(0xe6e6e6)),
+                ("glyph_dim", c(0x8c8c8c)),
+                ("text", TEXT),
+                ("text_dim", c(0xa3a3a3)),
+                ("text_faint", c(0x7f7f7f)),
+                ("on_top", HIGHLIGHT),
+                ("on_bottom", MAIN),
+                ("on_glyph", COLORED_DARK),
+                ("pill", MAIN),
+                ("pill_text", COLORED_DARK),
+                ("record", c(0xff6159)),
+                ("tempo_box", c(0x2b2b2b)),
+                ("accent", MAIN),
+                ("accent_dim", COLORED_DARK),
+                ("workspace", c(0x262626)),
+                ("watermark", c(0x2e2e2e)),
+                ("version_text", c(0x5a5a5a)),
+                ("browser_title", c(0x333333)),
+                ("browser_tabs", c(0x2b2b2b)),
+                ("browser_tab_outline", MAIN),
+                ("browser_list", c(0x1f1f1f)),
+                ("browser_row_hi", c(0x333333)),
+                ("browser_folder", c(0xd9d9d9)),
+                ("browser_footer", c(0x2b2b2b)),
+                ("browser_search", MAIN),
+                ("cat_project", MAIN),
+                ("cat_recent", c(0xc8e3a6)),
+                ("cat_plugin_db", c(0xa9cbe6)),
+                ("cat_plugin_presets", c(0xe6b3cf)),
+                ("cat_channel_presets", c(0xd4bce8)),
+                ("cat_mixer_presets", c(0xbcc2ec)),
+                ("splitter", c(0x262626)),
+                ("splitter_dark", c(0x1c1c1c)),
+                ("window_title", c(0x333333)),
+                ("window_title_float", c(0x333333)),
+                ("window_title_hi", c(0x3d3d3d)),
+                ("window_body", c(0x2e2e2e)),
+                ("window_border", c(0x1a1a1a)),
+                ("picker", c(0x2b2b2b)),
+                ("track_header", c(0x383838)),
+                ("overview", c(0x555555)),
+                ("ruler", c(0x232323)),
+                ("ruler_text", c(0x9e9e9e)),
+                ("grid", c(0x282828)),
+                ("grid_alt", c(0x2d2d2d)),
+                ("grid_gap", c(0x202020)),
+                ("grid_bar", c(0x161616)),
+                ("scrollbar", c(0x2b2b2b)),
+                ("playhead", MAIN),
+                ("mixer_bg", c(0x262626)),
+                ("mixer_strip", c(0x303030)),
+                ("mixer_strip_dark", c(0x242424)),
+                ("mixer_panel", c(0x333333)),
+                ("slot", c(0x2b2b2b)),
+                ("slot_text", c(0x707070)),
+                ("slot_text_used", c(0xdedede)),
+                ("fader_handle", c(0x5c5c5c)),
+                ("meter_low", DEEP),
+                ("meter_high", HIGHLIGHT),
+                ("meter_clip", c(0xff6159)),
+                ("rack_row_box", c(0x3a3a3a)),
+                ("name_button", c(0x474747)),
+                ("name_button_sel", c(0x5e5e5e)),
+                ("name_text", c(0xe2e2e2)),
+                ("rack_inset", c(0x333333)),
+                ("rack_inset_border", c(0x262626)),
+                ("rack_control_border", c(0x222222)),
+                ("step_a", c(0x4d4d4d)),
+                ("step_b", c(0x5a4d1f)),
+                ("step_dim_a", c(0x3a3a3a)),
+                ("step_dim_b", c(0x3d3827)),
+                ("step_dim_border", c(0x2e2e2e)),
+                ("step_on", MAIN),
+                ("add_hover", MAIN),
+                ("menu_drop", c(0x333333)),
+                ("menu_drop_hi", c(0x4d4d4d)),
+                ("menu_drop_text", TEXT),
+                ("menu_drop_disabled", c(0x7f7f7f)),
+                ("menu_pop", c(0x333333)),
+                ("menu_pop_border", c(0x1f1f1f)),
+                ("menu_pop_hi", COLORED_DARK),
+                ("menu_pop_text", TEXT),
+                ("menu_pop_shortcut", c(0xa3a3a3)),
+                ("menu_pop_dim", c(0x7f7f7f)),
+                ("menu_pop_head", c(0x2b2b2b)),
+                ("menu_pop_head_text", c(0x8c8c8c)),
+                ("clip", c(0x8a7a3a)),
+                ("pr_row", c(0x2b2b2b)),
+                ("pr_row_black", c(0x242424)),
+                ("pr_row_sel", c(0x2f2c22)),
+                ("pr_row_black_sel", c(0x29261c)),
+                ("pr_bar", c(0x141414)),
+                ("note_top", MAIN),
+                ("note_bottom", c(0xf2d052)),
+                ("note_rim", c(0x8a7420)),
+                ("note_text", COLORED_DARK),
+                ("note_sel_top", c(0xffffff)),
+                ("note_sel_bottom", HIGHLIGHT),
+                ("note_sel_rim", COLORED_DARK),
+                ("note_sel_text", COLORED_DARK),
+                ("key_white", c(0xededed)),
+                ("key_white_left", c(0xd2d2d2)),
+                ("key_black", c(0x3b3b3b)),
+                ("key_black_left", c(0x262626)),
+                ("key_c", c(0xdddddd)),
+                ("key_label", c(0x8a7420)),
+                ("key_lit", HIGHLIGHT),
+                ("key_lit_left", MAIN),
+                ("key_lit_edge", DEEP),
+                ("key_black_lit", MAIN),
+                ("key_black_lit_left", c(0xa88f25)),
+                ("velocity", MAIN),
+                ("velocity_dot", COLORED_DARK),
+            ]
+        }
+        Design::Industrial => {
+            use industrial::*;
+            vec![
+                ("toolbar", DARK),
+                ("toolbar_line", c(0x0f1416)),
             ("toolbar_edge", c(0x283337)),
             ("sunken", c(0x0d1113)),
             ("sunken_dark", c(0x0a0e10)),
@@ -377,8 +745,29 @@ fn overrides(d: Design) -> Vec<(&'static str, Color)> {
             ("key_black_lit_left", c(0x0b4842)),
             ("velocity", SIGNAL),
             ("velocity_dot", c(0x0f5c54)),
-        ],
+            ]
+        }
     }
+}
+
+/// A brand colour as skin `design` has it, for the widget kit's direct `design::lemon` constants. The original Lemon
+/// skin is the constants themselves; the industrial skin re-keys the seven brand colours and leaves anything else alone.
+pub fn own_brand(design: Design, c: Color) -> Color {
+    let (main, high, dark, dark_hi, colored, deep, text) = match design {
+        Design::Industrial => (industrial::MAIN, industrial::HIGHLIGHT, industrial::DARK, industrial::DARK_HIGHLIGHT, industrial::COLORED_DARK, industrial::DEEP, industrial::TEXT),
+        Design::Meridian => (meridian::MAIN, meridian::HIGHLIGHT, meridian::DARK, meridian::DARK_HIGHLIGHT, meridian::COLORED_DARK, meridian::DEEP, meridian::TEXT),
+        _ => return c,
+    };
+    let pairs = [
+        (lemon::MAIN, main),
+        (lemon::HIGHLIGHT, high),
+        (lemon::DARK, dark),
+        (lemon::DARK_HIGHLIGHT, dark_hi),
+        (lemon::COLORED_DARK, colored),
+        (lemon::DEEP, deep),
+        (lemon::TEXT, text),
+    ];
+    pairs.iter().find(|(from, _)| *from == c).map_or(c, |(_, to)| *to)
 }
 
 /// The palette of skin `design` coloured by `theme` (a `.flstheme`). The stock Dark theme (whatever its options), or
@@ -392,22 +781,22 @@ pub fn palette(design: Design, theme: Option<&FlTheme>) -> Palette {
 }
 
 fn skin_palette(design: Design, theme: Option<&FlTheme>) -> Palette {
-    // The Lemon and Citrus themes (`skin_text`): the Lemon theme on Citrus is Lemon's colours with Citrus's shapes; the
-    // Citrus theme on Lemon is the stock Dark theme laid over Lemon (stock Dark without the key counts as Lemon's own);
-    // Citrus with the Citrus theme is the stock Dark theme, as usual.
-    match (design, theme.and_then(|t| t.colors)) {
-        (Design::Lemon, Some(Design::Lemon)) => return palette(design, None),
-        (Design::Citrus, Some(Design::Lemon)) => {
-            let mut p = palette(Design::Lemon, None);
-            p.style = Design::Citrus.style();
+    // A skin's own theme gives that skin its own colours; another skin's own theme gives that skin's colours with this
+    // skin's shapes. The stock Citrus theme laid over a modern skin is the stock Dark colours on that skin, as usual.
+    if let Some(th) = theme {
+        if let Some(other) = th.colors {
+            if other == design {
+                return palette(design, None);
+            }
+            if other == Design::Citrus {
+                let mut p = palette(design, None);
+                retint(&mut p, &FlTheme { colors: None, ..th.clone() });
+                return p;
+            }
+            let mut p = palette(other, None);
+            p.style = design.style();
             return p;
         }
-        (Design::Lemon, Some(Design::Citrus)) => {
-            let mut p = palette(Design::Lemon, None);
-            retint(&mut p, &FlTheme { colors: None, ..theme.expect("a theme").clone() });
-            return p;
-        }
-        _ => {}
     }
     let Some(map) = map_of(design) else {
         return match theme {
@@ -462,21 +851,35 @@ pub struct Retint {
 }
 
 impl Retint {
-    /// `th` over the Lemon skin.
-    pub fn lemon(th: &FlTheme) -> Retint {
+    fn brand(d: Design) -> (Color, Color, Color, Color) {
+        match d {
+            Design::Industrial => (industrial::MAIN, industrial::HIGHLIGHT, industrial::TEXT, industrial::DARK),
+            Design::Meridian => (meridian::MAIN, meridian::HIGHLIGHT, meridian::TEXT, meridian::DARK),
+            _ => (lemon::MAIN, lemon::HIGHLIGHT, lemon::TEXT, lemon::DARK),
+        }
+    }
+
+    /// `th` over skin `d`.
+    pub fn of(d: Design, th: &FlTheme) -> Retint {
+        let (main, _, text, dark) = Self::brand(d);
         let mut r = Retint {
             surface: th.surface,
-            key: lemon::MAIN,
+            key: main,
             accent: th.selected,
             highlight: th.highlight,
             mute: th.mute,
-            text_from: (lemon::TEXT, lemon::DARK),
-            text_to: (lemon::TEXT, lemon::DARK),
+            text_from: (text, dark),
+            text_to: (text, dark),
         };
-        let bg = r.surface(lemon::DARK);
-        let text = th.text_color.unwrap_or(if bg.hsl().2 > 0.5 { Color::rgb(0x1e1e1e) } else { lemon::TEXT });
+        let bg = r.surface(dark);
+        let text = th.text_color.unwrap_or(if bg.hsl().2 > 0.5 { Color::rgb(0x1e1e1e) } else { text });
         r.text_to = (fl::readable(text, bg, 0.38), bg);
         r
+    }
+
+    /// `th` over the original Lemon skin.
+    pub fn lemon(th: &FlTheme) -> Retint {
+        Self::of(Design::Lemon, th)
     }
 
     pub fn surface(&self, c: Color) -> Color {
@@ -525,14 +928,19 @@ impl Retint {
 pub fn default_text(d: Design) -> String {
     match d {
         Design::Citrus => fl::DARK_TEXT.to_string(),
-        Design::Lemon => {
+        Design::Meridian | Design::Lemon | Design::Industrial => {
+            let (hue, main, text) = match d {
+                Design::Industrial => (168, industrial::MAIN, industrial::TEXT),
+                Design::Meridian => (216, meridian::MAIN, meridian::TEXT),
+                _ => (0, lemon::MAIN, lemon::TEXT),
+            };
             let v = |key: &str, c: Color| format!("{key}={}\n", fl::colour_value(key, c));
             format!(
-                "Hue=0\nSaturation=-256\nLightness=-153\nContrast=-8\nText=0\n{}{}{}{}BackMode=2\n",
-                v("Selected", lemon::MAIN),
-                v("Highlight", lemon::MAIN),
-                v("Mute", lemon::MAIN),
-                v("TextColor", lemon::TEXT)
+                "Hue={hue}\nSaturation=-256\nLightness=-153\nContrast=-8\nText=0\n{}{}{}{}BackMode=2\n",
+                v("Selected", main),
+                v("Highlight", main),
+                v("Mute", main),
+                v("TextColor", text)
             )
         }
     }
@@ -549,7 +957,7 @@ pub fn skin_text(d: Design) -> String {
 /// fixed tokens drawn in the lemon key colour (lit steps, notes, key labels, the default clip, the project category)
 /// follow the theme's selection colour; then what the theme colours directly (`fl::finish`).
 fn retint(p: &mut Palette, th: &FlTheme) {
-    let r = Retint::lemon(th);
+    let r = Retint::of(p.style.design, th);
     let citrus = fl::palette(th);
     let skin = p.clone();
     for name in Palette::NAMES {
@@ -626,10 +1034,28 @@ mod tests {
         // Role-mapped literals follow the design: Classic's raised grey lands on the dark highlight,
         // orange highlights on lemon.
         let g = p.s(0x505355);
-        assert!(g.r.abs_diff(0x40) <= 8 && g.r.abs_diff(g.g) <= 4 && g.g.abs_diff(g.b) <= 4, "{g}");
+        assert!(g.r.abs_diff(0x66) <= 6 && g.r == g.g && g.g == g.b, "{g}");
         let (h, s, _) = p.h(0xfb9244).hsl();
         assert!((h - lemon::MAIN.hsl().0).abs() < 4.0 && s > 0.8, "{}", p.h(0xfb9244));
         assert_eq!(p.a(0xa8e44a), lemon::MAIN);
+    }
+
+    /// The restored Lemon skin and the industrial redesign are two selectable looks: different surfaces, brand colour
+    /// and corner radii, with the old kit translating its brand constants for the new one.
+    #[test]
+    fn industrial_is_a_separate_look() {
+        let lemon = palette(Design::Lemon, None);
+        let industrial = palette(Design::Industrial, None);
+        assert_eq!(lemon.toolbar, lemon::DARK);
+        assert_eq!(industrial.toolbar, industrial::DARK);
+        assert_ne!(lemon.toolbar, industrial.toolbar);
+        assert_eq!(industrial.accent, industrial::MAIN);
+        assert_eq!((lemon.style.radius, industrial.style.radius), (6.0, 2.5));
+        assert!(lemon.style.lemon() && industrial.style.lemon(), "one kit, two treatments");
+        assert_eq!(industrial.brand_sel(lemon::MAIN), industrial::MAIN);
+        assert_eq!(industrial.brand_lit(lemon::HIGHLIGHT), industrial::HIGHLIGHT);
+        assert_eq!(industrial.brand_grey(lemon::DARK_HIGHLIGHT), industrial::DARK_HIGHLIGHT);
+        assert_eq!(lemon.brand_sel(lemon::MAIN), lemon::MAIN, "the old skin is unchanged");
     }
 
     #[test]
@@ -673,12 +1099,54 @@ mod tests {
         }
     }
 
+    /// Meridian is a fourth, independent look and the default for a fresh install. Its shapes are its own, its ink
+    /// is not Industrial's graphite, and a theme still recolours it without changing those shapes.
+    #[test]
+    fn meridian_is_the_default_and_a_separate_look() {
+        assert_eq!(Design::default(), Design::Meridian);
+        let p = palette(Design::Meridian, None);
+        assert!(p.style.meridian());
+        assert_eq!(p.style.radius, 2.0);
+        assert_eq!(p.accent, meridian::MAIN);
+        assert_ne!(p.toolbar, palette(Design::Industrial, None).toolbar);
+        assert_ne!(p.note_top, palette(Design::Industrial, None).note_top);
+        assert_eq!(Design::Meridian.theme_index(), None, "a skin is not a colour theme");
+        assert_eq!(Design::Lemon.theme_index(), Some(0));
+        assert_eq!(Design::Citrus.theme_index(), Some(2));
+        let th = FlTheme::parse(crate::presets::PRESETS[0].1);
+        let themed = palette(Design::Meridian, Some(&th));
+        assert!(themed.style.meridian(), "a theme keeps Meridian's geometry");
+        assert_eq!(themed.accent, th.selected.unwrap());
+    }
+
+    #[test]
+    fn meridian_text_is_readable() {
+        let p = palette(Design::Meridian, None);
+        for (fg, bg) in [
+            (p.text, p.window_title),
+            (p.text_dim, p.window_title),
+            (p.glyph, p.toolbar),
+            (p.menu_text, p.menu_panel),
+            (p.browser_folder, p.browser_list),
+            (p.pill_text, p.pill),
+            (p.on_glyph, p.on_bottom),
+            (p.menu_pop_text, p.menu_pop_hi),
+            (p.name_text, p.name_button),
+            (p.ruler_text, p.ruler),
+            (p.slot_text_used, p.slot),
+            (p.note_text, p.note_top),
+        ] {
+            assert!(contrast(fg, bg) >= 0.35, "{fg} on {bg}");
+        }
+    }
+
     #[test]
     fn names_round_trip() {
         for d in Design::ALL {
             assert_eq!(Design::parse(d.name()), Some(d));
         }
-        assert_eq!(Design::Lemon.next(), Design::Citrus);
+        assert_eq!(Design::Lemon.next(), Design::Industrial);
+        assert_eq!(Design::Industrial.next(), Design::Citrus);
         assert_eq!(Design::parse("Classic"), Some(Design::Citrus));
     }
 }

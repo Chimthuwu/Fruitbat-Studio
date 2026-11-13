@@ -261,6 +261,9 @@ fn write_graph(g: &ModGraph) -> Vec<u8> {
             b.push(u8::from(t.enabled));
         }
     }
+    // The strip's rows trail the modulators: a reader that stops after the count ignores them, and a payload cut
+    // short reads as one row.
+    b.push(g.rows as u8);
     b
 }
 
@@ -400,7 +403,9 @@ fn read_graph(d: &[u8]) -> Option<ModGraph> {
             break;
         }
     }
-    Some(ModGraph { modulators, next })
+    // Rows trail the modulators; a payload written before they existed (or cut short) is one row.
+    let rows = r.u8().unwrap_or(0);
+    Some(ModGraph { modulators, next, rows })
 }
 
 fn read_source(r: &mut Reader, kind: u8, layout: u8) -> Option<ModSource> {
@@ -1364,6 +1369,8 @@ mod modulation_graph_tests {
         let env = g.add(ModSource::Envelope(Envelope { attack: 0.01, decay: 0.2, sustain: 0.5, release: 0.3 }));
         g.get_mut(env).unwrap().enabled = false;
         g.assign(env, ModTarget::new(ParameterPath { owner: PersistentObjectId(3), parameter: ParameterKey::PluginNativeId(42) }));
+        // A second row of slots, so the round trips carry the strip's rows too.
+        g.add_row();
         g
     }
 

@@ -757,18 +757,25 @@ pub fn slice(s: &mut State, tick: u32) -> usize {
     let cut: Vec<usize> = notes(s)
         .iter()
         .enumerate()
-        .filter(|(_, n)| Some(n.channel) == ch && n.length > 0 && n.position < tick && tick < n.position + n.length)
+        .filter(|(_, n)| Some(n.channel) == ch && n.position < tick && tick < n.position + shown_len(s, n))
         .map(|(i, _)| i)
         .collect();
     if cut.is_empty() {
         return 0;
     }
+    let ends: Vec<u32> = cut
+        .iter()
+        .map(|&i| {
+            let n = notes(s)[i];
+            n.position + shown_len(s, &n)
+        })
+        .collect();
     snapshot(s);
     let p = pattern_mut(s);
-    for &i in &cut {
+    for (&i, &end) in cut.iter().zip(&ends) {
         let n = p.notes[i];
         p.notes[i].length = tick - n.position;
-        p.notes.push(Note { position: tick, length: n.position + n.length - tick, ..n });
+        p.notes.push(Note { position: tick, length: end - tick, ..n });
     }
     s.piano.clear_selection();
     finish_edit(s);

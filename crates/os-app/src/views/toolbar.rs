@@ -148,6 +148,7 @@ struct Ctx<'a> {
 pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo, width: f32) {
     let t = ui.t;
     let lemon = super::lemon(ui);
+    let meridian = t.style.meridian();
     let l = &s.bar.layout;
     let editing = s.bar.editing;
     let fit = fit(s, width);
@@ -155,7 +156,17 @@ pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo, width: f32) {
     // Separator lines: off from the Toolbars menu (spec: ui/toolbar-menu.md §2).
     let seps = s.toolbar.separators;
     // Bands.
-    if lemon {
+    if meridian {
+        // Meridian: one machined ink header, a bone hairline under the menu row and a fine brass datum at the band's
+        // foot. No gloss: the hierarchy comes from rules and spacing.
+        ui.c.fill_rect(Rect::new(0.0, 0.0, width, h), t.toolbar);
+        ui.c.fill_rect(Rect::new(0.0, 0.0, width, 1.0), t.window_border);
+        for r in (1..rows).filter(|_| seps) {
+            ui.c.fill_rect(Rect::new(0.0, ROW_H * r as f32, width, 1.0), t.toolbar_line);
+        }
+        ui.c.fill_rect(Rect::new(0.0, h - 2.0, width, 1.0), t.accent_dim);
+        ui.c.fill_rect(Rect::new(0.0, h - 1.0, width, 1.0), t.toolbar_line);
+    } else if lemon {
         // Lemon (spec: ui/lemon-design.md §4): a shallow machined gradient, short rounded separators and a single
         // lemon datum line under the band.
         ui.c.fill_rect_gradient(Rect::new(0.0, 0.0, width, h), t.toolbar.shade(0.025), t.toolbar.shade(-0.035), 0.0);
@@ -300,7 +311,14 @@ fn hint_panel(ui: &mut Ui, c: &Ctx) {
     let hp = a.span(72.0, 376.0, 4.0, 36.0);
     sunken(ui, hp, t.sunken);
     ui.hit(hp, Action::DragWindow, "Status bar");
-    if super::lemon(ui) {
+    if t.style.meridian() {
+        // Meridian's masthead: a brass rail, a wide-tracked product line, and the project title in editorial order.
+        ui.c.fill_rect(Rect::new(hp.x + 1.0, hp.y + 1.0, 3.0, hp.h - 2.0), t.accent);
+        ui.c.text_clip(Font::condensed(10, 8).bold(), a.x(82.0), a.y(5.0), 66.0, t.accent, "MERIDIAN");
+        ui.c.fill_rect(a.r(Rect::new(148.0, 6.0, 3.0, 1.0)), t.text_faint);
+        ui.c.fill_rect(a.r(Rect::new(153.0, 7.0, 1.0, 10.0)), t.splitter_dark);
+        ui.c.text_clip(Font::new(13), a.x(159.0), a.y(6.0), 197.0, t.text, &f.title);
+    } else if super::lemon(ui) {
         // Project identity: a compact wordmark and the project name, anchored by a lemon rail.
         ui.c.fill_rect(Rect::new(hp.x + 1.0, hp.y + 1.0, 2.0, hp.h - 2.0), t.accent_dim);
         ui.c.text_clip(Font::condensed(11, 5).bold(), a.x(80.0), a.y(6.0), 62.0, t.accent, "LEMONWIG");
@@ -318,8 +336,19 @@ fn hint_panel(ui: &mut Ui, c: &Ctx) {
 fn transport(ui: &mut Ui, c: &Ctx) {
     let (t, a, s, f) = (ui.t, c.a, c.s, c.f);
     let lemon = super::lemon(ui);
+    let meridian = t.style.meridian();
     let capsule = a.span(383.0, 483.0, 4.0, 36.0);
-    if lemon {
+    if meridian {
+        // Three separate machined plates: pattern mode, transport, and a brass-capped tempo field. The gaps are the
+        // composition; nothing is enclosed in one glossy capsule.
+        for (x0, x1) in [(383.0, 418.0), (419.0, 483.0)] {
+            let p = a.span(x0, x1, 4.0, 36.0);
+            ui.c.fill_rect(p, t.sunken);
+            ui.c.fill_rect(Rect::new(p.x, p.y, p.w, 1.0), t.toolbar_edge);
+            ui.c.fill_rect(Rect::new(p.x, p.bottom() - 1.0, p.w, 1.0), t.toolbar_line);
+        }
+        ui.c.fill_rect(a.r(Rect::new(464.5, 6.0, 1.0, 28.0)), t.toolbar_line);
+    } else if lemon {
         // Lemon: one rounded-square tray, each section a rounded square inside it.
         os_ui::kit::lemon::outlined(ui.c, capsule, 7.0, t.toolbar_line.shade(-0.15), t.sunken);
     } else {
@@ -334,7 +363,9 @@ fn transport(ui: &mut Ui, c: &Ctx) {
     ui.hit(pat, Action::PatSong(false), "Pattern: play the current pattern");
     ui.hit(song, Action::PatSong(true), "Song: play the arrangement");
     for (r, label, active) in [(pat, "PAT", !s.song_mode), (song, "SONG", s.song_mode)] {
-        if active && lemon {
+        if active && meridian {
+            ui.c.fill_rect(Rect::new(r.x + 1.0, r.y, r.w - 2.0, r.h), t.accent);
+        } else if active && lemon {
             os_ui::kit::lemon::lit_in(ui.c, ui.t, Rect::new(r.x + 2.0, r.y + 1.0, r.w - 3.0, r.h - 1.5), 4.0, false);
         } else if active {
             ui.c.push_clip(r);
@@ -352,7 +383,13 @@ fn transport(ui: &mut Ui, c: &Ctx) {
         let hov = ui.hit(r, action.clone(), hint);
         let on = on || ui.down(r, &action);
         // Lit / hovered sections fill their whole slot of the capsule (clipped to its round end).
-        if (on || hov) && lemon {
+        if (on || hov) && meridian {
+            let seg = Rect::new(r.x + 1.0, r.y + 1.0, r.w - 2.0, r.h - 2.0);
+            ui.c.fill_rect(seg, if on { t.accent } else { t.button_hi });
+            if on {
+                ui.c.fill_rect(Rect::new(seg.x, seg.y, 2.0, seg.h), t.brand_lit(os_theme::design::lemon::HIGHLIGHT));
+            }
+        } else if (on || hov) && lemon {
             let seg = Rect::new(r.x + 1.0, r.y + 1.0, r.w - 2.0, r.h - 2.0);
             if on {
                 os_ui::kit::lemon::lit_in(ui.c, ui.t, seg, 5.0, hov);
@@ -394,7 +431,10 @@ fn transport(ui: &mut Ui, c: &Ctx) {
     let down = ui.down(rec, &Action::Record);
     let dot = crate::high_visibility::record_dot(t, crate::high_visibility::on());
     let face = Rect::new(rec.cx() - 14.0, rec.cy() - 14.0, 28.0, 28.0);
-    if lemon {
+    if t.style.meridian() {
+        ui.c.fill_rect(face, if armed { dot } else { if hov || down { t.button_hi } else { t.button } });
+        ui.c.stroke_rrect(face, 0.0, 1.0, if armed { dot.shade(0.35) } else { t.toolbar_edge });
+    } else if lemon {
         os_ui::kit::button(ui.c, t, face, os_ui::kit::State::new(hov, down, false));
     } else {
         ui.c.fill_circle(rec.cx(), rec.cy(), 14.0, t.toolbar_line.shade(-0.25));
@@ -413,14 +453,18 @@ fn transport(ui: &mut Ui, c: &Ctx) {
     // Tempo.
     let tb = a.span(517.0, 570.0, 6.0, 34.0);
     ui.hit(tb, Action::Tempo, "Tempo (drag up/down: the whole number, or the decimal place the drag starts on)");
-    if lemon {
+    if meridian {
+        ui.c.fill_rect(tb, t.time_panel);
+        ui.c.fill_rect(Rect::new(tb.x, tb.y, 2.0, tb.h), t.accent);
+        ui.c.fill_rect(Rect::new(tb.x, tb.bottom() - 1.0, tb.w, 1.0), t.toolbar_edge);
+    } else if lemon {
         os_ui::kit::lemon::well(ui.c, t, tb, t.time_panel);
     } else {
         ui.c.fill_rrect(tb, 5.0, ui.t.s(0x5b5f61));
         ui.c.fill_rrect(tb.inset(1.0), 4.0, ui.t.s(0x5f6466));
     }
-    // Lemon displays show their digits in the brand colour.
-    let digits = if lemon { t.pill } else { t.glyph };
+    // Lemon displays show their digits in the brand colour; Meridian reserves brass for the data.
+    let digits = if lemon || meridian { t.pill } else { t.glyph };
     // While playing, the tempo playback is at: tempo automation moves it (spec: audio/timing.md "Tempo that changes").
     let whole = format!("{}", f.tempo.trunc() as i64);
     let frac = format!(".{:03}", ((f.tempo.fract()) * 1000.0).round() as i64 % 1000);
@@ -467,7 +511,12 @@ fn time(ui: &mut Ui, c: &Ctx) {
     let (t, a, s, f) = (ui.t, c.a, c.s, c.f);
     let lemon = super::lemon(ui);
     let tp = a.span(745.0, 873.0, 4.0, 36.0);
-    if lemon {
+    if t.style.meridian() {
+        ui.c.fill_rect(tp, t.time_panel);
+        ui.c.fill_rect(Rect::new(tp.x, tp.y, tp.w, 1.0), t.toolbar_edge);
+        ui.c.fill_rect(Rect::new(tp.x, tp.bottom() - 2.0, tp.w, 1.0), t.accent_dim);
+        ui.c.fill_rect(Rect::new(tp.right() - 2.0, tp.y, 1.0, tp.h), t.toolbar_line);
+    } else if lemon {
         os_ui::kit::lemon::well(ui.c, t, tp, t.time_panel);
     } else {
         ui.c.fill_rect(tp, ui.t.s(0x212829));
@@ -502,7 +551,7 @@ fn time(ui: &mut Ui, c: &Ctx) {
     let step_x = tick_x - 8.0 - sw;
     let bar_x = (step_x - 8.0 - bw).max(tp.x + 2.0);
     ui.c.push_clip(tp.inset(1.0));
-    let g = if lemon { t.pill } else { t.glyph };
+    let g = if lemon || t.style.meridian() { t.pill } else { t.glyph };
     if let Some(c) = s.rec.count.filter(|c| c.left() > 0) {
         // A recording count-in (spec: ui/recording.md §3): the beats left.
         ui.c.text_center(Font::light(22, 8), Rect::new(tp.x, tp.y + 2.0, tp.w, tp.h - 2.0), g, &format!("REC IN {}", c.left()));
@@ -702,7 +751,11 @@ fn menu_bar(ui: &mut Ui, c: &Ctx) {
     let (t, a, s) = (ui.t, c.a, c.s);
     let mb = a.span(4.0, 296.0, 45.0, 77.0);
     let lemon = super::lemon(ui);
-    if lemon {
+    if t.style.meridian() {
+        // A menu rail: no card, just a baseline and type. The open item gets a brass datum, like a section tab.
+        ui.c.fill_rect(Rect::new(mb.x, mb.bottom() - 1.0, mb.w, 1.0), t.toolbar_line);
+        ui.c.fill_rect(Rect::new(mb.x, mb.bottom() - 2.0, 26.0, 1.0), t.accent_dim);
+    } else if lemon {
         os_ui::kit::lemon::panel(ui.c, mb, 6.0, t.menu_panel);
     } else {
         ui.c.fill_rect_gradient(mb, t.menu_panel.shade(-0.04), t.menu_panel.shade(0.02), 2.5);
@@ -714,12 +767,25 @@ fn menu_bar(ui: &mut Ui, c: &Ctx) {
         let r = a.r(Rect::new(x0 - 3.0, 47.0, x1 - x0 + 6.0, 29.0));
         let hov = ui.hit(r, Action::Menu(i), title);
         let open = s.menu_open == Some(i) && !c.preview;
-        if lemon && open {
+        if t.style.meridian() {
+            if open {
+                ui.c.fill_rect(Rect::new(r.x + 2.0, r.bottom() - 2.0, r.w - 4.0, 2.0), t.accent);
+            } else if hov {
+                ui.c.fill_rect(Rect::new(r.x + 2.0, r.bottom() - 1.0, r.w - 4.0, 1.0), t.text_faint);
+            }
+        } else if lemon && open {
             os_ui::kit::lemon::lit_in(ui.c, ui.t, r.inset(1.0), 4.0, false);
         } else if hov || open {
             ui.c.fill_rrect(if lemon { r.inset(1.0) } else { r }, if lemon { 4.0 } else { 2.0 }, t.menu_drop_hi);
         }
-        ui.c.text(Font::condensed(menus::BAR_FONT.size, width as u16), a.x(x0), a.y(51.0), if lemon && open { t.pill_text } else { t.menu_text }, title);
+        let ink = if t.style.meridian() {
+            if open { t.brand_lit(os_theme::design::lemon::HIGHLIGHT) } else if hov { t.glyph } else { t.menu_text }
+        } else if lemon && open {
+            t.pill_text
+        } else {
+            t.menu_text
+        };
+        ui.c.text(Font::condensed(menus::BAR_FONT.size, width as u16), a.x(x0), a.y(51.0), ink, title);
     }
 }
 
@@ -763,7 +829,19 @@ fn song_pos(ui: &mut Ui, c: &Ctx) {
     }
     let hx = range.map(|len| a.x(crate::song_pos::handle_x(pos, len).round()));
     let y = |v: f32| a.y(v);
-    if lemon {
+    if t.style.meridian() {
+        // A surveyor's rule: a thin groove, square handle and brass fill, no pill.
+        let x0 = a.x(390.0);
+        ui.c.fill_rect(Rect::new(x0, y(61.0), 180.0, 2.0), t.sunken_dark);
+        match hx {
+            Some(hx) => {
+                ui.c.fill_rect(Rect::new(x0, y(61.0), hx - x0, 2.0), t.accent);
+                ui.c.fill_rect(Rect::new(hx - 4.0, y(55.0), 8.0, 14.0), t.accent);
+                ui.c.fill_rect(Rect::new(hx - 1.0, y(58.0), 1.0, 8.0), t.brand_lit(os_theme::design::lemon::COLORED_DARK));
+            }
+            None => ui.c.fill_rect(a.r(Rect::new(394.0, 58.0, 2.0, 8.0)), t.button),
+        }
+    } else if lemon {
         let x0 = a.x(390.0);
         ui.c.fill_rrect(Rect::new(x0, y(60.0), 180.0, 4.0), 2.0, t.sunken_dark);
         match hx {

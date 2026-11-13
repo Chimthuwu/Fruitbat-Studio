@@ -347,6 +347,8 @@ pub enum Cmd {
     TrackInsert(u16),
     TrackDelete(u16),
     TrackColor(u16, Option<Rgb>),
+    /// Name and colour the lane after its first clip (the track menu's N: Auto name and color).
+    TrackAutoName(u16),
     TrackMuteClips(u16, bool),
     /// "Create automation clip" on a control: target, name, current value 0..1.
     CreateAutomation(u32, String, f64),
@@ -3271,6 +3273,7 @@ pub fn track_menu(s: &State, t: u16, x: f32, y: f32) -> Popup {
     let mut items = vec![
         PItem::head("Track"),
         PItem::new("Rename...", Cmd::TrackRename(t)),
+        PItem::new("Auto name and color from first clip", Cmd::TrackAutoName(t)).key("N"),
         PItem::sub("Color", colors),
         // Linear mode (spec: model/track-model.md §5): the inserts are the prominent action; Classic keeps Track mode.
         PItem::sub(if s.project.linear_mode { "Insert" } else { "Track mode" }, crate::track_links::mode_items(s, t, |m| Cmd::TrackMode(t, m))),
@@ -4531,6 +4534,8 @@ pub fn select_track(s: &mut State, row: u16, extend: bool) {
     let anchor = s.playlist.track_anchor.unwrap_or(s.playlist.track);
     s.playlist.track = row;
     s.playlist.track_anchor = (extend && anchor != row).then_some(anchor);
+    // Picking a track hands the arrows back from the device rack / modulator strip: they select tracks again.
+    s.keyboard_focus = crate::app::KeyboardFocus::Tracks;
 }
 
 /// A track header click: plain click selects the track, Shift+click extends the selection to it (a range of tracks is
@@ -5485,6 +5490,33 @@ pub fn run(app: &mut App, cmd: Cmd) -> Option<String> {
             track_undo(s, "Delete track", |s| delete_track(s, t));
             None
         }
+        Cmd::TrackAutoName(t) => {
+            // The lane's first clip names and colours the track: a pattern clip after its pattern, an audio or
+            // automation clip after its channel, with the clip's own tint as the track's colour.
+            let first = arr_mut(s).clips.iter().filter(|c| c.track == t).min_by_key(|c| c.position).copied();
+            let Some(clip) = first else {
+                return Some("Auto name: this track has no clips".into());
+            };
+            let name = match clip.source {
+                ClipSource::Pattern(n) => crate::patterns::name_of(s, n),
+                ClipSource::Channel(ch) => s
+                    .project
+                    .channels
+                    .iter()
+                    .position(|c| c.index == ch)
+                    .map_or_else(|| format!("Track {}", t + 1), |row| crate::rack::channel_name(s, row)),
+            };
+            let color = clip_tint(s, clip.source);
+            snapshot(s);
+            if let Some(tr) = arr_mut(s).tracks.get_mut(usize::from(t)) {
+                tr.name = Some(name.clone());
+                if color.is_some() {
+                    tr.color = color;
+                }
+            }
+            s.piano.dirty = true;
+            Some(format!("Track named \"{name}\""))
+        }
         Cmd::TrackColor(t, c) => {
             snapshot(s);
             if let Some(tr) = arr_mut(s).tracks.get_mut(usize::from(t)) {
@@ -5774,6 +5806,22 @@ pub fn consolidate(app: &mut App) -> String {
     }
 }
 
+/// The track a track menu belongs to: its Color rows name it (every track menu has them).
+fn popup_track(p: &Popup) -> Option<u16> {
+    fn find(items: &[PItem]) -> Option<u16> {
+        for i in items {
+            if let Cmd::TrackColor(t, _) = i.cmd {
+                return Some(t);
+            }
+            if let Some(t) = find(&i.children) {
+                return Some(t);
+            }
+        }
+        None
+    }
+    p.sub.and_then(|k| p.items.get(k)).and_then(|i| find(&i.children)).or_else(|| find(&p.items))
+}
+
 /// Keys while the playlist is focused. Returns true when handled.
 pub fn key(app: &mut App, key: &winit::keyboard::Key, ctrl: bool, alt: bool) -> bool {
     use winit::keyboard::{Key, NamedKey};
@@ -5804,10 +5852,27 @@ pub fn key(app: &mut App, key: &winit::keyboard::Key, ctrl: bool, alt: bool) -> 
         app.invalidate();
         return true;
     }
-    if app.state.playlist.popup.is_some() && matches!(key, Key::Named(NamedKey::Escape)) {
-        app.state.playlist.popup = None;
-        app.invalidate();
-        return true;
+    if let Some(popup) = &app.state.playlist.popup {
+        match key {
+            Key::Named(NamedKey::Escape) => {
+                app.state.playlist.popup = None;
+                app.invalidate();
+                return true;
+            }
+            // N on a track menu: name and colour the lane after its first clip.
+            Key::Character(c) if !ctrl && !alt && c.eq_ignore_ascii_case("n") => {
+                let track = popup_track(popup);
+                app.state.playlist.popup = None;
+                if let Some(t) = track {
+                    if let Some(m) = run(app, Cmd::TrackAutoName(t)) {
+                        app.state.message = Some(m);
+                    }
+                    app.invalidate();
+                    return true;
+                }
+            }
+            _ => {}
+        }
     }
     let cmd = match key {
         // Shift+4 and Shift+5 by the key, whatever the layout types with it (a Turkish Shift+4 is "+").
@@ -5862,6 +5927,22 @@ pub fn key(app: &mut App, key: &winit::keyboard::Key, ctrl: bool, alt: bool) -> 
         Key::Named(NamedKey::PageDown) => Cmd::ZoomOut,
         Key::Named(NamedKey::ArrowLeft) if shift => Cmd::ShiftTime(-1),
         Key::Named(NamedKey::ArrowRight) if shift => Cmd::ShiftTime(1),
+        // Plain Up / Down select the track above / below, as the mixer's arrows select strips: with the keys on the
+        // playlist (a click on a track hands them back), the arrows walk the lanes instead of scrolling.
+        Key::Named(NamedKey::ArrowUp) if !ctrl && !alt && !shift => {
+            let s = &mut app.state;
+            let t = s.playlist.track.saturating_sub(1);
+            select_track(s, t, false);
+            app.invalidate();
+            return true;
+        }
+        Key::Named(NamedKey::ArrowDown) if !ctrl && !alt && !shift => {
+            let s = &mut app.state;
+            let t = (s.playlist.track + 1).min(TRACKS - 1);
+            select_track(s, t, false);
+            app.invalidate();
+            return true;
+        }
         Key::Named(NamedKey::ArrowUp) if shift => Cmd::ShiftTracks(-1),
         Key::Named(NamedKey::ArrowDown) if shift => Cmd::ShiftTracks(1),
         Key::Named(NamedKey::ArrowUp) if ctrl => {
@@ -6113,10 +6194,47 @@ fn fill_cpu(s: &State, key: usize, menu: &mut Popup) {
 mod tests {
     use super::*;
 
+    /// N on a track menu names and colours the lane after the first clip in it: a pattern clip after its pattern,
+    /// the clip's own tint as the lane's colour.
+    #[test]
+    fn the_track_menu_auto_names_from_the_first_clip() {
+        let mut app = app();
+        arr_mut(&mut app.state).clips = vec![os_model::Clip::new(0, 3840, 0, ClipSource::Pattern(1))];
+        let name = crate::patterns::name_of(&app.state, 1);
+        let tint = clip_tint(&app.state, ClipSource::Pattern(1));
+        app.state.playlist.popup = Some(track_menu(&app.state, 0, 0.0, 0.0));
+        assert!(key(&mut app, &winit::keyboard::Key::Character("n".into()), false, false), "N is handled on the menu");
+        assert!(app.state.playlist.popup.is_none(), "the menu closed");
+        let tr = &arr_mut(&mut app.state).tracks[0];
+        assert_eq!(tr.name.as_deref(), Some(name.as_str()), "the lane took the clip's name");
+        assert_eq!(tr.color, tint, "and the clip's colour");
+    }
+
     fn app() -> App {
         let mut app = App::new(None);
         app.state.project = crate::app::test_project();
         app
+    }
+
+    /// A click on a track header takes the arrow keys back from the device rack and the modulator strip: after it
+    /// the arrows select tracks again, and the rack's selection stays where it was.
+    #[test]
+    fn a_track_click_takes_the_keys_back_from_the_rack() {
+        use winit::keyboard::{Key, NamedKey};
+        let mut app = app();
+        app.state.z = vec![crate::app::Win::Playlist];
+        app.state.device_rack_sels = std::collections::BTreeSet::from([0]);
+        app.state.keyboard_focus = crate::app::KeyboardFocus::Rack;
+        press_header(&mut app, 6, false, (0.0, 0.0));
+        assert_eq!(app.state.keyboard_focus, crate::app::KeyboardFocus::Tracks, "the click handed the keys back");
+        assert_eq!(app.state.playlist.track, 6);
+        app.key(&Key::Named(NamedKey::ArrowDown), false, false);
+        assert_eq!(app.state.playlist.track, 7, "the next arrow selected the next track");
+        assert_eq!(app.state.device_rack_sels, std::collections::BTreeSet::from([0]), "the rack stayed put");
+        // The mixer hands them back the same way.
+        app.state.keyboard_focus = crate::app::KeyboardFocus::Modulators;
+        crate::mixer::select(&mut app.state, 2, false);
+        assert_eq!(app.state.keyboard_focus, crate::app::KeyboardFocus::Tracks, "a strip click too");
     }
 
     /// Ctrl+D copies the selected track under itself — name, colour and clips — and the copy becomes the selection;

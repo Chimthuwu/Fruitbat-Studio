@@ -38,6 +38,7 @@ pub(crate) struct DetWin {
 fn title(w: Win) -> &'static str {
     match w {
         Win::ChannelRack => "Channel rack",
+        Win::ModEditor => "Modulator settings",
         _ => "Mixer",
     }
 }
@@ -73,9 +74,16 @@ fn open(el: &ActiveEventLoop, main: &Window, app: &App, w: Win) -> Option<DetWin
     let k = ui_scale(main);
     let (lw, lh) = app.state.detached_size(w)?;
     let (mw, mh) = app.state.detached_min(w);
+    let always_on_top = w == Win::ModEditor;
     let attrs = Window::default_attributes()
         .with_title(title(w))
-        .with_decorations(false)
+        .with_decorations(!always_on_top)
+        .with_resizable(!always_on_top)
+        .with_window_level(if always_on_top {
+            winit::window::WindowLevel::AlwaysOnTop
+        } else {
+            winit::window::WindowLevel::Normal
+        })
         .with_min_inner_size(PhysicalSize::new((f64::from(mw) * k).round() as u32, (f64::from(mh) * k).round() as u32));
     let attrs = match app.detached_frame(w) {
         Some([x, y, fw, fh]) => {
@@ -117,6 +125,11 @@ fn open(el: &ActiveEventLoop, main: &Window, app: &App, w: Win) -> Option<DetWin
         if app.plugins.owner != 0 { attrs.with_x11_window_type(vec![WindowType::Utility]).with_visible(false) } else { attrs }
     };
     let window = Rc::new(el.create_window(attrs).ok()?);
+    // Reassert the level after creation: the owner and other creation options are applied around it, and this window
+    // must stay above the main window's piano roll / playlist and every detached window.
+    if always_on_top {
+        window.set_window_level(winit::window::WindowLevel::AlwaysOnTop);
+    }
     #[cfg(target_os = "linux")]
     if app.plugins.owner != 0 {
         use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -164,6 +177,20 @@ impl Shell {
                     let px = |v: f32| (f64::from(v) * k).round() as u32;
                     d.window.set_min_inner_size(Some(PhysicalSize::new(px(mw), px(mh))));
                     let _ = d.window.request_inner_size(PhysicalSize::new(px(w), px(h)));
+                }
+            }
+            // The modulator editor opens above its slot and follows it when another modulator's editor is opened.
+            // It has no decorations, so there is no user-moved position to preserve.
+            if d.win == Win::ModEditor
+                && let (Ok(main_at), Some(r)) = (main.inner_position(), self.app.detached_origin(d.win))
+            {
+                let want = PhysicalPosition::new(
+                    main_at.x + (f64::from(r.x) * k).round() as i32,
+                    main_at.y + (f64::from(r.y) * k).round() as i32,
+                );
+                let moved = d.window.outer_position().is_ok_and(|have| (have.x - want.x).abs() > 1 || (have.y - want.y).abs() > 1);
+                if moved {
+                    d.window.set_outer_position(want);
                 }
             }
             if self.app.detached_dirty(d.win) {

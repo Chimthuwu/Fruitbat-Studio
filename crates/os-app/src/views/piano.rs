@@ -136,9 +136,15 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
     // Note-colour tab (§6).
     let tab = l.tab;
     let lemon = super::lemon(ui);
+    let meridian = t.style.meridian();
     ui.c.fill_rect(tab, t.window_title);
     let green = t.note_top.mix(t.note_bottom, 0.6);
-    if lemon {
+    if meridian {
+        // A squared colour well with a brass rail: the same note-group cue, built like the rest of Meridian.
+        ui.c.fill_rect(Rect::new(tab.x + 3.0, tab.y + 3.0, tab.w - 6.0, tab.h - 6.0), green);
+        ui.c.fill_rect(Rect::new(tab.x + 3.0, tab.y + 3.0, 2.0, tab.h - 6.0), t.accent);
+        ui.c.fill_rect(Rect::new(tab.x + 3.0, tab.y + 3.0, tab.w - 6.0, 1.0), green.mix(Color::rgb(0xffffff), 0.25));
+    } else if lemon {
         // Lemon (spec: ui/lemon-design.md §6): a rounded colour tile instead of the slanted tab.
         ui.c.fill_rrect(Rect::new(tab.x + 3.0, tab.y + 3.0, tab.w - 6.0, tab.h - 6.0), lk::r_btn(t), green);
     } else {
@@ -158,8 +164,9 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
         Action::PianoCmd(NCmd::NoteColorMenu),
         "Note color: choose a color group; apply color / type to the selected notes",
     );
-    ui.c.fill_rrect(chip, 3.0, swatch);
-    ui.c.stroke_rrect(chip, 3.0, 1.0, if hc { t.accent } else { swatch.shade(-0.25) });
+    let chip_rad = if meridian { 0.0 } else { 3.0 };
+    ui.c.fill_rrect(chip, chip_rad, swatch);
+    ui.c.stroke_rrect(chip, chip_rad, 1.0, if hc { t.accent } else { swatch.shade(-0.25) });
     let swatch_ink = Color::rgb(0x15221a);
     ui.c.text_center(Font::new(11), Rect::new(chip.x, chip.y, 29.0, chip.h), swatch_ink, &format!("{:02}", group + 1));
     os_ui::kit::triangle(ui.c, chip.right() - 7.0, chip.cy(), 3.0, os_ui::kit::Dir::Down, swatch_ink);
@@ -169,7 +176,7 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
     ] {
         let b = Rect::new(tab.x + 47.0, y, 21.0, 16.0);
         let hb = ui.hit(b, Action::PianoCmd(cmd), hint);
-        ui.c.fill_rrect(b, 3.0, if on { t.accent } else if hb { t.button_hi } else { ui.t.s(0x1d1f21) });
+        ui.c.fill_rrect(b, if meridian { 0.0 } else { 3.0 }, if on { t.accent } else if hb { t.button_hi } else { ui.t.s(0x1d1f21) });
         let ink = if on { ui.t.s(0x1d1f21) } else { t.text };
         if slide {
             ui.c.fill_polygon(&[(b.x + 5.0, b.bottom() - 4.0), (b.right() - 5.0, b.y + 4.0), (b.right() - 5.0, b.bottom() - 4.0)], ink);
@@ -225,7 +232,14 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
             (base, base.shade(-0.10), base.shade(-0.35), t.note_text)
         };
         let body = Rect::new(nr.x + 1.0, nr.y + 1.0, (nr.w - 2.0).max(1.0), nr.h - 2.0);
-        if lemon {
+        if meridian {
+            // A squared note block with a bright cap and a family rail: no rounded card.
+            ui.c.fill_rect(nr, rim);
+            ui.c.fill_rect(body, top);
+            ui.c.fill_rect(Rect::new(body.x, body.y, body.w, 1.0), top.mix(Color::rgb(0xffffff), 0.22));
+            ui.c.fill_rect(Rect::new(body.x, body.bottom() - 1.0, body.w, 1.0), bottom);
+            ui.c.fill_rect(Rect::new(body.x, body.y, 2.0, body.h), bottom.shade(-0.25));
+        } else if lemon {
             // Rounded-square notes: rim, then the body as a soft top-light gradient.
             let rad = 3.5f32.min(nr.w / 2.0).min(nr.h / 2.0);
             ui.c.fill_rrect(nr, rad, rim);
@@ -408,7 +422,17 @@ fn toolbar(ui: &mut Ui, s: &State, r: Rect, shift: f32) {
         // The magnet's hint names the current snap (spec: ui/piano-snap.md §8).
         let hint: std::borrow::Cow<'static, str> = if action == Action::PianoSnapMenu { crate::piano_snap::hint(s).into() } else { hint.into() };
         let hov = ui.hit(b, action, hint);
-        let c = if super::lemon(ui) {
+        let c = if t.style.meridian() {
+            // Meridian: a flat instrument key; the active one is brass with a dark glyph.
+            let bg = b.outset(1.0);
+            if on {
+                ui.c.fill_rect(bg, t.accent);
+                ui.c.fill_rect(Rect::new(bg.x, bg.y, bg.w, 1.0), t.brand_lit(os_theme::design::lemon::HIGHLIGHT));
+            } else if hov {
+                ui.c.fill_rect(bg, t.button_hi);
+            }
+            if on { t.brand_sel(os_theme::design::lemon::COLORED_DARK) } else { t.glyph }
+        } else if super::lemon(ui) {
             // Lemon: the active tool is a lit rounded square with a dark glyph.
             let bg = b.outset(1.0);
             if on {
@@ -514,6 +538,7 @@ fn keyboard(ui: &mut Ui, l: &Layout, g: &Geom, lit: &[i32]) {
     ui.c.push_clip(k);
     // White keys: a stepped horizontal gradient (§4), with a dark right edge. Lemon: flat keys.
     let lemon = super::lemon(ui);
+    let meridian = t.style.meridian();
     let bands = if lemon { 1 } else { 6 };
     for i in 0..bands {
         let x = k.x + (k.w - 1.0) * i as f32 / bands as f32;
@@ -563,6 +588,12 @@ fn keyboard(ui: &mut Ui, l: &Layout, g: &Geom, lit: &[i32]) {
         if is_black(key) {
             let y = g.y_of(key);
             let (left, right) = if lit.contains(&key) { (t.key_black_lit_left, t.key_black_lit) } else { (t.key_black_left, t.key_black) };
+            if meridian {
+                // Squared black keys with a bright playing edge; the left end runs under the clip.
+                ui.c.fill_rect(Rect::new(k.x - 6.0, y, 51.0, row), right);
+                ui.c.fill_rect(Rect::new(k.x + 41.0, y, 4.0, row), right.mix(Color::rgb(0xffffff), 0.18));
+                continue;
+            }
             if lemon {
                 // Rounded at the playing end; the left end runs under the clip.
                 ui.c.fill_rrect(Rect::new(k.x - 6.0, y, 51.0, row), 3.0f32.min(row / 2.0), right);

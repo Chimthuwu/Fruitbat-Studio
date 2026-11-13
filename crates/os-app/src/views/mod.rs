@@ -7,6 +7,7 @@
 
 pub mod browser;
 pub mod cabledebug;
+pub mod channel_rack;
 pub mod channel_win;
 pub mod container;
 pub mod data_folder;
@@ -183,7 +184,11 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, f: &FrameInfo) -> usize 
     // (Linear mode, spec model/track-model.md §7) takes the bottom; nothing else changes in Classic mode.
     let left = if s.show_browser { browser_w(s) } else { 0.0 };
     let top = work_y(s);
-    let bottom = crate::device_rack::height(s);
+    // While the launcher is out, an audio clip's editor takes the device rack's panel (`launcher::Panel`; a track's
+    // click or the panel's Devices gives the rack back). It has no modulator strip above it.
+    let clip_editor = s.launcher_open && s.launcher.panel == crate::launcher::Panel::TeslaClipEditor;
+    // The modulator strip above the rack counts as part of the panel for the workspace and the browser.
+    let bottom = if clip_editor { crate::device_rack::height(s) } else { crate::device_rack::total_height(s) };
     let work = Rect::new(left, top, w - left, h - top - bottom);
     let docked = s.docked();
     // spec: ui/flstheme.md §3 (BackMode, BackPicFilename); no watermark over a picture (`wallpaper`).
@@ -205,15 +210,13 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, f: &FrameInfo) -> usize 
         ui.part(Seg::Browser, r, |ui| browser::paint(ui, s, r));
     }
     if bottom > 0.0 {
-        let r = Rect::new(0.0, h - bottom, w, bottom);
-        // While the launcher is out, an audio clip's editor takes the device rack's panel (`launcher::Panel`;
-        // a track's click or the panel's Devices gives the rack back).
-        let clip_editor = s.launcher_open && s.launcher.panel == crate::launcher::Panel::TeslaClipEditor;
-        ui.part(Seg::DeviceRack, r, |ui| {
+        let rack = Rect::new(0.0, h - crate::device_rack::height(s), w, crate::device_rack::height(s));
+        let area = if clip_editor { rack } else { Rect::new(0.0, h - bottom, w, bottom) };
+        ui.part(Seg::DeviceRack, area, |ui| {
             if clip_editor {
-                launcher::paint_panel(ui, s, r);
+                launcher::paint_panel(ui, s, rack);
             } else {
-                device_rack::paint(ui, s, plugins, r);
+                device_rack::paint(ui, s, plugins, rack, f);
             }
         });
     }
@@ -256,7 +259,7 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, f: &FrameInfo) -> usize 
             Win::Arp => ui.part(Seg::Win(win), a, |ui| arpeggiate::paint(ui, s, f)),
             Win::PianoDlg => ui.part(Seg::Win(win), a, |ui| piano_dlg::paint(ui, s, f)),
             Win::Events => ui.part(Seg::Win(win), a, |ui| events::paint(ui, s, f)),
-            Win::Container => ui.part(Seg::Win(win), a, |ui| container::paint(ui, s, f)),
+            Win::Container => ui.part(Seg::Win(win), a, |ui| container::paint(ui, s, plugins, f)),
             Win::PluginPalette => ui.part(Seg::Win(win), a, |ui| plugin_palette::paint(ui, s, f)),
             _ => {}
         }
@@ -286,6 +289,11 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, f: &FrameInfo) -> usize 
     rack::paint_fill(ui, s);
     // An open device header menu goes over the windows and panels.
     device_rack::paint_menu(ui, s);
+    // The empty-slot modulator picker is a menu over the windows too; the rack's own paint area would clip it.
+    if bottom > 0.0 && !clip_editor {
+        let rack = Rect::new(0.0, h - crate::device_rack::height(s), w, crate::device_rack::height(s));
+        device_rack::mod_add_menu_paint(ui, s, rack);
+    }
     patterns::paint(ui, s);
     if s.settings.open {
         settings::paint(ui, s);
@@ -333,6 +341,11 @@ pub fn paint_detached(ui: &mut Ui, s: &State, f: &FrameInfo, w: Win) -> usize {
     match w {
         Win::Mixer => mixer::paint(ui, s, r, f),
         Win::ChannelRack => rack::paint(ui, s, f),
+        Win::ModEditor => {
+            if let Some(m) = s.mod_editor.or(s.mod_menu).and_then(|id| s.modulation.get(id)) {
+                device_rack::mod_editor_window(ui, s, m);
+            }
+        }
         _ => {}
     }
     ui.c.pop_clip();

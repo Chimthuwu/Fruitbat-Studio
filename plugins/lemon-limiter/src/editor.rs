@@ -849,6 +849,7 @@ mod win32 {
         }
 
         fn paint(&mut self) {
+            os_plugkit::refresh_palette(&mut self.palette);
             let (hdc, ps) = pw::begin_paint(self.hwnd);
             self.last_written = self.logic.written();
             self.logic.paint(&mut self.canvas, &self.palette);
@@ -1063,6 +1064,7 @@ mod gui {
         }
 
         fn paint(&mut self) {
+            os_plugkit::refresh_palette(&mut self.palette);
             self.dirty = false;
             self.last_written = self.logic.written();
             self.logic.paint(&mut self.canvas, &self.palette);

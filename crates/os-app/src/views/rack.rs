@@ -263,9 +263,17 @@ pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo) {
     let (x, y, w, h) = (win.x, win.y, win.w, win.h);
     let c = cols(s);
     let lemon = super::lemon(ui);
+    let meridian = t.style.meridian();
     let hv = crate::high_visibility::on();
-    // Frame (§1). Lemon (spec: ui/lemon-design.md §5): one rounded outlined panel.
-    if lemon {
+    // Frame (§1). Lemon (spec: ui/lemon-design.md §5): one rounded outlined panel. Meridian: a squared instrument
+    // case with a brass cap and a machined inner well.
+    if meridian {
+        ui.c.fill_rect(win, t.window_border);
+        let body = win.inset(1.0);
+        ui.c.fill_rect(body, t.window_body);
+        ui.c.fill_rect(Rect::new(body.x, body.y, body.w, 2.0), t.accent);
+        ui.c.fill_rect(Rect::new(body.x, body.y + 2.0, body.w, 1.0), t.toolbar_line);
+    } else if lemon {
         lk::outlined(ui.c, win, lk::r_panel(t), t.window_border, t.window_body);
     } else {
         ui.c.fill_rect(win, t.window_border);
@@ -280,7 +288,11 @@ pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo) {
 
     // Rows panel (§1, §3).
     let inner = panel(win);
-    if lemon {
+    if meridian {
+        ui.c.fill_rect(inner.outset(1.0), t.rack_inset_border);
+        ui.c.fill_rect(inner, t.rack_inset);
+        ui.c.fill_rect(Rect::new(inner.x, inner.y, inner.w, 1.0), t.toolbar_edge.with_alpha(90));
+    } else if lemon {
         lk::outlined(ui.c, inner.outset(1.0), lk::r_btn(t), t.rack_inset_border, t.rack_inset);
     } else {
         ui.c.fill_rect(inner.outset(1.0), t.rack_inset_border);

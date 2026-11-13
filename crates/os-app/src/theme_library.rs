@@ -494,7 +494,7 @@ impl App {
     /// The Themes tiles: the Lemon and Citrus themes, the built-in themes, then the user's (`user_dir`).
     pub(crate) fn theme_list(&mut self) {
         let st = &mut self.state.settings;
-        st.themes = os_theme::Design::ALL
+        st.themes = os_theme::Design::THEME_SKINS
             .iter()
             .map(|d| (d.name().to_string(), os_theme::design::skin_text(*d)))
             .chain(os_theme::presets::PRESETS.iter().map(|(n, t)| (n.to_string(), t.to_string())))

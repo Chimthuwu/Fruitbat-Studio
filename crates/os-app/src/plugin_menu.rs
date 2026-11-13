@@ -211,7 +211,8 @@ pub fn run(app: &mut App, c: PlugCmd) -> Option<String> {
 
 /// A new channel for generator `index` (spec §1): at the bottom of the rack, or right below row `after`; selected and
 /// in view. Lemon Sampler makes an empty sampler channel (hosted on the next tick); any other generator a plugin
-/// channel hosting it. Its plugin window opens once it is hosted. One undo step, "Add channel" (`control::edit_app`):
+/// channel hosting it. No window opens: the device rack's tile shows the device and its popout button opens the window.
+/// One undo step, "Add channel" (`control::edit_app`):
 /// undone, the channel goes and its instance is kept; redone, it comes back with it (`control::host`).
 pub fn add_generator(app: &mut App, index: usize, after: Option<usize>) -> Option<String> {
     crate::control::edit_app(app, crate::history::ADD_CHANNEL, crate::control::command::Region::Project, |app| add_generator_now(app, index, after))
@@ -223,7 +224,7 @@ pub(crate) fn add_generator_now(app: &mut App, index: usize, after: Option<usize
     let sampler = d.name == crate::plugins::LEMON_SAMPLER && crate::project_plugins::is_builtin(&d);
     let mut ch = if sampler { crate::app::add_channel(&mut s.project) } else { crate::app::add_plugin_channel(&mut s.project, &d.name) };
     if sampler {
-        s.pending_open = Some(ch);
+        s.pending_add = Some(ch);
     } else {
         s.pending_plugin = Some((ch, index));
     }

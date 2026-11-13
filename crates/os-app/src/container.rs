@@ -179,7 +179,8 @@ pub fn decode(b: &[u8]) -> Option<Vec<Member>> {
 
 /// Whether channel `ch` is a container (its instrument a chain).
 pub fn is_container_channel(ch: &os_model::Channel) -> bool {
-    ch.kind == os_model::ChannelKind::Plugin && ch.plugin.as_deref() == Some(CONTAINER)
+    ch.kind == os_model::ChannelKind::Plugin
+        && ch.plugin.as_deref().is_some_and(|p| p == CONTAINER || p == crate::channel_rack::INSTRUMENT)
 }
 
 /// The state of the container at place (`t`, `k`): slot `k` of track `t`, or rack row `t`'s for `k` = [`CHANNEL`].
@@ -368,11 +369,16 @@ pub struct ContainerUi {
     pub at: (u16, u8),
     /// The chain's wet and dry by member id, as last read.
     pub live: BTreeMap<u32, (f32, f32)>,
+    /// A Channel Rack's editor (`views::channel_rack`): the selected lane (pad), the bank of lanes shown and the step
+    /// page. A view's place only, never pattern or audio state.
+    pub lane: usize,
+    pub bank: usize,
+    pub page: u32,
 }
 
 impl Default for ContainerUi {
     fn default() -> Self {
-        ContainerUi { pos: (420.0, 160.0), at: (0, 0), live: BTreeMap::new() }
+        ContainerUi { pos: (420.0, 160.0), at: (0, 0), live: BTreeMap::new(), lane: 0, bank: 0, page: 0 }
     }
 }
 
@@ -385,6 +391,16 @@ pub enum CAct {
     Menu(usize),
     /// Add effect: the effect list of an empty slot (a channel's container: the instruments too).
     Add,
+    /// A Channel Rack's editor (`views::channel_rack`): step `step` of lane (pad) `pad` turned on or off, a lane
+    /// selected, the lanes' sampler opened, the bank, step page, pattern and length changed, the rack's steps cleared.
+    RackStep { pad: usize, step: u32, on: bool },
+    RackLane(usize),
+    RackOpen,
+    RackBank,
+    RackPage(i32),
+    RackPattern(i32),
+    RackLength(i32),
+    RackClear,
 }
 
 /// Shows the window of the container at place (`t`, `slot`).
@@ -1265,6 +1281,74 @@ impl App {
     pub(crate) fn container_act(&mut self, a: CAct) {
         let (t, k) = self.state.container.at;
         let Some(list) = members(&self.state, t, k) else { return };
+        // A Channel Rack's editor (`views::channel_rack`): every step is a note of the project's current pattern on the
+        // rack's channel, keyed by its pad (crate::channel_rack).
+        let rack = || crate::channel_rack::rack_row(&self.state);
+        match a {
+            CAct::RackStep { pad, step, on } => {
+                let Some(row) = rack() else { return };
+                let lanes = crate::channel_rack::lanes(&self.state, &self.plugins, row);
+                let Some(lane) = lanes.get(pad) else { return };
+                let Some(ch) = self.state.project.channels.get(row).map(|c| c.index) else { return };
+                crate::rack::snapshot(&mut self.state);
+                crate::channel_rack::set_step(&mut self.state, ch, lane, step, on);
+                self.state.container.lane = pad;
+                if on {
+                    // A step turned on plays its lane at once, so programming is audible, not just visible.
+                    self.preview(ch, i32::from(lane.key));
+                }
+                self.invalidate();
+                return;
+            }
+            CAct::RackLane(pad) => {
+                self.state.container.lane = pad;
+                self.invalidate();
+                return;
+            }
+            CAct::RackOpen => {
+                if let Some(id) = list.first().map(|m| m.id) {
+                    if let Some(msg) = self.open_member(t, k, id) {
+                        self.state.message = Some(msg);
+                    }
+                }
+                return;
+            }
+            CAct::RackBank => {
+                self.state.container.bank ^= 1;
+                self.invalidate();
+                return;
+            }
+            CAct::RackPage(d) => {
+                self.state.container.page = (self.state.container.page as i32 + d).max(0) as u32;
+                self.invalidate();
+                return;
+            }
+            CAct::RackPattern(d) => {
+                let next = (i32::from(self.state.pattern) + d).clamp(1, i32::from(crate::patterns::MAX)) as u16;
+                if next != self.state.pattern {
+                    self.state.pattern = next;
+                    self.state.piano.dirty = true;
+                }
+                self.invalidate();
+                return;
+            }
+            CAct::RackLength(bars) => {
+                let steps = (bars > 0).then(|| bars as u32 * crate::rack::bar_steps(&self.state));
+                crate::rack::snapshot(&mut self.state);
+                crate::rack::set_len(&mut self.state, steps);
+                self.invalidate();
+                return;
+            }
+            CAct::RackClear => {
+                let Some(row) = rack() else { return };
+                let Some(ch) = self.state.project.channels.get(row).map(|c| c.index) else { return };
+                crate::rack::snapshot(&mut self.state);
+                crate::channel_rack::clear_steps(&mut self.state, ch);
+                self.invalidate();
+                return;
+            }
+            _ => {}
+        }
         let (x, y) = self.mouse;
         let s = &self.state;
         let mut items = match a {
@@ -1277,6 +1361,8 @@ impl App {
             }
             CAct::Menu(i) if i < list.len() => member_ops(s, t, k, &list, i),
             CAct::Menu(_) => return,
+            // The Channel Rack's editor's hits are handled above.
+            CAct::RackStep { .. } | CAct::RackLane(_) | CAct::RackOpen | CAct::RackBank | CAct::RackPage(_) | CAct::RackPattern(_) | CAct::RackLength(_) | CAct::RackClear => return,
             CAct::Add if list.len() >= MAX_MEMBERS => {
                 self.state.message = Some(format!("A container holds at most {MEMBER_IDS} effects"));
                 return;

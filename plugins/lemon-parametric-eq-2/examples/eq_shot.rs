@@ -57,7 +57,7 @@ fn main() {
     let mut c = os_ui::Canvas::new(s(view::W), s(view::H), k).unwrap();
     let paint = |l: &mut Logic, c: &mut os_ui::Canvas| {
         let extra = l.params.extra_copy();
-        let look = Look { s: l.shown(), extra: &extra, spectrum: spectrum.as_deref(), rate: 44100.0 };
+        let look = Look { s: l.shown(), extra: &extra, spectrum: spectrum.as_deref(), rate: 44100.0, faders: true };
         l.hits = view::paint(c, &look, &l.view);
     };
     paint(&mut l, &mut c);

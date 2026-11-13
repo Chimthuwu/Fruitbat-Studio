@@ -673,6 +673,8 @@ pub fn select(s: &mut State, n: u16, ctrl: bool) {
         s.mixer.sel.clear();
     }
     s.selected_mixer = n;
+    // A click on a strip hands the arrows back from the device rack / modulator strip (as a playlist click does).
+    s.keyboard_focus = crate::app::KeyboardFocus::Tracks;
 }
 
 /// Left click (or press) on a mixer control.
@@ -3273,9 +3275,10 @@ impl App {
             match r {
                 FxReq::Create { track, slot, index, state } => match self.plugins.create_effect(track, slot, index, state.as_deref()) {
                     Ok(_) => {
+                        // Added, not opened: the device's rack tile shows it, and the tile's popout button (or a double
+                        // click) opens its window when it is wanted. No floating window on every add.
                         self.plugins.added(crate::plugins::fx_key(track, slot));
                         relink = true;
-                        self.open_fx(track, slot);
                     }
                     Err(e) => {
                         if let Some(m) = track_mut(&mut self.state, track) {
@@ -4930,6 +4933,24 @@ mod tests {
         run(&mut a, MCmd::SlotDelete(1));
         assert_eq!(slot_color(&a.state, 3, 1), None, "goes with the plugin");
         assert!(a.state.mixer.slot_colors.is_empty());
+    }
+
+    /// Adding an effect hosts it without opening its window: its device-rack tile is enough, and the tile's popout
+    /// button opens the window when it is asked for.
+    #[test]
+    fn adding_an_effect_hosts_it_without_opening_its_window() {
+        let mut a = app();
+        a.plugins = crate::plugins::Plugins::builtins();
+        a.state.plugdb.rebuild(&a.plugins);
+        a.plugin_tick();
+        let index = a.plugins.effect_index("Lemon Parametric EQ").expect("the EQ is bundled");
+        select(&mut a.state, 2, false);
+        run(&mut a, MCmd::AddEffect(0, index));
+        (0..3).for_each(|_| a.plugin_tick());
+        let key = crate::plugins::fx_key(2, 0);
+        assert!(a.plugins.hosted.contains_key(&key), "hosted into the slot");
+        assert_eq!(a.state.pending_open, None, "no window opens");
+        assert!(!a.state.shown(crate::app::Win::Hosted(key)), "and none is raised");
     }
 
     /// Change icon... on the track menu and the slot menu (Lemon Studio's design, session only): the icon moves with its
