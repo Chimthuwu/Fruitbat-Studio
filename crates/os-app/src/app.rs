@@ -1959,10 +1959,10 @@ impl App {
             let name = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
             let saved = if v.trim().is_empty() { "an older version".to_string() } else { format!("version {}", v.trim()) };
             let rest = format!(
-                ".\n\nIt was saved by {saved}, in an older file layout that Lemon Studio could not convert.\n\nOpen the project in \
+                ".\n\nIt was saved by {saved}, in an older file layout that Fruitbat Studio could not convert.\n\nOpen the project in \
                  version 24.2 or later, save it again, then open the new copy here."
             );
-            self.tell(crate::dialog::Kind::Info, "Project not supported", crate::dialog::spans(&["Lemon Studio cannot open ", &name, &rest]));
+            self.tell(crate::dialog::Kind::Info, "Project not supported", crate::dialog::spans(&["Fruitbat Studio cannot open ", &name, &rest]));
         }
         match result {
             Ok((file, project)) => {
@@ -2059,7 +2059,7 @@ impl App {
         let path = self.state.path.clone();
         let name = path.as_deref().map(as_lemon).and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_else(|| format!("Untitled.{EXT}"));
         let dlg = FileDlg::new(Mode::Save, "Save project as", "project", crate::dialog::Then::SaveProject(next))
-            .filter("Lemon Studio project", &[EXT])
+            .filter("Fruitbat Studio project", &[EXT])
             .start(path.as_deref().and_then(|p| p.parent()))
             .name(&name);
         self.file_dialog(dlg);
@@ -2654,7 +2654,7 @@ impl App {
     fn open_dialog(&mut self) {
         let start = self.state.path.as_ref().and_then(|p| p.parent().map(std::path::Path::to_path_buf));
         let dlg = crate::filedlg::FileDlg::new(crate::filedlg::Mode::Open, "Open project", "project", crate::dialog::Then::OpenProject)
-            .filter("Lemon Studio project", &["lemon", "flp", "zip"])
+            .filter("Fruitbat Studio project", &["lemon", "flp", "zip"])
             .start(start.as_deref());
         self.file_dialog(dlg);
     }
@@ -10200,7 +10200,7 @@ impl App {
             (HELP_MENU, HELP_ABOUT) => {
                 // The Windows build includes the ASIO SDK, which is under version 3 only (THIRD-PARTY-NOTICES.txt §9).
                 let licence = if cfg!(windows) { "the GNU GPL v3" } else { "the GNU GPL v3 or later" };
-                self.state.message = Some(format!("Lemon Studio {} (pre-alpha), free software under {licence}", env!("CARGO_PKG_VERSION")));
+                self.state.message = Some(format!("Fruitbat Studio {} (pre-alpha), free software under {licence}", env!("CARGO_PKG_VERSION")));
                 return;
             }
             (PATTERNS, i) if i >= PATTERN_PICK => return crate::patterns::select(&mut self.state, (i - PATTERN_PICK) as u16),
@@ -10488,7 +10488,7 @@ impl App {
         let _ = std::fs::create_dir_all(&dir);
         let start = self.state.bar.user_current().map_or_else(|| "My toolbar".to_string(), |p| p.name.clone());
         let dlg = FileDlg::new(Mode::Save, "Save toolbar preset as", "toolbar preset", crate::dialog::Then::SaveToolbarPreset)
-            .filter("Lemon Studio toolbar preset", &[EXT])
+            .filter("Fruitbat Studio toolbar preset", &[EXT])
             .start(Some(&dir))
             .name(&format!("{start}.{EXT}"));
         self.file_dialog(dlg);
@@ -10608,7 +10608,7 @@ fn lemon_or_flp(file: &mut os_flp::FlpFile, target: &std::path::Path, mut extra:
         os_flp::lemon::to_flp(file);
         return Ok(());
     }
-    extra.insert(0, os_flp::lemon::saved_by(&format!("Lemon Studio {}", env!("CARGO_PKG_VERSION"))));
+    extra.insert(0, os_flp::lemon::saved_by(&format!("Fruitbat Studio {}", env!("CARGO_PKG_VERSION"))));
     os_flp::lemon::to_lemon(file, &extra).map_err(|e| e.to_string())
 }
 
@@ -14021,7 +14021,7 @@ mod tests {
         let r = hit_rect(&app, &Action::Settings(SAct::Check("Soft takeover")));
         click(&mut app, &mut c, r);
         assert_eq!(app.state.message.as_deref(), Some("Soft takeover: on"));
-        assert!(app.hits.iter().any(|h| h.action == Action::Settings(SAct::Body) && h.hint == "Lemon Studio has no MIDI scripts"));
+        assert!(app.hits.iter().any(|h| h.action == Action::Settings(SAct::Body) && h.hint == "Fruitbat Studio has no MIDI scripts"));
         assert!(app.hits.iter().any(|h| h.action == Action::Settings(SAct::Number("Performance mode MIDI channel"))));
         let r = hit_rect(&app, &Action::Settings(SAct::Tab(PROJECT)));
         click(&mut app, &mut c, r);
@@ -14315,7 +14315,7 @@ mod tests {
                 (Kind::Question, "Confirm", spans(&["Save the changes to ", "Demo.flp", " before closing?"]), &[Answer::Yes, Answer::No, Answer::Cancel][..], "question"),
                 (Kind::Warning, "Confirm save as", spans(&["", "Demo.flp", " already exists.\nDo you want to replace it?"]), &[Answer::Yes, Answer::No][..], "warning"),
                 (Kind::Error, "Error", spans(&["The file doesn't exist or has been moved."]), &[Answer::Ok][..], "error"),
-                (Kind::Info, "Project not supported", spans(&["Lemon Studio cannot open ", "Old.flp", ".\n\nIt was saved by version 12.3, in an older file layout that Lemon Studio could not convert."]), &[Answer::Ok][..], "info"),
+                (Kind::Info, "Project not supported", spans(&["Fruitbat Studio cannot open ", "Old.flp", ".\n\nIt was saved by version 12.3, in an older file layout that Fruitbat Studio could not convert."]), &[Answer::Ok][..], "info"),
             ] {
                 let mut m = Msg::new(kind, title, text, buttons, Then::Nothing);
                 // As in the app, the replace question starts on No.
@@ -16012,7 +16012,7 @@ mod tests {
         assert_eq!(std::fs::read(&flp).unwrap(), before, "the FLP is still not written");
         let file = os_flp::FlpFile::parse(&std::fs::read(&lemon).unwrap()).unwrap();
         assert_eq!(os_flp::lemon::version(&file), Some(os_flp::lemon::VERSION));
-        assert_eq!(os_flp::lemon::saved_by_text(&file), Some(format!("Lemon Studio {}", env!("CARGO_PKG_VERSION"))));
+        assert_eq!(os_flp::lemon::saved_by_text(&file), Some(format!("Fruitbat Studio {}", env!("CARGO_PKG_VERSION"))));
         // Save again: in place, no dialog.
         app.state.tempo = 125.0;
         app.act(Action::MenuItem(0, views::menus::FILE_SAVE));
@@ -21073,7 +21073,7 @@ mod tests {
         right(&mut app, &mut c, help, (help.cx() + 40.0, help.cy()));
         assert!(app.state.message.is_none());
         right(&mut app, &mut c, help, (help.cx(), help.cy()));
-        assert!(app.state.message.as_deref().is_some_and(|m| m.starts_with("Lemon Studio ")), "{:?}", app.state.message);
+        assert!(app.state.message.as_deref().is_some_and(|m| m.starts_with("Fruitbat Studio ")), "{:?}", app.state.message);
         // Undo: EDIT > Undo; its right click does nothing yet.
         let undo = hit_rect(&app, &Action::Util(Util::Undo));
         app.state.message = None;

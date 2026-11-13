@@ -1079,6 +1079,73 @@ impl Canvas {
         }
     }
 
+    /// Like `image`, for pixels packed as `0xAARRGGBB` with straight alpha: transparent parts of the picture let
+    /// what is under them show through. Scales with a bilinear filter, so a large picture fits a small spot cleanly.
+    pub fn image_argb(&mut self, r: Rect, w: usize, h: usize, px: &[u32]) {
+        if w == 0 || h == 0 || px.len() < w * h || r.w <= 0.0 || r.h <= 0.0 {
+            return;
+        }
+        for i in 0..self.clip_count() {
+            let clip = self.clip_at(i);
+            self.image_argb_in(clip, r, w, h, px);
+        }
+    }
+
+    fn image_argb_in(&mut self, (cx0, cy0, cx1, cy1): (i32, i32, i32, i32), r: Rect, w: usize, h: usize, px: &[u32]) {
+        let k = self.scale;
+        let (x0, x1) = (((r.x * k).round() as i32).max(cx0), ((r.right() * k).round() as i32).min(cx1));
+        let (y0, y1) = (((r.y * k).round() as i32).max(cy0), ((r.bottom() * k).round() as i32).min(cy1));
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        self.mark(x0, y0, x1, y1);
+        let pw = self.pixmap.width() as usize;
+        let pixels = self.pixmap.pixels_mut();
+        let at = |x: usize, y: usize| -> u32 { px[y * w + x] };
+        for dy in y0..y1 {
+            // The source row this device row reads, and the two rows it lies between.
+            let sy = ((dy as f32 + 0.5 - r.y * k) / (r.h * k) * h as f32 - 0.5).clamp(0.0, (h - 1) as f32);
+            let (ya, yb) = (sy.floor() as usize, (sy.floor() as usize + 1).min(h - 1));
+            let fy = sy - sy.floor();
+            for dx in x0..x1 {
+                let sx = ((dx as f32 + 0.5 - r.x * k) / (r.w * k) * w as f32 - 0.5).clamp(0.0, (w - 1) as f32);
+                let (xa, xb) = (sx.floor() as usize, (sx.floor() as usize + 1).min(w - 1));
+                let fx = sx - sx.floor();
+                let mut sa = 0.0f32;
+                let mut sr = 0.0f32;
+                let mut sg = 0.0f32;
+                let mut sb = 0.0f32;
+                for (v, weight) in [
+                    (at(xa, ya), (1.0 - fx) * (1.0 - fy)),
+                    (at(xb, ya), fx * (1.0 - fy)),
+                    (at(xa, yb), (1.0 - fx) * fy),
+                    (at(xb, yb), fx * fy),
+                ] {
+                    let a = ((v >> 24) & 0xff) as f32 / 255.0 * weight;
+                    sa += a;
+                    sr += ((v >> 16) & 0xff) as f32 * a;
+                    sg += ((v >> 8) & 0xff) as f32 * a;
+                    sb += (v & 0xff) as f32 * a;
+                }
+                if sa <= 0.0 {
+                    continue;
+                }
+                // Source over destination, both premultiplied: what is under the picture keeps its alpha.
+                let i = dy as usize * pw + dx as usize;
+                let dst = pixels[i];
+                let da = dst.alpha() as f32 / 255.0;
+                let oa = sa + da * (1.0 - sa);
+                if oa <= 0.0 {
+                    continue;
+                }
+                let ch = |src: f32, dst: u8| ((src + dst as f32 * (1.0 - sa)) / oa).round().clamp(0.0, 255.0) as u8;
+                if let Some(c) = PremultipliedColorU8::from_rgba(ch(sr, dst.red()), ch(sg, dst.green()), ch(sb, dst.blue()), (oa * 255.0).round() as u8) {
+                    pixels[i] = c;
+                }
+            }
+        }
+    }
+
     fn image_in(&mut self, (cx0, cy0, cx1, cy1): (i32, i32, i32, i32), r: Rect, w: usize, h: usize, px: &[u32]) {
         let k = self.scale;
         let (x0, x1) = (((r.x * k).round() as i32).max(cx0), ((r.right() * k).round() as i32).min(cx1));

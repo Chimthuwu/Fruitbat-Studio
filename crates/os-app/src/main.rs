@@ -62,6 +62,7 @@ mod high_visibility;
 mod history;
 mod hold;
 mod keep_on_disk;
+mod brand;
 mod icons;
 mod init;
 mod knobs;
@@ -714,7 +715,7 @@ impl ApplicationHandler for Shell {
         }
         splash::step(&self.splash, splash::WINDOW, "Opening the main window");
         let attrs = Window::default_attributes()
-            .with_title("Lemon Studio")
+            .with_title("Fruitbat Studio")
             .with_decorations(false)
             .with_inner_size(LogicalSize::new(1920.0, 1080.0))
             // Layouts are measured at 1920x1080 and are not responsive yet; below this they break.
@@ -1922,7 +1923,7 @@ fn main() {
     }
     // The control plane's socket (spec: roadmap/control-plane.md): beside the window, or without one.
     let control = control::server::Flags::take(&mut args).unwrap_or_else(|e| {
-        eprintln!("Lemon Studio: {e}");
+        eprintln!("Fruitbat Studio: {e}");
         std::process::exit(2);
     });
     let level = control.level.unwrap_or(control::Level::Edit);
@@ -1977,7 +1978,7 @@ fn main() {
                     server.token = control.token.clone();
                 }
                 let m = format!("Control plane: {}", server.describe());
-                eprintln!("Lemon Studio: {m}");
+                eprintln!("Fruitbat Studio: {m}");
                 app.listen(server);
                 m
             }

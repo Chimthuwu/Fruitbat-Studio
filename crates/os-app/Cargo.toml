@@ -1,6 +1,6 @@
 [package]
 name = "os-app"
-description = "Lemon Studio: the application"
+description = "Fruitbat Studio: the application"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -193,9 +193,8 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, f: &FrameInfo) -> usize 
     let docked = s.docked();
     // spec: ui/flstheme.md §3 (BackMode, BackPicFilename); no watermark over a picture (`wallpaper`).
     if docked.is_none() && !crate::wallpaper::paint(ui, work) {
-        let wm = ui.t.watermark;
-        icons::logo(ui.c, work.cx(), work.cy() + 40.0, 170.0, wm);
-        let version = concat!("Lemon Studio v", env!("CARGO_PKG_VERSION"), " - pre-alpha");
+        crate::brand::draw_full(ui.c, work.cx(), work.cy() + 40.0, (work.w * 0.6).min(440.0));
+        let version = concat!("Fruitbat Studio v", env!("CARGO_PKG_VERSION"), " - pre-alpha");
         let vc = ui.t.version_text;
         let vw = ui.c.text_width(crate::views::fnt(16.0), version);
         ui.c.text(crate::views::fnt(16.0), work.cx() - vw / 2.0, h - 22.0, vc, version);

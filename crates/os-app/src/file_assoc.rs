@@ -21,8 +21,8 @@ pub const EXT: &str = ".flp";
 /// while the box is ticked.
 pub const LEMON_EXT: &str = ".lemon";
 /// The type's description and the open verb's name (spec).
-const DESCRIPTION: &str = "Lemon Studio project";
-const FRIENDLY_NAME: &str = "Lemon Studio";
+const DESCRIPTION: &str = "Fruitbat Studio project";
+const FRIENDLY_NAME: &str = "Fruitbat Studio";
 /// The per-user classes, where every write goes (`Root::Classes`).
 const CLASSES: &str = r"Software\Classes";
 /// Windows' "Open with ▸ Always" choice for `.flp` (`Root::User`), value `ProgId`.
@@ -393,9 +393,9 @@ mod tests {
             ops,
             [
                 Op::DeleteValue { key: PROG_ID.into(), name: "Previous" },
-                set(PROG_ID, "", "Lemon Studio project"),
+                set(PROG_ID, "", "Fruitbat Studio project"),
                 set(r"LemonStudio.Project\DefaultIcon", "", &format!("\"{PROGRAM}\",0")),
-                set(r"LemonStudio.Project\shell\open", "FriendlyAppName", "Lemon Studio"),
+                set(r"LemonStudio.Project\shell\open", "FriendlyAppName", "Fruitbat Studio"),
                 set(r"LemonStudio.Project\shell\open\command", "", &format!("\"{PROGRAM}\" \"%1\"")),
                 set(".flp", "", PROG_ID),
                 set(r".flp\OpenWithProgids", PROG_ID, ""),

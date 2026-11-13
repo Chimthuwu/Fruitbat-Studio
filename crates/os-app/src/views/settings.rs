@@ -300,7 +300,7 @@ pub const LIVE: &[&str] = &[
 /// MIDI: lists the devices again (`App::midi_refresh`); Update MIDI scripts stays greyed with its reason.
 pub const REFRESH_MIDI: &str = "Refresh device list";
 pub const UPDATE_SCRIPTS: &str = "Update MIDI scripts";
-const NO_SCRIPTS: &str = "Lemon Studio has no MIDI scripts";
+const NO_SCRIPTS: &str = "Fruitbat Studio has no MIDI scripts";
 /// MIDI: Performance mode MIDI channel stays greyed with its reason.
 
 /// `LIVE`, and the checks declared in `crate::prefs`.
