@@ -485,8 +485,16 @@ impl Painter {
             // The rind's outline, as in the logo.
             fill(px, &p.rind_edge, LEMON, mask);
         }
+        // The Fruitbat badge on its own deep-obsidian disc, in front of the old artwork so the splash shows the current
+        // mark. The startup percentage stays in the caption below it.
+        let mut disc = PathBuilder::new();
+        disc.push_circle(cx, cy, DISC.2 * s * look.scale / 2.0);
+        if let Some(circle) = disc.finish() {
+            self.frame.pixmap.fill_path(&circle, &solid(0x0b0b0d), FillRule::Winding, Transform::identity(), None);
+        }
+        crate::brand::draw_mark(&mut self.frame, cx / s, cy / s, DISC.2 * look.scale);
         let at = (((DISC.0 - DISC.2 / 2.0) * s).round() as i32, ((DISC.1 + DISC.2 / 2.0 + CAPTION_GAP) * s).round() as i32);
-        px.draw_pixmap(at.0, at.1, self.caption.pixmap.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
+        self.frame.pixmap.draw_pixmap(at.0, at.1, self.caption.pixmap.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
         &self.frame.pixmap
     }
 
@@ -1225,17 +1233,10 @@ mod tests {
         assert!(c.done.is_some());
     }
 
-    /// Device px of logo point `(x, y)` (logo units) in the frame at `scale`, the disc unscaled.
-    fn at(scale: f32, x: f32, y: f32) -> (usize, usize) {
-        let k = DISC.2 * scale / (2.0 * R);
-        ((DISC.0 * scale + (x - C.0) * k) as usize, (DISC.1 * scale + (y - C.1) * k) as usize)
-    }
-
-    /// The splash's picture (as above): the full-colour logo centred on a transparent window, a soft shadow falling
-    /// under the disc, the lemon filled round as far as the gauge, the groove light on the record and the status line
-    /// under the disc.
+    /// The splash's picture: the Fruitbat badge on its dark disc over a transparent window, a soft shadow falling
+    /// under it, and the status line under the disc.
     #[test]
-    fn the_splash_draws_the_gauge_with_its_shadow() {
+    fn the_splash_draws_the_mark_with_its_shadow() {
         for scale in [1.0, 2.0] {
             let mut p = Painter::new(scale).expect("painter");
             let look = |progress: f32, light: f32| Look { alpha: 1.0, scale: 1.0, progress, light, angle: -30.0, caption: "Opening project · 25%".into() };
@@ -1255,28 +1256,11 @@ mod tests {
             let (below, above) = (rgba(cx, cy + r + gap).3, rgba(cx, cy - r - gap).3);
             assert!(below > above && above > 0, "a soft shadow falling down, scale {scale}: {below} vs {above}");
             assert_eq!(rgba(w - 1, cy).3, 0, "it fades out before the window's edge, scale {scale}");
-            // The gauge at a quarter: the lower right slice filled, the upper left one still empty.
-            let (x1, y1) = at(scale, 602.0, 691.0);
-            let (x4, y4) = at(scale, 272.0, 410.0);
-            assert_eq!(rgba(x1, y1), (0xff, 0xe0, 0x66, 0xff), "slice 1 filled, scale {scale}");
-            let empty = mix(SLICE_FILLS[3], EMPTY.0, EMPTY.1);
-            let e = rgba(x4, y4);
-            assert_eq!((u32::from(e.0) << 16) | (u32::from(e.1) << 8) | u32::from(e.2), empty, "slice 4 empty, scale {scale}");
-            let full = p.paint(&look(1.0, 0.0)).clone();
-            let c = full.pixel(x4 as u32, y4 as u32).unwrap().demultiply();
-            assert_eq!((c.red(), c.green(), c.blue()), (0xff, 0xf1, 0xb8), "slice 4 filled at the end, scale {scale}");
-            // The groove light: the record brighter along the wedge (pointing up and right, clear of the record's
-            // windows), and as it was 30 degrees off it.
-            let lit = p.paint(&look(0.25, 1.0)).clone();
-            let a = (-30f32).to_radians();
-            let (lx, ly) = at(scale, C.0 + 300.0 * a.cos(), C.1 + 300.0 * a.sin());
-            let sum = |pm: &Pixmap, x: usize, y: usize| {
-                let c = pm.pixel(x as u32, y as u32).unwrap();
-                u32::from(c.red()) + u32::from(c.green()) + u32::from(c.blue())
-            };
-            assert!(sum(&lit, lx, ly) > sum(&px, lx, ly) + 20, "the light on the record, scale {scale}");
-            let (ox, oy) = at(scale, C.0 + 300.0, C.1);
-            assert_eq!(sum(&lit, ox, oy), sum(&px, ox, oy), "away from the wedge, scale {scale}");
+            // The badge: an opaque disc, with the artwork's lime wordmark at its centre rather than the old lemon.
+            assert_eq!(rgba(cx, cy).3, 0xff, "the badge's disc, scale {scale}");
+            let (mx, my) = (((DISC.0 - DISC.2 / 2.0) * scale + 430.0 / 576.0 * DISC.2 * scale) as usize, ((DISC.1 - DISC.2 / 2.0) * scale + 300.0 / 576.0 * DISC.2 * scale) as usize);
+            let m = rgba(mx, my);
+            assert!(m.3 == 0xff && m.1 > 180 && m.0 > 150, "the Fruitbat wordmark, scale {scale}: {m:?}");
             // The status line: an opaque pill centred under the disc, no wider than its text needs.
             let ty = cy + r + ((CAPTION_GAP + CAPTION_H / 2.0) * scale) as usize;
             assert_eq!(rgba(cx, ty).3, 0xff, "the status line, scale {scale}");
