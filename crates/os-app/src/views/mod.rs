@@ -381,6 +381,10 @@ pub fn paint_detached(ui: &mut Ui, s: &State, f: &FrameInfo, w: Win) -> usize {
 /// Where window `w` paints: its rect (and the channel rack's graph editor hanging below it). The resize zones past
 /// its edges are hits only. A repaint that misses this skips the window; a playlist scroll paints around it.
 pub fn paint_area(s: &State, w: Win) -> Rect {
+    // The modulator editor's window is exactly its panel: it paints whole, at the window's top-left.
+    if w == Win::ModEditor {
+        return Rect::new(0.0, 0.0, device_rack::MOD_EDITOR_W, device_rack::MOD_EDITOR_H);
+    }
     crate::floating::placed(w).map_or_else(|| s.win_rect(w), |p| (p.paint)(s))
 }
 

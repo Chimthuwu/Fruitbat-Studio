@@ -225,6 +225,8 @@ pub(crate) fn add_generator_now(app: &mut App, index: usize, after: Option<usize
     let mut ch = if sampler { crate::app::add_channel(&mut s.project) } else { crate::app::add_plugin_channel(&mut s.project, &d.name) };
     if sampler {
         s.pending_add = Some(ch);
+        // Its window opens once the sampler is hosted (`sync_samplers`; the detach check decides where).
+        s.pending_open = Some(ch);
     } else {
         s.pending_plugin = Some((ch, index));
     }

@@ -56,8 +56,20 @@ pub enum Win {
     /// The plugin palette: the searchable list of the installed plugins a pick adds from (Lemon Studio's design: spec
     /// ui/plugin-menu.md §6).
     PluginPalette,
+    /// The modulator's graphical editor, detached into its own always-on-top window.
+    ModEditor,
     /// A docked hosted-plugin window (a native child window; rack row), stacked with the drawn windows.
     Hosted(usize),
+}
+
+/// Which surface the arrows and the editing keys act on: the last one clicked into (the playlist's and the mixer's
+/// strips are `Tracks`, the device rack's tiles `Rack`, the modulator row `Modulators`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum KeyboardFocus {
+    #[default]
+    Tracks,
+    Rack,
+    Modulators,
 }
 
 impl Win {
@@ -188,6 +200,8 @@ pub enum Action {
     Modulator(os_model::modulation::ModulatorId),
     /// The modulator UI (the eight slot row, its editor, its menus and the browser's Modulation section).
     Mod(crate::modulation::ModAct),
+    /// Toggle the modulator rack's visibility (Ctrl+M, or the rack's ◉ button).
+    ModVisibility,
     /// The Arpeggiate dialog's buttons, switches and menus (spec: ui/piano-arpeggiate.md).
     Arp(crate::arpeggiate::Act),
     /// The Flam, Flip and Scale levels dialogs' switches and buttons (spec: as `Win::PianoDlg`).
@@ -943,6 +957,11 @@ pub enum Drag {
     DeviceRackTile { kind: crate::device_rack::DeviceKind, _x0: f32 },
     /// A device tile's parameter row dragged: the value follows the pointer along its bar.
     DeviceRackParam { key: usize, id: u32, y0: f32, v0: f64 },
+    /// A device tile's EQ band token dragged: frequency across (`x0`), level up / down; the hosted parameters
+    /// `freq_id` and, where the band has one, `level_id`.
+    DeviceRackEqBand { key: usize, x0: f32, y0: f32, freq_id: u32, level_id: Option<u32>, freq0: f64, level0: f64 },
+    /// A device tile's EQ graph dragged up / down: the plugin's Main level (`id`).
+    DeviceRackEqMain { key: usize, id: u32, y0: f32, v0: f64 },
     /// Routing mode: a tinted control dragged up / down. The base value is untouched; the drag delta is the depth.
     /// `before` is the graph as it stood on the press, so cancel restores it and the release is one undo step.
     ModDepth {
@@ -1059,6 +1078,15 @@ pub struct State {
     pub mod_menu: Option<os_model::modulation::ModulatorId>,
     /// The empty slot whose "add modulator" menu is open.
     pub mod_add_slot: Option<u8>,
+    /// The modulator slot selection: plain and Shift clicks and the arrow keys fill it (slot numbers).
+    pub mod_sel: Vec<u8>,
+    /// The arrow keys' slot, and the anchor a Shift+arrow range grows from.
+    pub mod_cursor: Option<u8>,
+    pub mod_anchor: Option<u8>,
+    /// The highlighted row of an open modulator options menu.
+    pub mod_menu_sel: usize,
+    /// The copied modulators (Ctrl+C / Ctrl+X), pasted into empty slots with Ctrl+V.
+    pub mod_clipboard: Vec<os_model::modulation::Modulator>,
     /// When routing mode was entered or the pointer last crossed it: the patch-point button flashes while it is on.
     pub mod_flash: Option<std::time::Instant>,
     /// The tiles' scrolling output history (view state, sampled from the snapshot).
@@ -1099,6 +1127,8 @@ pub struct State {
     /// Requests for the plugin host, handled on the next tick: (row, `Plugins::available` index) to create, row to open.
     pub pending_plugin: Option<(usize, usize)>,
     pub pending_open: Option<usize>,
+    /// A sampler channel made this frame, to be hosted on the next tick (`plugin_menu::add_generator_now`).
+    pub pending_add: Option<usize>,
     /// Samples to load into rows' Lemon Sampler instances on the next tick (browser send, drops on a rack row).
     pub sample_loads: Vec<(usize, String)>,
     /// An undo or redo changed the timebase (`history::Timebase`): playback stops on the next tick.
@@ -1224,8 +1254,12 @@ pub struct State {
     pub device_rack_sels: std::collections::BTreeSet<usize>,
     /// The last plain click's tile: a Shift+click selects every tile from it (`device_rack::select_tile`).
     pub device_rack_anchor: Option<usize>,
-    /// The device cut with Ctrl+X (`crate::device_rack::Clip`), pasted with Ctrl+V.
-    pub device_rack_clip: Option<crate::device_rack::Clip>,
+    /// The tile the arrows act on: the last clicked or arrowed-to tile while it is selected.
+    pub device_rack_cursor: Option<usize>,
+    /// The devices cut / copied with Ctrl+X / Ctrl+C (`crate::device_rack::Clip`), pasted with Ctrl+V.
+    pub device_rack_clip: Vec<crate::device_rack::Clip>,
+    /// The surface the arrows and editing keys act on (the last one clicked into).
+    pub keyboard_focus: KeyboardFocus,
     /// A MIDI track's MIDI FX slots (`crate::midi_fx`), by track id. In memory for now: the `.flp` records them
     /// with the engine's MIDI FX milestone.
     pub midi_fx: crate::midi_fx::Slots,
@@ -1322,12 +1356,20 @@ impl State {
 
     /// Whether `w` is shown in a native window of its own (Options ▸ Detached).
     pub fn is_detached(&self, w: Win) -> bool {
+        // The modulator's editor lives in its own always-on-top window for as long as it (or its menu) is open.
+        if w == Win::ModEditor {
+            return self.mod_editor.or(self.mod_menu).is_some();
+        }
         self.detached.iter().any(|d| d.0 == w)
     }
 
     /// The size (logical px) of `w`'s own native window, when it is detached. The Channel rack's follows what it paints
     /// (its size and the graph editor hanging below it, `rack_area`); the Mixer's is the native window's.
     pub fn detached_size(&self, w: Win) -> Option<(f32, f32)> {
+        if w == Win::ModEditor {
+            return (self.mod_editor.or(self.mod_menu).is_some())
+                .then_some((views::device_rack::MOD_EDITOR_W, views::device_rack::MOD_EDITOR_H));
+        }
         let d = self.detached.iter().find(|d| d.0 == w)?;
         Some(if w == Win::ChannelRack { self.rack_area().1 } else { d.1 })
     }
@@ -1621,6 +1663,7 @@ impl App {
                 hosted_rows: Vec::new(),
                 pending_plugin: None,
                 pending_open: None,
+                pending_add: None,
                 sample_loads: Vec::new(),
                 retimed: false,
                 file: None,
@@ -1681,6 +1724,11 @@ impl App {
                 mod_editor: None,
                 mod_menu: None,
                 mod_add_slot: None,
+                mod_sel: Vec::new(),
+                mod_cursor: None,
+                mod_anchor: None,
+                mod_menu_sel: 0,
+                mod_clipboard: Vec::new(),
                 mod_flash: None,
                 mod_hist: std::cell::RefCell::new(crate::modulation::History::default()),
                 mod_drag_before: None,
@@ -1705,7 +1753,9 @@ impl App {
                 device_rack_drop: None,
                 device_rack_sels: Default::default(),
                 device_rack_anchor: None,
-                device_rack_clip: None,
+                device_rack_cursor: None,
+                device_rack_clip: Vec::new(),
+                keyboard_focus: KeyboardFocus::default(),
                 midi_fx: Default::default(),
                 browser_marquee: Default::default(),
                 browser_favs: crate::browser::load_favs(),
@@ -4400,6 +4450,17 @@ impl App {
                 self.damage_band(MONITOR_RECT);
             }
         }
+        // The modulator strip's plots are live samples, so a stopped project still repaints the row (its history samples
+        // from this tick).
+        if self.state.show_device_rack && !self.state.device_rack_collapsed && !self.state.modulation.is_empty() {
+            let s = &self.state;
+            let h = crate::device_rack::height(s);
+            let rack = Rect::new(0.0, s.screen.1 - h, s.screen.0, h);
+            let row = views::device_rack::mod_row_rect(s, rack);
+            if row.h > 0.0 {
+                self.damage_rect(row);
+            }
+        }
         if let Some(e) = self.transport.take_error() {
             self.state.message = Some(format!("Audio: {e}"));
             self.invalidate();
@@ -4567,7 +4628,12 @@ impl App {
 
     /// The detached windows that are shown: each needs its native window (the shell opens and closes them to match).
     pub fn detached_windows(&self) -> Vec<Win> {
-        self.state.detached.iter().map(|d| d.0).filter(|&w| self.state.shown(w)).collect()
+        let mut v: Vec<Win> = self.state.detached.iter().map(|d| d.0).filter(|&w| self.state.shown(w)).collect();
+        // The modulator editor is a window of its own whenever it is open, never a rack overlay.
+        if self.state.mod_editor.or(self.state.mod_menu).is_some() && !v.contains(&Win::ModEditor) {
+            v.push(Win::ModEditor);
+        }
+        v
     }
 
     /// Where detached window `w` was in the main window (logical px), to open its native window over that place.
@@ -4577,6 +4643,15 @@ impl App {
             Win::ChannelRack => {
                 let ((dx, dy), (aw, ah)) = s.rack_area();
                 Some(Rect::new(s.rack_pos.0 - dx, s.rack_pos.1 - dy, aw, ah))
+            }
+            // The modulator editor opens just above its slot (8 px clear), never at a remembered place.
+            Win::ModEditor => {
+                let id = s.mod_editor.or(s.mod_menu)?;
+                let slot = s.modulation.get(id)?.slot;
+                let panel = views::device_rack::panel_rect(s, s.screen.0, s.screen.1);
+                let r = *views::device_rack::mod_slots(s, panel).get(usize::from(slot))?;
+                let (w, h) = (views::device_rack::MOD_EDITOR_W, views::device_rack::MOD_EDITOR_H);
+                Some(Rect::new(r.x.max(8.0), r.y - 8.0 - h, w, h))
             }
             w => w.slot().map(|i| s.wins[i].rect),
         }
@@ -5254,6 +5329,7 @@ impl App {
                 self.state.theme_base = text.clone();
                 self.state.fl_text = text;
                 os_theme::set_current(&self.theme.colors);
+                publish_palette(&self.theme.colors);
                 crate::wallpaper::forget();
                 if remember && to_citrus {
                     save_design(Design::Citrus);
@@ -5287,6 +5363,7 @@ impl App {
             None => design_theme(d, remember),
         };
         os_theme::set_current(&self.theme.colors);
+        publish_palette(&self.theme.colors);
         if remember {
             save_design(d);
         }
@@ -5306,6 +5383,7 @@ impl App {
         let palette = os_theme::design::palette(self.design(), Some(&os_theme::FlTheme::parse(&text)));
         self.theme = os_theme::Theme::new(&self.theme.name.clone(), palette, self.theme.adjust);
         os_theme::set_current(&self.theme.colors);
+        publish_palette(&self.theme.colors);
         if let Some(d) = theme_dir() {
             let _ = std::fs::create_dir_all(&d);
             let _ = std::fs::write(d.join("current.flstheme"), &text);
@@ -5329,7 +5407,7 @@ impl App {
         let themes: Vec<_> = st.themes.iter().map(|(_, t)| os_theme::FlTheme::parse(t)).collect();
         // With no theme file the skin shows its own colours: its own tile (the Lemon or Citrus theme, listed first in
         // `Design::ALL` order); so does stock Dark without Lemon Studio's key.
-        let own = Design::ALL.iter().position(|d| *d == design).unwrap_or(0);
+        let own = Design::SETTINGS_SKINS.iter().position(|d| *d == design).unwrap_or(0);
         st.preset = match (&chosen, &applied) {
             (None, None) if design == Design::Lemon || self.theme.colors == os_theme::Palette::default() => own,
             (None, None) => usize::MAX,
@@ -5338,7 +5416,7 @@ impl App {
         };
         st.skin = own;
         if st.open {
-            st.skin_previews = Design::ALL.iter().map(|d| os_theme::design::palette(*d, applied.as_ref())).collect();
+            st.skin_previews = Design::SETTINGS_SKINS.iter().map(|d| os_theme::design::palette(*d, applied.as_ref())).collect();
             st.theme_previews = themes.iter().map(|th| os_theme::design::palette(design, Some(th))).collect();
         }
         self.check_readable();
@@ -5842,7 +5920,7 @@ impl App {
             // Skins and themes (spec: ui/theme-presets.md §B): a skin keeps the theme; the themes (the skins' own colours,
             // then the built-in and user themes) colour either skin. Reset = no theme: the skin's own colours.
             SAct::Skin(i) => {
-                if let Some(d) = Design::ALL.get(i).copied() {
+                if let Some(d) = Design::SETTINGS_SKINS.get(i).copied() {
                     self.set_design(d, true);
                     self.state.message = Some(format!("Skin: {}", d.name()));
                 }
@@ -6365,6 +6443,21 @@ impl App {
                     let v = (v0 - (y - y0) as f64 * 0.005).clamp(0.0, 1.0);
                     crate::device_rack::set_param_value(self, key, id, v);
                 }
+                Drag::DeviceRackEqBand { key, x0, y0, freq_id, level_id, freq0, level0 } => {
+                    // The EQ band's token: frequency across (0.004 of the range per px), level up / down (0.005).
+                    // Across: 1024 px is the whole range; up / down: 640 px is.
+                    let f = (freq0 + (x - x0) as f64 / 1024.0).clamp(0.0, 1.0);
+                    crate::device_rack::set_param_value(self, key, freq_id, f);
+                    if let Some(id) = level_id {
+                        let l = (level0 - (y - y0) as f64 / 640.0).clamp(0.0, 1.0);
+                        crate::device_rack::set_param_value(self, key, id, l);
+                    }
+                }
+                Drag::DeviceRackEqMain { key, id, y0, v0 } => {
+                    // The graph's Main level: dragging up raises it (0.005 of the range per logical px).
+                    let v = (v0 - (y - y0) as f64 * 0.005).clamp(0.0, 1.0);
+                    crate::device_rack::set_param_value(self, key, id, v);
+                }
                 Drag::ModDepth { id, target, path, y0, depth, before } => {
                     // Pull the control up / down: the depth (not the base) follows. The preview edits the graph live, so
                     // the sound and the arc move under the pointer; the release turns it into one undo step.
@@ -6381,12 +6474,12 @@ impl App {
                     self.invalidate();
                 }
                 Drag::ModKnob { id, field, y0, v0, src0, .. } => {
-                    let v = (v0 - (y - y0) * 0.005).clamp(0.0, 1.0);
+                    let v = (v0 - (y - y0) * crate::knobs::PER_PX).clamp(0.0, 1.0);
                     let src = crate::modulation::with_knob(src0, field, v);
                     if let Some(m) = self.state.modulation.get_mut(id) {
                         m.source = src;
                     }
-                    self.drag = Some(Drag::ModKnob { id, field, y0: y, v0, src0, src_now: src });
+                    self.drag = Some(Drag::ModKnob { id, field, y0, v0, src0, src_now: src });
                     crate::modulation::sync(self);
                     self.invalidate();
                 }
@@ -6848,7 +6941,10 @@ impl App {
     /// True while a drag moves a value rather than the cursor (knobs, the tempo, scroll-bar right-drags): the shell
     /// hides the cursor and keeps it where the drag started, feeding relative movement.
     pub fn cursor_locked(&self) -> bool {
-        matches!(self.drag, Some(Drag::BarZoom { .. } | Drag::BarRows { .. } | Drag::Knob { .. } | Drag::Tempo { .. }))
+        matches!(
+            self.drag,
+            Some(Drag::BarZoom { .. } | Drag::BarRows { .. } | Drag::Knob { .. } | Drag::Tempo { .. } | Drag::ModKnob { .. })
+        )
     }
 
     pub(crate) fn bar(&self, t: Scroll) -> Option<Bar> {
@@ -7114,7 +7210,7 @@ impl App {
             // plain click opens the editor, so the menu is the right button's only job.
             Some(Action::Mod(crate::modulation::ModAct::Open(id))) => {
                 self.state.mod_menu = Some(*id);
-                self.state.mod_editor = None;
+                self.state.mod_editor = Some(*id);
                 self.state.mod_add_slot = None;
                 return self.invalidate();
             }
@@ -7389,7 +7485,12 @@ impl App {
             Some(Drag::BrowserSplit { .. }) => crate::browser::save_width(self.state.browser_w),
             // The rack's height is session state so far (the project state lands with M8); nothing to save.
             Some(Drag::DeviceRackSplit { .. }) => {}
-            Some(Drag::DeviceRackParam { .. }) | Some(Drag::RackStrip { .. }) | Some(Drag::ModDepth { .. }) | Some(Drag::ModKnob { .. }) => {}
+            Some(Drag::DeviceRackParam { .. })
+            | Some(Drag::DeviceRackEqBand { .. })
+            | Some(Drag::DeviceRackEqMain { .. })
+            | Some(Drag::RackStrip { .. })
+            | Some(Drag::ModDepth { .. })
+            | Some(Drag::ModKnob { .. }) => {}
             Some(Drag::DeviceRackTile { kind, .. }) => {
                 let x = self.mouse.0;
                 crate::device_rack::tile_drop(self, kind, x);
@@ -8246,6 +8347,17 @@ impl App {
             self.rack_pending();
             return;
         }
+        // The modulator row's keys while it has the keyboard focus (the last click was on a modulator): the arrows walk
+        // the slots (Shift extends), Enter opens its menu, Delete removes the selection, Ctrl+A / C / X / V act on it.
+        if self.state.keyboard_focus == KeyboardFocus::Modulators
+            && self.state.playlist.edit.is_none()
+            && self.state.menu_open.is_none()
+            && (self.state.mod_editor.is_some() || self.state.mod_menu.is_some() || !self.state.mod_sel.is_empty())
+            && crate::modulation::key(self, key, ctrl, alt, self.shift)
+        {
+            self.invalidate();
+            return;
+        }
         // The device rack's keys when a tile is selected (main window in front, no dialog, no playlist edit):
         // arrows move the selection across the device chain, Delete / Backspace remove the selected devices,
         // and Ctrl+D / Ctrl+X / Ctrl+V / Ctrl+G duplicate, cut, paste and group them (§7, the spec keys).
@@ -8256,22 +8368,9 @@ impl App {
         {
             // The rack's keys; anything else falls through to the global shortcuts (Ctrl+T, F-keys, ...).
             let handled = match key {
-                Key::Named(NamedKey::ArrowLeft) => {
-                    if let Some(i) = crate::device_rack::rack_sel(&self.state) {
-                        crate::device_rack::set_sel(&mut self.state, i.saturating_sub(1));
-                        true
-                    } else {
-                        false
-                    }
-                }
-                Key::Named(NamedKey::ArrowRight) => {
-                    if let Some(i) = crate::device_rack::rack_sel(&self.state) {
-                        let chain = crate::device_rack::rack_chain(&self.state);
-                        crate::device_rack::set_sel(&mut self.state, (i + 1).min(chain.len().saturating_sub(1)));
-                        true
-                    } else {
-                        false
-                    }
+                Key::Named(k @ (NamedKey::ArrowLeft | NamedKey::ArrowRight | NamedKey::ArrowUp | NamedKey::ArrowDown)) => {
+                    let dir = if matches!(k, NamedKey::ArrowLeft | NamedKey::ArrowUp) { -1 } else { 1 };
+                    crate::device_rack::move_sel(&mut self.state, dir, self.shift)
                 }
                 Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace) => {
                     // The instrument tile deletes its channel (the confirmation applies); the empty slot's
@@ -8331,8 +8430,8 @@ impl App {
             // Toolbars > Hide (spec: ui/toolbar-menu.md §5).
             Key::Named(NamedKey::F11) if ctrl => self.toolbar_switch(views::toolbar::Switch::Hide),
             Key::Named(NamedKey::F11) => self.open_settings(views::settings::INFO),
-            // Toggle the modulator rack's visibility (hotkey: Ctrl+M).
-            Key::Character(c) if ctrl && c.eq_ignore_ascii_case("m") => self.act(Action::ModVisibility),
+            // Toggle the modulator rack's visibility (hotkey: Ctrl+M; Ctrl+Shift+M stays Export MIDI).
+            Key::Character(c) if ctrl && !self.shift && c.eq_ignore_ascii_case("m") => self.act(Action::ModVisibility),
             // Monitor debug panel (views/mondebug.rs) parked 2026-10-09: its values are now the defaults. Uncomment to tune again.
             // Key::Named(NamedKey::F12) => self.state.monitor.debug = !self.state.monitor.debug,
             // spec: ui/close-windows.md; Shift+F12 is Align all channel editors (arrange.rs).
@@ -8694,7 +8793,7 @@ impl App {
         }
     }
 
-    fn preview(&self, channel: u16, key: i32) {
+    pub(crate) fn preview(&self, channel: u16, key: i32) {
         let mut p = self.state.project.clone();
         p.tempo = Some(self.state.tempo);
         let note = Note { key: key.clamp(0, views::piano::TOP_KEY) as u16, length: u32::from(p.ppq.max(4)), ..Note::step(channel, 0) };
@@ -9071,6 +9170,12 @@ impl App {
         if let Action::DeviceRack(ra) = a {
             return crate::device_rack::run(self, ra);
         }
+        // Shift+click on a modulator slot adds it to the selection instead of opening it alone.
+        if self.shift && let Action::Mod(crate::modulation::ModAct::Open(id)) = a {
+            crate::modulation::extend_selection(self, id);
+            self.invalidate();
+            return;
+        }
         if let Action::Mod(ma) = a {
             return crate::modulation::act(self, ma);
         }
@@ -9236,6 +9341,10 @@ impl App {
             }
             Action::ToggleLauncher => {
                 s.launcher_open = !s.launcher_open;
+                self.invalidate();
+            }
+            Action::ModVisibility => {
+                s.device_rack_collapsed = !s.device_rack_collapsed;
                 self.invalidate();
             }
             Action::PatSong(song) => {
@@ -9600,6 +9709,7 @@ impl App {
             | Action::DeviceRack(_)
             | Action::Launcher(_)
             | Action::ToggleLauncher
+            | Action::ModVisibility
             | Action::PianoCmd(_)
             | Action::Mod(_) => {}
         }
@@ -9998,6 +10108,8 @@ impl App {
                 }
             }
             // ADD > Audio clip / Automation clip (spec: ui/add-clip-channels.md §3).
+            // ADD ▸ Channel Rack: the step sequencer as one group instrument on one track (`crate::channel_rack`).
+            MenuCmd::ChannelRack => self.state.message = crate::channel_rack::create(self),
             MenuCmd::AudioClip => self.add_clip_channel(ChannelKind::AudioClip),
             MenuCmd::AutomationClip => self.add_clip_channel(ChannelKind::Automation),
             // ADD > Layer (spec: ui/add-clip-channels.md §4): the rack keeps the new row in view.
@@ -10673,7 +10785,15 @@ pub fn design_theme(d: Design, saved: bool) -> Theme {
         Design::Lemon => skin_theme(Design::Lemon, "Lemon", saved.then(saved_fl_text).flatten().as_deref()),
         Design::Citrus if saved => load_theme_inner(),
         Design::Citrus => Theme::default(),
+        Design::Meridian => skin_theme(Design::Meridian, "Meridian", None),
+        Design::Industrial => skin_theme(Design::Industrial, "Lemon Industrial", None),
     }
+}
+
+/// Publishes the app's palette for the plugin editors — docked in the rack or popped out on their own — so a skin or
+/// theme change reaches them (os_plugkit keeps the last one and each editor refreshes its copy at its next paint).
+pub fn publish_palette(p: &os_theme::Palette) {
+    os_plugkit::set_palette(p);
 }
 
 /// Skin `d` coloured by the `.flstheme` text `fl` (`None`: the skin's own colours; spec: ui/theme-presets.md "Skins").

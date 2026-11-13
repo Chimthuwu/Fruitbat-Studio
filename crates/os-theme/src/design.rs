@@ -40,6 +40,9 @@ impl Design {
     /// presented as a colour theme, so selecting a theme never appears to select a skin.
     pub const THEME_SKINS: [Design; 3] = [Design::Lemon, Design::Industrial, Design::Citrus];
 
+    /// The skins Settings ▸ Theme lists (Meridian and Industrial are set from elsewhere).
+    pub const SETTINGS_SKINS: [Design; 2] = [Design::Lemon, Design::Citrus];
+
     /// The Themes-list index of this skin's own colours, when it has one.
     pub fn theme_index(self) -> Option<usize> {
         Self::THEME_SKINS.iter().position(|d| *d == self)

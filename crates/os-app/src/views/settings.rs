@@ -1619,7 +1619,7 @@ fn paint_row_at(ui: &mut Ui, s: &State, group: &'static str, row: &Row, g: Rect,
                 let b = Rect::new(x0 + col * TILE_PITCH_X, y + 4.0 + rowi * TILE_PITCH_Y, TILE_W, TILE_H);
                 let (act, hint) = match kind {
                     TileList::Skins => (SAct::Skin(i), "Use this skin: its shapes and own colours"),
-                    TileList::Themes if i < os_theme::Design::THEME_SKINS.len() => {
+                    TileList::Themes if i < os_theme::Design::SETTINGS_SKINS.len() => {
                         (SAct::Preset(i), "Use this skin's own colours, on either skin (right-click to duplicate)")
                     }
                     TileList::Themes if i >= s.settings.user_from => {
