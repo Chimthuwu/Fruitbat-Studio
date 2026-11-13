@@ -113,6 +113,8 @@ pub enum Item {
     /// An entry of the undo history, 0 = "Last reset" (`History::entries`): a click goes back or forward to it; not
     /// draggable.
     History(usize),
+    /// A project modulator's group row (the Modulation section): its name is renamed from this row's pencil.
+    Modulator(os_model::modulation::ModulatorId),
     /// One project-modulation routing (the handoff §7): its modulator, the assignment's persistent path, its depth and
     /// whether that routing is on. The row carries its own state so the list needs no re-resolution to paint.
     ModRouting(os_model::modulation::ModulatorId, os_model::modulation::ParameterPath, f32, bool),
@@ -453,7 +455,7 @@ fn project_rows(s: &State, root: &str, cat: u8, out: &mut Vec<Row>) {
                         cat,
                         open: Some(open),
                         bright: open,
-                        item: Item::None,
+                        item: Item::Modulator(m.id),
                         path: None,
                     });
                     if !open {
@@ -868,7 +870,11 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
         let rr = Rect::new(cx - 18.0, 108.0 + dy, 36.0, 30.0);
         let hov = ui.hit(rr, Action::BrowserTab(i), TIPS[i]);
         if i == s.browser_tab {
-            ui.c.stroke_rrect(rr, 4.0, 1.5, t.browser_tab_outline);
+            // A seated module rather than an outlined button: a raised well and a short lemon datum.
+            ui.c.fill_rrect(rr, 3.0, t.browser_row_hi);
+            ui.c.fill_rect(Rect::new(cx - 9.0, rr.y + 2.0, 18.0, 2.0), t.browser_tab_outline);
+        } else if hov {
+            ui.c.fill_rrect(rr, 3.0, t.browser_row_hi.with_alpha(120));
         }
         let c = if hov || i == s.browser_tab { t.glyph } else { t.glyph.shade(-0.1) };
         icons::draw(ui.c, icon, Rect::new(cx - 9.0, 114.0 + dy, 18.0, 18.0), c);
@@ -908,6 +914,9 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
         if sel == Some(row.key.as_str()) || hov {
             ui.c.fill_rect(rect, t.browser_row_hi);
         }
+        if sel == Some(row.key.as_str()) {
+            ui.c.fill_rect(Rect::new(13.0, y + 1.0, 2.0, ROW_H - 2.0), t.accent);
+        }
         let base = match row.cat {
             FOLDER => t.browser_folder,
             FILE => t.text.shade(-0.08),
@@ -915,6 +924,10 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
         };
         let c = if row.bright { base.shade(0.12) } else if row.depth > 0 { base.shade(-0.06) } else { base };
         let c = if matches!(row.item, Item::History(e) if s.history.undone(e)) { t.text_faint } else { c };
+        // A short type marker in the gutter keeps top-level categories scannable without colouring whole rows.
+        if row.depth == 0 && row.cat != FOLDER && row.cat != FILE {
+            ui.c.fill_rect(Rect::new(7.0, y + 5.0, 2.0, ROW_H - 10.0), base.with_alpha(190));
+        }
         // Expander: only an opened node shows its ▾ in the gutter (FL screenshots, spec §2).
         if row.open == Some(true) && s.browser_search.is_empty() {
             let (ax, cy) = (x - 9.0, y + ROW_H / 2.0);
@@ -941,7 +954,23 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
             Item::ModRouting(id, path, depth, enabled) => Some((id, path, depth, enabled)),
             _ => None,
         };
-        let reserve = if mod_row.is_some() { 104.0 } else { 27.0 + if fav { 16.0 } else { 0.0 } };
+        // A modulator's group row has a pencil at its right: clicking it opens the inline name field on the row.
+        let mod_head = match row.item {
+            Item::Modulator(id) => Some(id),
+            _ => None,
+        };
+        let reserve = if mod_row.is_some() {
+            104.0
+        } else if mod_head.is_some() {
+            46.0
+        } else {
+            27.0 + if fav { 16.0 } else { 0.0 }
+        };
+        if let Some(id) = mod_head {
+            let pr = Rect::new(bw - 25.0, y + 3.0, 14.0, 14.0);
+            let ph = ui.hit(pr, Action::Mod(crate::modulation::ModAct::Rename(id, (x + 25.0, y))), "Rename this modulator");
+            icons::draw(ui.c, Icon::Pencil, pr, if ph { t.glyph } else { t.text_dim });
+        }
         if let Some((id, path, depth, enabled)) = mod_row {
             let dr = Rect::new(bw - 86.0, y, 42.0, ROW_H);
             let dh = ui.hit(dr, Action::Mod(crate::modulation::ModAct::DepthDragPath(id, path)), "Drag up / down to set the depth");
@@ -949,7 +978,7 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
             ui.c.text_clip(os_ui::Font::new(14), dr.x, y + 2.0, dr.w, dc, &format!("{:+.0}%", depth * 100.0));
             let cb = Rect::new(bw - 34.0, y + 4.0, 11.0, 11.0);
             let ch = ui.hit(cb, Action::Mod(crate::modulation::ModAct::TargetEnabled(id, path, !enabled)), "Enable / disable this routing");
-            ui.c.fill_rrect(cb, 2.0, if enabled { Color::rgb(0x4a9eff).with_alpha(200) } else { t.sunken });
+            ui.c.fill_rrect(cb, 2.0, if enabled { ui.t.modulation.with_alpha(200) } else { t.sunken });
             ui.c.stroke_rrect(cb, 2.0, 1.0, if ch { t.glyph } else { t.splitter_dark });
             let xr = Rect::new(bw - 18.0, y + 1.0, 14.0, 14.0);
             let xh = ui.hit(xr, Action::Mod(crate::modulation::ModAct::RemovePath(id, path)), "Remove this routing");

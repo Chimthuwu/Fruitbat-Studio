@@ -438,6 +438,8 @@ fn start_bar(g: &PGeom, start: Option<u32>) -> i32 {
 fn ruler_paint(ui: &mut Ui, s: &State, g: &PGeom, ruler: Rect, f: &FrameInfo) {
     let t = ui.t;
     ui.c.fill_rect(ruler, t.ruler);
+    ui.c.fill_rect(Rect::new(ruler.x, ruler.y, ruler.w, 1.0), t.window_title_hi.with_alpha(130));
+    ui.c.fill_rect(Rect::new(ruler.x, ruler.bottom() - 1.0, ruler.w, 1.0), t.accent_dim);
     ui.hit(ruler, Action::PlRuler, "Song position (right-drag: time selection)");
     ui.c.push_clip(ruler);
     if let Some((a, b)) = s.playlist.range {
@@ -463,9 +465,16 @@ fn ruler_paint(ui: &mut Ui, s: &State, g: &PGeom, ruler: Rect, f: &FrameInfo) {
             continue;
         }
         let x = g.xs(f64::from(b) * f64::from(bar_w));
-        let size = if n % (every * 4) == 0 { 15.0 } else { 13.0 };
+        let downbeat = n % (every * 4) == 0;
+        let size = if downbeat { 15.0 } else { 13.0 };
+        // A tick hierarchy at the ruler's top edge: long lemon marks at four-bar downbeats, short hairlines between.
+        ui.c.fill_rect(
+            Rect::new(x, ruler.y + 1.0, 1.0, if downbeat { 7.0 } else { 4.0 }),
+            if downbeat { t.accent.with_alpha(190) } else { t.ruler_text.with_alpha(90) },
+        );
         // Along the ruler's bottom 17 px (all of it unless thin scroll bars made it taller).
-        ui.c.text(super::fnt(size), x + 2.0, ruler.bottom() - 17.0 + (16.0 - size), t.ruler_text, &format!("{}", n + 1));
+        let ink = if downbeat { t.text } else { t.ruler_text };
+        ui.c.text(super::fnt(size), x + 2.0, ruler.bottom() - 17.0 + (16.0 - size), ink, &format!("{}", n + 1));
     }
     // Song position: a flag ◤ on the playhead while playing the song, else on the start position (§7: its left edge
     // on the position, its top along the ruler's top).
@@ -651,6 +660,7 @@ fn clip_paint(ui: &mut Ui, s: &State, g: &PGeom, i: usize, c: &Clip) {
     let color = pl::track_info(s, c.track).and_then(|t| t.color).or_else(|| pl::source_color(s, c.source)).map(rgb);
     let darken = |c: Color| c.mix(ui.t.s(0x000000), 0.55);
     let tint = pl::clip_tint(s, c.source).map(rgb);
+    let lemon = super::lemon(ui);
 
     // Title strip: (edge rows, highlight row, gradient top, gradient bottom, text).
     let (edge, high, top, bottom, text, body) = if selected {
@@ -659,6 +669,12 @@ fn clip_paint(ui: &mut Ui, s: &State, g: &PGeom, i: usize, c: &Clip) {
     } else if c.muted {
         let m = cc(t, MUTED_TITLE);
         (m.shade(-0.2), m, m, m, cc(t, MUTED_TEXT), cc(t, DEFAULT_BODY))
+    } else if lemon {
+        // A graphite title strip with a pixel-snapped type rail on top: patterns carry signal, audio the channel's
+        // colour (steel when it has none), automation warning. Keeping the strip itself neutral avoids a wall of
+        // saturated rectangles while the rail makes the clip's kind readable at a glance.
+        let body = color.map_or(cc(t, DEFAULT_BODY), darken);
+        (cc(t, CLIP_BORDER), cc(t, TITLE_TOP), cc(t, TITLE_TOP), cc(t, TITLE_BOTTOM), t.text, body)
     } else {
         let body = color.map_or(cc(t, DEFAULT_BODY), darken);
         match (kind, tint) {
@@ -671,7 +687,6 @@ fn clip_paint(ui: &mut Ui, s: &State, g: &PGeom, i: usize, c: &Clip) {
     // Outline (rounded at the top only); a clip a few pixels wide keeps its colours to its edges.
     let outline = dim(t.s(0x03090d));
     let narrow = r.w < 8.0;
-    let lemon = super::lemon(ui);
     // Rect fills with the top corners knocked out (cheaper than rounded paths for hundreds of clips).
     if lemon {
         ui.c.fill_rrect(r, lk::r_btn(t).min(r.w / 2.0).min(r.h / 2.0), outline);
@@ -691,6 +706,16 @@ fn clip_paint(ui: &mut Ui, s: &State, g: &PGeom, i: usize, c: &Clip) {
     let ir = (lk::r_btn(t) - 1.0).min(inner.w / 2.0).min(inner.h / 2.0);
     if lemon {
         ui.c.fill_rrect(inner, ir, dim(top));
+        if !selected && !c.muted {
+            let rail = match kind {
+                PickKind::Pattern => t.signal,
+                PickKind::Automation => t.warning,
+                _ => tint.or(color).unwrap_or(t.text_dim),
+            };
+            let (x, y) = (inner.x.ceil(), inner.y.floor());
+            let w = (inner.right().floor() - x).max(1.0);
+            ui.c.fill_rect(Rect::new(x, y, w, 2.0), dim(rail));
+        }
     } else {
         ui.c.fill_rect(Rect::new(inner.x, inner.y, inner.w, title_h + 1.0), dim(edge));
     }
@@ -1105,6 +1130,14 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
     let (top, bottom) = if super::lemon(ui) { (base, base) } else { (base.shade(0.035), base.shade(-0.03)) };
     let k = if super::lemon(ui) { lk::r_btn(t) + 1.0 } else { RADIUS }.min(bh / 2.0);
     ui.c.fill_rect_gradient(hr, top, bottom, k);
+    // A signal-coloured index rail: turquoise marks the channel, lemon marks the selected track. It is a structural
+    // marker, not an outline, so the header stays calm when nothing is selected.
+    let selected = pl::track_selected(s, row);
+    let rail = if selected { t.accent } else { t.signal.with_alpha(if on { 90 } else { 40 }) };
+    ui.c.fill_rect(Rect::new(hr.x + 1.0, hr.y + 2.0, 2.0, (bh - 4.0).max(2.0)), rail);
+    if selected {
+        ui.c.fill_rect(Rect::new(hr.x, hr.bottom() - 2.0, hr.w, 2.0), t.accent_dim);
+    }
     // Square the corners that continue into the rows above / below.
     if member {
         ui.c.fill_rect(Rect::new(hr.x, hr.y, hr.w, k), top);
@@ -1147,7 +1180,7 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
         os_model::TrackLink::INSTRUMENT => Some(("I", "Instrument track: linked to a channel (Track mode in the menu)")),
         _ => None,
     };
-    let text = if colored.is_some() || badge.is_some() { ui.t.tx(0xdce8f0) } else { t.text_faint };
+    let text = if colored.is_some() || badge.is_some() { ui.t.tx(0xe5e9e5) } else { t.text_dim };
     let text = if on { text } else { text.shade(-0.35) };
     let editing = matches!(s.playlist.edit.as_ref().map(|e| e.target), Some(pl::EditTarget::TrackName(r)) if r == row);
     let mut name_x = hr.x + 2.0;

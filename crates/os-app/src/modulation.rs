@@ -821,6 +821,8 @@ pub enum ModAct {
     Route(ModulatorId),
     /// Open / close a slot's graphical editor.
     Open(ModulatorId),
+    /// Start the inline name field at `(x, y)` (the rack editor's title or the browser's row).
+    Rename(ModulatorId, (f32, f32)),
     Close,
     /// Open / close a slot's right-click menu.
     Menu(ModulatorId),
@@ -927,6 +929,10 @@ pub fn act(app: &mut crate::app::App, a: ModAct) {
             s.mod_routing = None;
             s.mod_menu = None;
             s.mod_add_slot = None;
+        }
+        ModAct::Rename(id, at) => {
+            crate::playlist::start_edit(s, crate::playlist::EditTarget::ModulatorName(id), at);
+            return;
         }
         ModAct::Close => {
             s.mod_editor = None;

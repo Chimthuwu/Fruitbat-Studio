@@ -167,16 +167,16 @@ pub fn pill(c: &mut Canvas, t: &Palette, r: Rect, label: &str, font: Font, st: S
 
 /// Enable switch in place of the round LED (same centre and radius): a rounded square, lemon when on.
 pub fn led(c: &mut Canvas, t: &Palette, cx: f32, cy: f32, radius: f32, st: State) {
-    let h = radius - 0.5;
-    let r = Rect::new(cx - h, cy - h, 2.0 * h, 2.0 * h);
-    let rad = (radius * 0.45).max(2.0);
-    let rim = if st.hover { t.brand_grey(brand::DARK_HIGHLIGHT).shade(0.15) } else { t.toolbar_line.shade(-0.2) };
-    c.fill_rrect(r, rad, rim);
-    let inner = r.inset(1.0);
+    // A round panel lamp in a dark bezel: clearly hardware, not a square checkbox. The lit core keeps the Lemon
+    // highlight and drops off toward its rim, so it reads at 100 % and at 150 % scaling alike.
+    let rim = if st.hover { t.brand_grey(brand::DARK_HIGHLIGHT).shade(0.18) } else { t.toolbar_line.shade(-0.25) };
+    c.fill_circle(cx, cy, radius, rim);
+    c.fill_circle(cx, cy, (radius - 1.1).max(1.0), t.brand_led(brand::COLORED_DARK).mix(t.toolbar_line, 0.28));
     if st.on {
-        c.fill_rect_gradient(inner, t.brand_led(brand::HIGHLIGHT), t.brand_led(brand::MAIN), rad - 1.0);
-    } else {
-        c.fill_rrect(inner, rad - 1.0, t.brand_led(brand::COLORED_DARK).mix(t.toolbar_line, 0.35));
+        let core = t.brand_led(brand::MAIN);
+        let inner = (radius - 2.0).max(1.5);
+        c.fill_circle(cx, cy, inner, core);
+        c.fill_circle(cx - inner * 0.22, cy - inner * 0.22, (inner * 0.45).max(0.8), t.brand_led(brand::HIGHLIGHT).with_alpha(215));
     }
 }
 
@@ -216,9 +216,11 @@ pub fn knob(c: &mut Canvas, t: &Palette, cx: f32, cy: f32, r: f32, value: f32, b
     if show_arc && span > 0.01 {
         c.arc(cx, cy, ring, a0.min(a1), span, w, value_col);
     }
-    let base = if st.hover && !off { Color::rgb(0x505050) } else { Color::rgb(0x454545) };
-    c.fill_rect_gradient(Rect::new(cx - disc, cy - disc, 2.0 * disc, 2.0 * disc), base.shade(0.06), base.shade(-0.18), disc);
-    let pc = if off { t.text_faint } else if st.hover { Color::rgb(0xffffff) } else { t.glyph };
+    // Machined cap: a dark graphite disc with a crisp rim, lifted slightly under the pointer.
+    let base = if off { t.s(0x2c3336) } else if st.hover { t.s(0x5a6563) } else { t.s(0x48524f) };
+    c.fill_circle(cx, cy, disc + 1.2, t.toolbar_line.shade(-0.25));
+    c.fill_rect_gradient(Rect::new(cx - disc, cy - disc, 2.0 * disc, 2.0 * disc), base.shade(0.10), base.shade(-0.28), disc);
+    let pc = if off { t.text_faint } else if st.hover { Color::rgb(0xf4f7f2) } else { t.glyph };
     let (p0, p1) = (disc * 0.25, (disc - 1.5).max(1.0));
     c.line(cx + p0 * a.cos(), cy + p0 * a.sin(), cx + p1 * a.cos(), cy + p1 * a.sin(), (disc * 0.22).clamp(1.4, 2.2), pc);
 }
@@ -227,11 +229,14 @@ pub fn knob(c: &mut Canvas, t: &Palette, cx: f32, cy: f32, r: f32, value: f32, b
 /// lemon when the track is selected.
 pub fn fader_handle(c: &mut Canvas, t: &Palette, cx: f32, cy: f32, selected: bool, st: State) {
     let h = Rect::new(cx - 7.0, cy - 11.0, 14.0, 23.0);
-    c.fill_rrect(h.outset(1.0), 5.0, Color::rgb(0x161616));
-    let base = if st.hover || st.pressed { Color::rgb(0x6a6a6a) } else { Color::rgb(0x5c5c5c) };
-    c.fill_rect_gradient(h, base.shade(0.08), base.shade(-0.25), 4.0);
-    let line = if selected { t.brand_sel(brand::MAIN) } else { Color::rgb(0xdedede) };
+    c.fill_rrect(h.outset(1.0), 3.0, t.sunken_dark);
+    let base = t.fader_handle;
+    let base = if st.hover || st.pressed { base.shade(0.06) } else { base.shade(-0.10) };
+    c.fill_rect_gradient(h, base.shade(0.10), base.shade(-0.30), 2.0);
+    let line = if selected { t.accent } else { t.text_dim };
     c.fill_rrect(Rect::new(h.x + 2.0, cy - 1.0, h.w - 4.0, 2.0), 1.0, line);
+    // A fine index notch at the cap's centre, like a hardware fader.
+    c.fill_rect(Rect::new(cx - 0.5, cy + 3.0, 1.0, 3.0), line.with_alpha(if selected { 220 } else { 90 }));
 }
 
 // ---------------------------------------------------------------- scrolling

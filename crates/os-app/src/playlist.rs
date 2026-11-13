@@ -599,6 +599,8 @@ pub enum EditTarget {
     ArrangementName,
     /// The value box of "Enter value..." and whether it reads normalized values (spec: ui/type-in-value.md).
     TypeIn(crate::typein::Target, bool),
+    /// A project modulator's name (the rack slot editor's title and the browser's Modulation rows).
+    ModulatorName(os_model::modulation::ModulatorId),
     /// A clip launcher cell's name (its track's id and its scene): renamed in the launcher
     /// (`crate::launcher::set_clip_name`).
     LauncherClip(u32, usize),
@@ -4589,11 +4591,14 @@ pub fn start_edit(s: &mut State, target: EditTarget, at: (f32, f32)) {
         EditTarget::MixerInsert(_) => "2".into(),
         EditTarget::MixerGroup(_) => String::new(),
         EditTarget::Chords => crate::chord_tool::last(),
+        EditTarget::ModulatorName(id) => s.modulation.get(id).map(crate::modulation::name_of).unwrap_or_default(),
         EditTarget::TypeIn(t, norm) => crate::typein::text(s, t, norm),
         EditTarget::LauncherClip(track, scene) => crate::launcher::clip_name(s, track, scene),
         EditTarget::LauncherScene(scene) => crate::launcher::scene_name(s, scene),
     };
-    s.playlist.edit = Some(TextEdit { target, text, at, sel: false });
+    // A modulator's name opens selected: the field is a rename, not an append.
+    let sel = matches!(target, EditTarget::ModulatorName(_));
+    s.playlist.edit = Some(TextEdit { target, text, at, sel });
 }
 
 /// Enter in the text box.
@@ -4655,6 +4660,11 @@ pub fn commit_edit(s: &mut State) {
             }
         }),
         EditTarget::MemberName(t, k, id) => crate::container::rename(s, t, k, id, &text),
+        EditTarget::ModulatorName(id) => crate::control::edit(s, "Modulator name", crate::control::command::Region::Project, |s| {
+            if let Some(m) = s.modulation.get_mut(id) {
+                m.name = text;
+            }
+        }),
         EditTarget::TypeIn(t, norm) => crate::typein::accept(s, t, norm, &text),
         EditTarget::LauncherClip(track, scene) => crate::launcher::set_clip_name(s, track, scene, &text),
         EditTarget::LauncherScene(scene) => crate::launcher::set_scene_name(s, scene, &text),

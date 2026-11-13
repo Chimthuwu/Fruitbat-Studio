@@ -10641,7 +10641,12 @@ pub fn move_old_settings() {
 /// The design named in `design.txt` in the user folder; Lemon when there is none. Tests always use Classic.
 pub fn saved_design() -> Design {
     if cfg!(test) {
-        return Design::Citrus;
+        // Tests default to Citrus for stable visual assertions; screenshot runs can request Lemon.
+        return if std::env::var("OS_TEXT_SHOT_DESIGN").is_ok_and(|d| d.eq_ignore_ascii_case("lemon")) {
+            Design::Lemon
+        } else {
+            Design::Citrus
+        };
     }
     os_paths::user_file("design.txt")
         .and_then(|f| std::fs::read_to_string(f).ok())
@@ -11146,6 +11151,11 @@ mod tests {
         let scale: f32 = std::env::var("OS_TEXT_SHOT_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
         let Ok(mut c) = Canvas::new((1600.0 * scale) as u32, (900.0 * scale) as u32, scale) else { return };
         let mut app = App::new(None);
+        // Screenshots can inspect either skin (tests otherwise start on Citrus).
+        if std::env::var("OS_TEXT_SHOT_DESIGN").is_ok_and(|d| d.eq_ignore_ascii_case("lemon")) {
+            app.set_design(Design::Lemon, false);
+            app.state.message = None;
+        }
         app.invalidate();
         frame(&mut app, &mut c, None);
         c.pixmap.save_png(std::path::Path::new(&out)).unwrap();

@@ -274,14 +274,17 @@ Delivered on `modulation-m0`:
   drags, snapshot sync, parameter-side listing and removal.
 - **Rack** (`os-app/src/views/device_rack.rs`): the 92 px project-modulator row above the device headers — eight
   fixed slots, live mini-plots, on/off LED, routing patch point, empty `+` add menu, anchored slot editor and slot
-  context menu. The tile body, scrolling, resizing and collapse are shifted by that row and unchanged otherwise.
+  context menu; the editor's title is its inline name field. The tile body, scrolling, resizing and collapse are
+  shifted by that row and unchanged otherwise.
 - **Assignment**: click a slot's patch point (or a knob's Route item) to arm routing mode; every eligible control on
   the selected track is tinted blue and flashes; dragging a control sets its depth (the base value is unchanged).
-  Each routed control draws an arc, a draggable depth endpoint and the live cursor. Multiple sources can drive one
-  control; removal works from the control ("Modulation routings") and from the slot ("Clear routings").
+  Each routed control draws an arc, a draggable depth endpoint and the live cursor; the mixer strips' knobs and
+  faders and the docked shared plugin editors' knobs and faders draw the same arcs and handles. Multiple sources can
+  drive one control; removal works from the control ("Modulation routings") and from the slot ("Clear routings").
 - **Browser**: the Current Project tree has a sibling **Modulation** section, grouped per modulator, live-updating,
   with an inline depth cell (vertical drag), an enable checkbox and a remove button; the row menu also offers go-to,
-  enable, +10% / -10% / invert, and remove. A modulator click focuses it and opens its editor.
+  enable, +10% / -10% / invert, and remove. A modulator click focuses it and opens its editor; the pencil on its
+  group row renames it in place.
 - **Persistence**: `.lemon` layout 2 (layout 1 still reads), including slots, seeds, bands and per-routing enable.
   Routing mode itself is UI state and is not persisted or undoable, as decided in §3.16.
 
@@ -290,7 +293,7 @@ Verification (2026-11-13, portable MinGW/libclang):
 | Check | Result |
 |---|---|
 | `cargo test -p os-model` | 49 passed |
-| `cargo test -p os-app` | 1208 passed, 0 failed, 62 ignored |
+| `cargo test -p os-app` | 1212 passed, 0 failed, 62 ignored |
 | `cargo test -p os-engine` | 383 passed, 1 failed (the pre-existing 1-ULP assertion in `engine::tests::level_adjustments_scale_and_offset_the_channel`), 1 ignored |
 | `cargo build --workspace` | finished green (warnings only) |
 
@@ -304,11 +307,16 @@ The engine failure is a floating-point last-bit difference in an unrelated level
 - Routing mode lives only in UI state: switching projects or reloading drops it (§3.16).
 - The target arc has depth, endpoint dragging and a live cursor, but no curve-editing handle; the model keeps
   `Curve` and the engine honours it, so a curve UI can be added without a format change.
-- Arcs and tint are drawn on the rack's parameter cells. Mixer strips only show the modulator chip (with a rate /
-  `follow` label); docked `rack_ui` editor surfaces do not yet paint modulation arcs.
+- Arcs and depth handles are drawn on the rack's parameter cells, the mixer strips' knobs and faders (volume, pan,
+  separation, sends, slot mix, EQ gain / frequency / width) and the docked shared plugin editors' knobs and faders.
+  Docked MIDI FX editors show none: MIDI FX parameters are hosted under their own keys and are not on the
+  `ChannelParam` / `SlotParam` target path, so they are not modulation targets in v1.
+- Routing-mode tint is still painted only on the rack's parameter grid; mixer strips and docked editor surfaces show
+  the arcs of existing assignments but do not flash as eligible targets when routing mode is armed.
 - The slot editor and slot menu expose type, waveform, rate, bipolar, offset/amount, seed reroll, distribution,
-  hold/interpolate, detection, band, enable and clear/remove. Renaming a modulator is supported by `ModCmd::Rename`
-  (undone as one step) but has no inline text field yet; the browser shows the default name.
+  hold/interpolate, detection, band, enable and clear/remove. The editor's title is the name field, and the Modulation
+  section's group row has a pencil: either opens the shared inline text box in place, selected, and commits one undo
+  step. The name saves with the graph and reads back in the browser rows.
 - The Audio Follower is master-only and runs one control block (64 frames) behind; the band is filtered before
   detection, but the optional spectrum drawing (greying out-of-band frequencies) is not shipped.
 - `ModulatorId` is `u32`, not the `u64` the handoff suggests (§3.11): it is monotonic and never reused, and the

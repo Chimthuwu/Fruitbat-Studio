@@ -446,7 +446,9 @@ pub fn window_frame_ex(ui: &mut Ui, win: Win, r: Rect, title: &str, title_x: f32
     ui.c.fill_rect(r, t.window_title);
     let bar = Rect::new(r.x, r.y, r.w, 23.0);
     if kit::lemon::on(t) {
-        // Lemon (spec: ui/lemon-design.md §3): a flat bar, a hairline under it.
+        // Lemon (spec: ui/lemon-design.md §3): a flat bar, a lemon identity rail, a hairline under it.
+        ui.c.fill_rect(Rect::new(r.x, r.y, 3.0, 22.0), t.accent);
+        ui.c.fill_rect(Rect::new(r.x + 3.0, r.y, 1.0, 22.0), t.splitter_dark);
         if !flat {
             ui.c.fill_rect(Rect::new(r.x, r.y + 22.0, r.w, 1.0), t.splitter_dark);
         }

@@ -10,6 +10,7 @@ use std::f32::consts::PI;
 use os_ui::kit::lemon as lk;
 use os_ui::{Color, Font, Glyph, Rect};
 
+use super::device_rack::{mod_arcs, mod_fader};
 use super::{led, resize_zones, window_body, window_buttons, FrameInfo};
 use crate::knobs::KnobId;
 use crate::app::{Action, Live, State, Ui, Win, TITLE_H};
@@ -219,10 +220,11 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
     ui.hit(strips, Action::MixerArea, "Mixer");
     let bottom = r.bottom();
 
-    // Header row: "C" (scale) and "M" (master) on a lighter band.
-    ui.c.fill_rect(Rect::new(r.x + 1.0, ly.y(HEAD_Y0), MASTER_X + w, HEAD_Y1 - HEAD_Y0 + 1.0), ui.t.s(0x2b2e30));
-    ui.c.text_center(Font::new(17), Rect::new(r.x + 12.0, ly.y(HEAD_Y0), 20.0, 21.0), ui.t.s(0x6d7275), "C");
-    ui.c.text_center(Font::new(17), Rect::new(r.x + MASTER_X, ly.y(HEAD_Y0), w, 21.0), ui.t.s(0x6d7275), "M");
+    // Header row: the level-scale and master columns on a raised band, closed by a lemon hairline.
+    ui.c.fill_rect(Rect::new(r.x + 1.0, ly.y(HEAD_Y0), MASTER_X + w, HEAD_Y1 - HEAD_Y0 + 1.0), ui.t.s(0x20282b));
+    ui.c.fill_rect(Rect::new(r.x + 1.0, ly.y(HEAD_Y1) + 1.0, MASTER_X + w, 1.0), ui.t.accent_dim);
+    ui.c.text_center(Font::condensed(8, 2).bold(), Rect::new(r.x + 2.0, ly.y(HEAD_Y0) + 3.0, 41.0, 17.0), ui.t.tx(0x9aa7a5), "LEVEL");
+    ui.c.text_center(Font::condensed(8, 2).bold(), Rect::new(r.x + MASTER_X, ly.y(HEAD_Y0) + 3.0, w, 17.0), ui.t.tx(0xb8c4c1), "MASTER");
 
     // "C" column: the level scale with the current track's meter (spec: ui/mixer.md §9).
     let col = Rect::new(r.x + 9.0, ly.y(METER_Y0), 28.0, bottom - 156.0 - ly.y(METER_Y0));
@@ -538,7 +540,7 @@ fn wave(ui: &mut Ui, s: &State, n: u16, r: Rect) {
             break;
         }
         let peak = p[0].max(p[1]);
-        let c = if peak >= 1.0 { ui.t.meter_clip } else if peak >= 0.5 { ui.t.h(0xeec757) } else { ui.t.a(0xa0db40) };
+        let c = if peak >= 1.0 { ui.t.clipping } else if peak >= 0.5 { ui.t.warning } else { ui.t.signal };
         let (l, rr) = (p[0].min(1.0) * half, p[1].min(1.0) * half);
         if l >= 0.25 {
             ui.c.fill_rect(Rect::new(mid - l, y, l, 1.0), c);
@@ -555,10 +557,10 @@ fn meter_bar(ui: &mut Ui, x: f32, w: f32, bottom: f32, db: f32, hold: f32, cfg: 
     let full_top = ys(12.0);
     let grad = cfg.v[k::GRADIENT];
     let edge = cfg.v[k::EDGE];
-    // Zone colours at the zone's top and bottom (measured 0xa0db40 / 0xb6db4d, 0xeec757 / 0xfac050).
-    let green = (ui.t.a(0xa0db40), ui.t.a(0xb6db4d));
-    let yellow = (ui.t.h(0xeec757), ui.t.h(0xfac050));
-    let red = (t.meter_clip, t.meter_clip);
+    // Signal zones: turquoise for level, orange approaching the ceiling, coral at clipping.
+    let green = (t.signal.shade(-0.10), t.signal);
+    let yellow = (t.warning.shade(-0.08), t.warning);
+    let red = (t.clipping, t.clipping);
     let y_yel = ys(cfg.v[k::YELLOW_DB]);
     let y_red = ys(cfg.v[k::RED_DB].max(cfg.v[k::YELLOW_DB]));
     if db > meters::SILENT {
@@ -587,7 +589,7 @@ fn meter_bar(ui: &mut Ui, x: f32, w: f32, bottom: f32, db: f32, hold: f32, cfg: 
     }
     if cfg.v[k::HOLD_ON] >= 0.5 && hold > meters::SILENT {
         let y = ys(hold).min(bottom - 1.0);
-        let c = ui.t.h(0xe16e2f);
+        let c = ui.t.warning;
         ui.c.fill_rect(Rect::new(x, y, w, 1.0), c);
         if w >= 4.0 {
             ui.c.fill_rect(Rect::new(x, y, 1.0, 1.0), shade(c, edge));
@@ -816,24 +818,6 @@ fn analog_knob(ui: &mut Ui, cx: f32, cy: f32, r: f32, value: f32, bipolar: bool,
     if (a1 - a0).abs() > 0.02 {
         ui.c.arc(cx, cy, r + 2.6, a0.min(a1), (a1 - a0).abs(), 1.8, ink);
     }
-}
-
-/// A thin ring just outside a knob showing how far the modulation graph drives it: the arc spans the depth either side
-/// of the knob's own value, so a driven control reads as driven without the knob itself pretending to move. Nothing is
-/// drawn for a control no enabled modulator drives (the ring is the graph's depth, not a decoration).
-fn mod_ring(ui: &mut Ui, cx: f32, cy: f32, r: f32, value: f32, depth: f32) {
-    let d = depth.abs().clamp(0.0, 1.0);
-    if d <= 0.001 {
-        return;
-    }
-    let start = 0.75 * PI;
-    let sweep = 1.5 * PI;
-    let a = start + sweep * value.clamp(0.0, 1.0);
-    let (lo, hi) = ((a - sweep * d).max(start), (a + sweep * d).min(start + sweep));
-    if hi - lo < 0.02 {
-        return;
-    }
-    ui.c.arc(cx, cy, r + 4.2, lo, hi - lo, 1.4, Color::rgb(0x5fb6f0).with_alpha(210));
 }
 
 /// A section's knob: the analog family's cap in its well, at the largest size its row allows; `frac` across the row,
@@ -1268,7 +1252,8 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
         // Meter slot with its tick marks; the selected strip gets a green frame.
         meter_body(ui, s, n, meter, lemon, Some(ly));
         if selected {
-            ui.c.stroke_rrect(Rect::new(meter.x - 1.0, meter.y - 2.0, meter.w + 2.0, meter.h + 4.0), if lemon { lk::r_btn(t) } else { 1.0 }, 2.0, t.accent);
+            let (rim, rim_w) = if lemon { (t.accent_dim, 1.0) } else { (t.accent, 2.0) };
+            ui.c.stroke_rrect(Rect::new(meter.x - 1.0, meter.y - 2.0, meter.w + 2.0, meter.h + 4.0), if lemon { lk::r_btn(t) } else { 1.0 }, rim_w, rim);
         }
 
         // Name, rotated, reading upward from the bottom of the meter.
@@ -1314,9 +1299,7 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
     let pan = KnobId::MixPan(n);
     ui.hit(Rect::new(kx - 14.0, ly.y(PAN_Y) - 14.0, 28.0, 28.0), Action::Knob(pan), s.knob_text(pan));
     mixer_knob(ui, kx, ly.y(PAN_Y), 10.5, 15.0, s.knob(pan), Some(true));
-    if let Some(d) = crate::modulation::depth_on(s, os_model::target::mixer(n, os_model::target::MIXER_PAN)) {
-        mod_ring(ui, kx, ly.y(PAN_Y), 10.5, s.knob(pan), d);
-    }
+    mod_arcs(ui, s, os_model::target::mixer(n, os_model::target::MIXER_PAN), kx, ly.y(PAN_Y), 15.0, s.knob(pan).clamp(0.0, 1.0));
 
     // Reverse polarity (⇕) and swap left / right (⇔) buttons, lit when on, then the separation knob (§4).
     // They keep their size and spacing below the fader's top at any mixer height (FL's short mixer stacks them the
@@ -1342,9 +1325,7 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
         let sep = KnobId::MixSep(n);
         ui.hit(Rect::new(sx - 9.0, ring_y - 9.0, 18.0, 18.0), Action::Knob(sep), s.knob_text(sep));
         mixer_knob(ui, sx, ring_y, 6.0, 9.5, s.knob(sep), Some(true));
-        if let Some(d) = crate::modulation::depth_on(s, os_model::target::mixer(n, os_model::target::MIXER_SEPARATION)) {
-            mod_ring(ui, sx, ring_y, 6.0, s.knob(sep), d);
-        }
+        mod_arcs(ui, s, os_model::target::mixer(n, os_model::target::MIXER_SEPARATION), sx, ring_y, 10.5, s.knob(sep).clamp(0.0, 1.0));
     }
 
     // Fader: a recessed 6 px channel with a darker groove down its middle, gain marks, and a handle that stands off
@@ -1358,13 +1339,16 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
     let hy = (ly.y(HANDLE_0DB + (0.8 - v) * 440.0)).min(track_y1 - 5.0).max(ly.y(TRACK_Y0) + 5.0);
     if selected {
         if lemon {
-            ui.c.fill_rrect(Rect::new(mx - 1.25, hy, 2.5, track_y1 - hy), 1.25, t.accent);
+            ui.c.fill_rrect(Rect::new(mx - 1.0, hy, 2.0, track_y1 - hy), 1.0, t.accent.with_alpha(185));
         } else {
             ui.c.fill_rect(Rect::new(mx - 1.0, hy, 2.0, track_y1 - hy), ui.t.a(0x8ec63a));
         }
     }
     let hov = ui.hit(Rect::new(mx - 9.0, ly.y(TRACK_Y0) - 5.0, 18.0, track_y1 - ly.y(TRACK_Y0) + 10.0), Action::Fader(n), mx::level_text("Volume", f64::from(v)));
     fader_handle(ui, mx, hy, selected, hov);
+    // A driven fader's range beside the track, on the fader's own law; its handle drags the depth.
+    let volume = os_model::target::mixer(n, os_model::target::MIXER_VOLUME);
+    mod_fader(ui, s, volume, mx, v, |val| ly.y(HANDLE_0DB + (0.8 - val) * 440.0).clamp(track_y0 + 1.0, track_y1 - 1.0));
 
     // Input pin: not available yet, greyed out. The latency clock under it sets the track latency (right click); the
     // disk-record button below them arms the track.
@@ -1432,6 +1416,7 @@ fn down_arrow(ui: &mut Ui, kx: f32, ay: f32) {
 fn send_knob(ui: &mut Ui, s: &State, n: u16, kx: f32, ky: f32, level: f64) {
     let id = KnobId::Send(s.selected_mixer, n);
     mixer_knob(ui, kx, ky, 10.0, 13.0, s.knob(id), None);
+    mod_arcs(ui, s, os_model::target::send(s.selected_mixer, n), kx, ky, 14.0, s.knob(id).clamp(0.0, 1.0));
     if level > 0.0 {
         // From the knob's zero to its pointer (the arc takes a sweep, not an end angle).
         let sweep = (level as f32).min(1.0) * 1.5 * PI;
@@ -1608,6 +1593,8 @@ fn slot_panel(ui: &mut Ui, s: &State, r: Rect) {
             ui.c.stroke_circle(row.right() - 33.0, row.cy(), 11.8 * q, 1.5, ui.t.s(0x55595c));
             ui.hit(Rect::new(row.right() - 18.0, row.y, 18.0, row.h), Action::Mix(MHit::SlotLed(k)), "Mute / solo  (ctrl)0..9");
             led(ui, row.right() - 10.0, row.cy(), track.is_none_or(|m| m.slot_on[i]));
+            // Last, so a depth handle wins the pointer where its arc reaches the LED's column.
+            mod_arcs(ui, s, os_model::target::slot(n, k, os_model::target::SLOT_MIX), row.right() - 33.0, row.cy(), 15.0 * q, s.knob(mix).clamp(0.0, 1.0));
         }
     }
     let sep = r.y + 61.0 + 330.0 * kp;
@@ -1663,6 +1650,9 @@ fn slot_panel(ui: &mut Ui, s: &State, r: Rect) {
             ui.c.fill_rect_gradient(h, ui.t.s(if hov { 0x6c7073 } else { 0x5e6265 }), ui.t.s(0x2a2d30), 2.0);
         }
         ui.c.fill_rect(Rect::new(fx - 5.0, hy, 10.0, 1.0), ui.t.s(0x111315));
+        // The band's gain fader: its range lies along the fader's own value law.
+        let gain = os_model::target::mixer(n, os_model::target::EQ_GAIN + k as u8);
+        mod_fader(ui, s, gain, fx, s.knob(id).clamp(0.0, 1.0), |v| eq.cy() - (v.clamp(0.0, 1.0) * 2.0 - 1.0) * (eq.h / 2.0 - 8.0));
     }
     let ly = eq.bottom() + 8.0;
     if knobs {
@@ -1677,6 +1667,8 @@ fn slot_panel(ui: &mut Ui, s: &State, r: Rect) {
             let id = KnobId::Eq(n, k as u8, 1 + row as u8);
             ui.hit(Rect::new(kx - 9.0, ky - 9.0, 18.0, 18.0), Action::Knob(id), s.knob_text(id));
             mixer_knob(ui, kx, ky, 7.0, 8.0, s.knob(id), Some(false));
+            let param = if row == 0 { os_model::target::EQ_FREQ } else { os_model::target::EQ_WIDTH } + k as u8;
+            mod_arcs(ui, s, os_model::target::mixer(n, param), kx, ky, 11.5, s.knob(id).clamp(0.0, 1.0));
         }
     }
     let mut g = Glyph::new();
@@ -1796,6 +1788,43 @@ mod tests {
         assert_eq!(glitch_at(five, 5, (five.cx() + five.w * 2.0, five.cy())), 7, "two cells to the right");
         assert_eq!(glitch_at(five, 5, (five.cx(), five.cy() - five.h * 2.0)), 1, "a row up");
         assert_eq!(glitch_at(five, 5, (five.cx() - five.w * 9.0, five.cy())), 4, "and a point past the left edge takes its column's first cell");
+    }
+
+    /// A driven mixer control draws its depth handle where the modulation is set, and dragging it changes that depth
+    /// (the strip's knob and its volume fader both).
+    #[test]
+    fn a_driven_knob_and_fader_have_depth_handles() {
+        use crate::modulation::{ModAct, ModCmd};
+        let mut app = app();
+        let Ok(mut c) = os_ui::Canvas::new(1600, 1000, 1.0) else { return };
+        let ws = &mut app.state.wins[crate::app::Win::Mixer.slot().unwrap()];
+        (ws.maxed, ws.rect) = (false, os_ui::Rect::new(100.0, 83.0, 1200.0, 900.0));
+        app.state.z = vec![crate::app::Win::Mixer];
+        let id = app.state.modulation.add(os_model::modulation::ModSource::default());
+        let pan = os_model::target::mixer(2, os_model::target::MIXER_PAN);
+        let volume = os_model::target::mixer(2, os_model::target::MIXER_VOLUME);
+        crate::modulation::run(&mut app, ModCmd::Assign(id, pan)).expect("pan");
+        crate::modulation::run(&mut app, ModCmd::Assign(id, volume)).expect("volume");
+        app.paint(&mut c, None);
+        let handle = |app: &App, target: u32| {
+            app.hits
+                .iter()
+                .find(|h| h.action == Action::Mod(ModAct::DepthDrag(id, target)))
+                .map(|h| h.rect)
+                .unwrap_or_else(|| panic!("a depth handle for {target:#x}"))
+        };
+        let pan_h = handle(&app, pan);
+        handle(&app, volume);
+        let depth = |app: &App| {
+            let path = crate::modulation::path_in(&app.state, pan).expect("the pan's path");
+            app.state.modulation.get(id).and_then(|m| m.targets.iter().find(|t| t.path == path)).map_or(0.0, |t| t.depth)
+        };
+        let before = depth(&app);
+        app.mouse_move(pan_h.cx(), pan_h.cy());
+        app.mouse_down();
+        app.mouse_move(pan_h.cx(), pan_h.cy() - 30.0);
+        app.mouse_up();
+        assert!(depth(&app) > before, "dragging the handle up raises the depth ({} -> {})", before, depth(&app));
     }
 
     /// A modulator chip in the title bar, dropped on a pan knob, assigns that modulator to the knob's parameter: the

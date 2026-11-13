@@ -2192,6 +2192,40 @@ mod tests {
         assert!(params.iter().any(|p| p.plain != 0.0 || p.min != 0.0 || p.max != 0.0), "plain ranges reach the tile");
     }
 
+    /// A docked plugin editor's driven parameter draws the same depth handle as a rack cell, so a modulation made on
+    /// one surface is editable on the other.
+    #[test]
+    fn a_docked_editors_driven_control_gets_a_depth_handle() {
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = full_chain_app();
+        app.paint(&mut c, None);
+        let target = crate::views::device_rack::tiles(&app.state)
+            .into_iter()
+            .filter_map(|(d, _)| {
+                let key = d.key?;
+                // MIDI FX are not on the parameter-target path (they live under their own hosted keys), so a mixer
+                // effect's shared editor is the one to drive.
+                if matches!(d.kind, DeviceKind::MidiFx(_)) {
+                    return None;
+                }
+                crate::rack_ui::ui(app.state.device_rack_names.get(&key)?)?;
+                app.state.device_rack_params.get(&key)?;
+                (0..app.state.device_rack_params[&key].len()).find_map(|i| crate::params::target_of(&app.state, key, i))
+            })
+            .next()
+            .expect("a modulatable control in a docked editor");
+        let path = crate::modulation::target_path(&mut app.state, target).expect("the control's path");
+        let id = app.state.modulation.add(os_model::modulation::ModSource::default());
+        assert!(app.state.modulation.assign(id, os_model::modulation::ModTarget::new(path).with_depth(0.5)));
+        app.paint(&mut c, None);
+        assert!(
+            app.hits
+                .iter()
+                .any(|h| h.action == Action::Mod(crate::modulation::ModAct::DepthDrag(id, target))),
+            "a docked editor's depth handle for {target:#x}"
+        );
+    }
+
     /// A MIDI FX tile draws every one of its controls — the rack used to cap a tile at eight, so a device's later
     /// controls (a sampler's ADSR, a filter's knobs) were simply absent. All of them get a hit and a place in the
     /// grid; what does not fit scrolls.
@@ -2491,6 +2525,38 @@ mod tests {
         let DeviceKind::Container { t: ct, k: ck } = container.kind else { unreachable!() };
         assert_eq!(members(&app.state, ct, ck).unwrap_or_default().len(), 2, "every selected effect became a member");
         assert!(app.state.device_rack_sels.is_empty(), "the selection cleared");
+    }
+
+    /// The rack slot editor's title is its name field: clicking it edits the name in place, and the rename is one
+    /// undo step.
+    #[test]
+    fn a_modulator_renames_from_the_rack_editors_title() {
+        use crate::modulation::ModAct;
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = app();
+        let id = app.state.modulation.add(os_model::modulation::ModSource::default());
+        app.state.mod_editor = Some(id);
+        app.paint(&mut c, None);
+        let title = app
+            .hits
+            .iter()
+            .rev()
+            .find(|h| matches!(h.action, Action::Mod(ModAct::Rename(i, _)) if i == id))
+            .map(|h| h.rect)
+            .expect("the editor's title field");
+        app.mouse_move(title.cx(), title.cy());
+        app.mouse_down();
+        assert!(
+            matches!(app.state.playlist.edit.as_ref().map(|e| e.target), Some(crate::playlist::EditTarget::ModulatorName(x)) if x == id),
+            "the title starts the rename"
+        );
+        let e = app.state.playlist.edit.as_mut().unwrap();
+        assert!(e.sel, "the name opens selected");
+        e.text = "Wobble".into();
+        crate::playlist::commit_edit(&mut app.state);
+        assert_eq!(app.state.modulation.get(id).map(|m| m.name.as_str()), Some("Wobble"));
+        crate::playlist::run(&mut app, Cmd::Undo);
+        assert_eq!(app.state.modulation.get(id).map(|m| m.name.as_str()), Some(""));
     }
 
     /// Ctrl+G with the instrument tile selected wraps the channel (the instrument rack): a plugin channel's

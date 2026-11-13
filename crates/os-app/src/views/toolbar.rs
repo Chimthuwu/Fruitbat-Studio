@@ -156,11 +156,14 @@ pub fn paint(ui: &mut Ui, s: &State, f: &FrameInfo, width: f32) {
     let seps = s.toolbar.separators;
     // Bands.
     if lemon {
-        // Lemon (spec: ui/lemon-design.md §4): flat bands, short rounded separators.
-        ui.c.fill_rect(Rect::new(0.0, 0.0, width, h), t.toolbar);
+        // Lemon (spec: ui/lemon-design.md §4): a shallow machined gradient, short rounded separators and a single
+        // lemon datum line under the band.
+        ui.c.fill_rect_gradient(Rect::new(0.0, 0.0, width, h), t.toolbar.shade(0.025), t.toolbar.shade(-0.035), 0.0);
+        ui.c.fill_rect(Rect::new(0.0, 0.0, width, 1.0), t.window_title_hi.with_alpha(120));
         for r in (1..rows).filter(|_| seps) {
             ui.c.fill_rect(Rect::new(0.0, ROW_H * r as f32, width, 1.0), t.toolbar_line);
         }
+        ui.c.fill_rect(Rect::new(0.0, h - 1.0, width, 1.0), t.accent_dim);
     } else {
         for r in 0..rows {
             let (top, bottom) = l.row_span(r);
@@ -297,7 +300,15 @@ fn hint_panel(ui: &mut Ui, c: &Ctx) {
     let hp = a.span(72.0, 376.0, 4.0, 36.0);
     sunken(ui, hp, t.sunken);
     ui.hit(hp, Action::DragWindow, "Status bar");
-    ui.c.text_clip(Font::new(13), a.x(76.0), a.y(6.0), 280.0, t.text_dim.shade(-0.05), &f.title);
+    if super::lemon(ui) {
+        // Project identity: a compact wordmark and the project name, anchored by a lemon rail.
+        ui.c.fill_rect(Rect::new(hp.x + 1.0, hp.y + 1.0, 2.0, hp.h - 2.0), t.accent_dim);
+        ui.c.text_clip(Font::condensed(11, 5).bold(), a.x(80.0), a.y(6.0), 62.0, t.accent, "LEMONWIG");
+        ui.c.fill_rect(a.r(Rect::new(143.0, 7.0, 1.0, 10.0)), t.splitter_dark);
+        ui.c.text_clip(Font::new(13), a.x(149.0), a.y(6.0), 207.0, t.text_dim.shade(-0.05), &f.title);
+    } else {
+        ui.c.text_clip(Font::new(13), a.x(76.0), a.y(6.0), 280.0, t.text_dim.shade(-0.05), &f.title);
+    }
     let hint: &str = if !f.hint.is_empty() { &f.hint } else { s.message.as_deref().unwrap_or("") };
     ui.c.text_clip(Font::new(14), a.x(77.0), a.y(19.0), 280.0, t.text, hint);
     icons::draw(ui.c, Icon::MidiControl, a.span(360.0, 374.0, 17.0, 32.0), ui.t.s(0x515457));
@@ -505,6 +516,11 @@ fn time(ui: &mut Ui, c: &Ctx) {
         ui.c.text(small, tick_x, a.y(9.0), g, &tick_s);
     }
     ui.c.pop_clip();
+    // A live transport tell: turquoise while the clock is running, dark when parked.
+    if lemon {
+        let dot = if f.playing && !f.paused { t.signal } else { t.text_faint.with_alpha(90) };
+        ui.c.fill_circle(tp.x + 7.0, tp.cy(), 2.2, dot);
+    }
     let label = s.clock.label();
     ui.c.text_right(Font::condensed(7, 3).bold(), a.x(871.0), a.y(5.0), if lemon { t.text_dim } else { t.glyph.shade(-0.1) }, label);
 }
@@ -518,7 +534,8 @@ fn monitor(ui: &mut Ui, c: &Ctx) {
     // Left panel: border, then 84 x 31 px of picture, bottom edge at y 36. Pictures are drawn as cells, which tile at
     // any scale (spec ui/ui-scaling.md §4).
     let lemon = super::lemon(ui);
-    let (fill, ink) = if lemon { (ui.t.time_panel, ui.t.pill.mix(ui.t.time_panel, 0.15)) } else { (fill, ink) };
+    // Signal displays are turquoise: the spectrum / scope shows signal flow, not the application's identity colour.
+    let (fill, ink) = if lemon { (ui.t.time_panel, ui.t.signal) } else { (fill, ink) };
     let scope = a.r(Rect::new(880.0, 4.0, 86.0, 33.0));
     if lemon {
         os_ui::kit::lemon::well(ui.c, ui.t, scope, fill);
@@ -564,7 +581,7 @@ fn monitor(ui: &mut Ui, c: &Ctx) {
     // Classic: both ends follow the theme's highlight key. Lemon: the displays' digit colour (like the scope's ink),
     // dimmed toward the panel at the left and full at the tip. The held peak takes the tip colour.
     let (lo, hi) = if lemon {
-        (ui.t.pill.mix(ui.t.time_panel, 0.45), ui.t.pill)
+        (ui.t.signal.mix(ui.t.time_panel, 0.45), ui.t.signal)
     } else {
         (ui.t.h(0xc8ced1), ui.t.h(0xcdc7a8))
     };

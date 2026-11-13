@@ -72,7 +72,7 @@ impl App {
                 }
                 let s = &mut self.state;
                 s.browser_scroll = s.browser_scroll.min(view::max_scroll(s));
-                if !matches!(row.item, Item::None | Item::File(_) | Item::History(_) | Item::ModRouting(..)) {
+                if !matches!(row.item, Item::None | Item::File(_) | Item::History(_) | Item::Modulator(_) | Item::ModRouting(..)) {
                     self.drag = Some(Drag::Browser { item: row.item, label: row.label, m0: self.mouse, started: false });
                 }
             }
@@ -613,7 +613,7 @@ impl App {
                     self.state.message = Some(m);
                 }
             }
-            Item::None | Item::File(_) | Item::History(_) | Item::Preset(_) | Item::ModRouting(..) => {}
+            Item::None | Item::File(_) | Item::History(_) | Item::Preset(_) | Item::Modulator(_) | Item::ModRouting(..) => {}
         }
     }
 
@@ -1088,7 +1088,7 @@ pub fn row_menu(s: &crate::app::State, row: &view::Row) -> Vec<PItem> {
             let it = PItem::new("Load into selected channel", Cmd::Preset(crate::presets::PCmd::Load(key, p.into())));
             items.push(if s.hosted_rows.contains(&key) { it } else { it.off() });
         }
-        Item::None | Item::File(_) | Item::Param(..) | Item::Container => {}
+        Item::None | Item::File(_) | Item::Param(..) | Item::Container | Item::Modulator(_) => {}
     }
     if let Some(path) = &row.path {
         sep(&mut items);
@@ -1294,6 +1294,42 @@ mod tests {
 
     fn labels(app: &App) -> Vec<String> {
         view::rows(&app.state).into_iter().map(|r| r.label).collect()
+    }
+
+    /// The Modulation section's group row has a pencil that opens the inline name field on that row; Enter renames the
+    /// modulator as one undo step, and the row reads the new name.
+    #[test]
+    fn a_modulators_browser_row_renames_it_in_place() {
+        use crate::modulation::ModAct;
+        use crate::playlist::EditTarget;
+        let Ok(mut c) = Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = App::new(None);
+        app.state.project = crate::app::test_project();
+        app.state.browser_tab = view::PROJECT_TAB;
+        app.state.show_browser = true;
+        app.state.browser_open.insert(view::project_root());
+        app.state.browser_open.insert(format!("{}/Modulation", view::project_root()));
+        let id = app.state.modulation.add(os_model::modulation::ModSource::default());
+        app.paint(&mut c, None);
+        let pencil = app
+            .hits
+            .iter()
+            .rev()
+            .find(|h| matches!(h.action, Action::Mod(ModAct::Rename(i, _)) if i == id))
+            .map(|h| h.rect)
+            .expect("the Modulation row's pencil");
+        app.mouse_move(pencil.cx(), pencil.cy());
+        app.mouse_down();
+        assert!(
+            matches!(app.state.playlist.edit.as_ref().map(|e| e.target), Some(EditTarget::ModulatorName(x)) if x == id),
+            "the pencil starts the rename"
+        );
+        app.state.playlist.edit.as_mut().unwrap().text = "Wobble".into();
+        crate::playlist::commit_edit(&mut app.state);
+        assert_eq!(app.state.modulation.get(id).map(|m| m.name.as_str()), Some("Wobble"));
+        assert!(labels(&app).iter().any(|l| l.starts_with("Wobble (")), "the row reads the new name: {:?}", labels(&app));
+        crate::playlist::run(&mut app, crate::playlist::Cmd::Undo);
+        assert_eq!(app.state.modulation.get(id).map(|m| m.name.as_str()), Some(""));
     }
 
     /// Favorites (spec: ui/browser.md §10): a file's and a plugin's row menu tick Favorite; the Favorites tab lists the

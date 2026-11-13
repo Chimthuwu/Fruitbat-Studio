@@ -353,6 +353,10 @@ tokens! {
     key_black_lit_left = 0x7a4f24, "Piano keyboard: sounding black key (left end).";
     velocity = 0xacdfb3, "Velocity lollipops.";
     velocity_dot = 0x477a4e, "Velocity lollipop disc.";
+    signal = 0x00d5c0, "Signal flow: audio activity, routing, meters above the floor.";
+    modulation = 0x00d5c0, "Project modulation: arcs, depth handles, routing mode.";
+    warning = 0xf49b48, "Warnings: armed, pending, out of range.";
+    clipping = 0xe65e72, "Clipping and peak hold.";
 }
 
 /// Role-mapped literals: widgets that need a measured shade with no token of its own write it as

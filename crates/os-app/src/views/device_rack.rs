@@ -191,16 +191,15 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, r: Rect) {
     // Header: which track's chain this is, its pin, its collapse.
     let head = Rect::new(r.x, r.y + SPLITTER, r.w, HEADER_H - SPLITTER);
     ui.c.fill_rect(head, t.window_title);
+    ui.c.fill_rect(Rect::new(r.x, head.y + 4.0, 3.0, head.h - 8.0), t.accent);
     let name = device_rack::rack_track(s).map_or("No track selected".to_string(), |tr| {
         crate::playlist::track_name(s, tr.playlist_lane as u16 - 1)
     });
-    ui.c.text(
-        fnt(15.0),
-        r.x + 8.0,
-        head.y + 6.5,
-        t.text,
-        &format!("Device rack - {name}"),
-    );
+    // A technical module tag, then the current chain's track name. The tag is fixed-width so the name starts at
+    // the same x for every track.
+    ui.c.text(fnt(12.0), r.x + 12.0, head.y + 8.0, t.accent, "DEVICE RACK");
+    ui.c.fill_rect(Rect::new(r.x + 91.0, head.y + 5.0, 1.0, head.h - 10.0), t.splitter_dark);
+    ui.c.text_clip(fnt(15.0), r.x + 98.0, head.y + 6.5, (r.w - 330.0).max(20.0), t.text, &name);
     // The header buttons, right-aligned: ＋ Add (the plugin browser), Pin, Show / Hide — and, when the chain
     // overflows the panel, the ‹ › steppers (an alternative to the wheel).
     let overflow = crate::views::device_rack::content_w(s) > r.w
@@ -334,6 +333,11 @@ fn tile_paint(ui: &mut Ui, s: &State, plugins: &Plugins, i: usize, d: Device, ti
     let (top, bottom) = device_rack::header_gradient(d.kind);
     ui.c.fill_rect_gradient(head, t.s(top), t.s(bottom), 0.0);
     ui.c.fill_rect(head, os_ui::Color::rgb(0).with_alpha(if selected { 60 } else { 110 }));
+    // A hard kind strip at the left edge: the device's family is readable before the name is.
+    ui.c.fill_rect(Rect::new(tile.x, head.y, 3.0, head.h), t.s(top).shade(-0.12));
+    if selected {
+        ui.c.fill_rect(Rect::new(tile.x, head.bottom() - 2.0, tile.w, 2.0), t.accent);
+    }
     ui.c.fill_rect(
         Rect::new(tile.x, tile.bottom() - 1.0, tile.w, 1.0),
         t.splitter_dark,
@@ -718,8 +722,18 @@ fn editor_body(ui: &mut Ui, s: &State, plugins: &Plugins, key: usize, editor: cr
     // The hits are in the image's device px; the blit maps them onto the body.
     let kx = r.w / img.w as f32;
     let ky = r.h / img.h as f32;
+    // The controls the modulation graph drives: after their own hits are in, each gets its arcs (a knob) or a range
+    // beside its track (a fader), with handles that drag the depth, drawn over the editor's pixels.
+    let mut driven: Vec<(Rect, u32, f32)> = Vec::new();
     for (hr, id, v) in &img.hits {
         let cell = Rect::new(r.x + hr.x * kx, r.y + hr.y * ky, (hr.w * kx).max(2.0), (hr.h * ky).max(2.0));
+        if let Some(index) = params.iter().position(|p| p.id == *id) {
+            if let Some(target) = crate::params::target_of(s, key, index) {
+                if !crate::modulation::routings_on(s, target).is_empty() {
+                    driven.push((cell, target, params[index].value.clamp(0.0, 1.0) as f32));
+                }
+            }
+        }
         let n = (*v).unwrap_or(0.0) as u8;
         let act = if *id == EDITOR_TAB {
             RackAct::EditorTab { key, n }
@@ -746,6 +760,17 @@ fn editor_body(ui: &mut Ui, s: &State, plugins: &Plugins, key: usize, editor: cr
         };
         ui.hit(cell, Action::DeviceRack(act), hint);
     }
+    ui.c.push_clip(body);
+    for (cell, target, base) in driven {
+        if cell.h > cell.w * 1.6 {
+            // A fader: the range runs up its track, its base at the bottom.
+            mod_fader(ui, s, target, cell.cx(), base, |v| cell.bottom() - v.clamp(0.0, 1.0) * cell.h);
+        } else {
+            let radius = (cell.w.min(cell.h) * 0.5 + 3.0).max(7.0);
+            mod_arcs(ui, s, target, cell.cx(), cell.cy(), radius, base);
+        }
+    }
+    ui.c.pop_clip();
 }
 
 /// One control cell: its name, a dial (or a switch for a two-state parameter) and the plugin's own value text.
@@ -757,10 +782,10 @@ fn cell_paint(ui: &mut Ui, s: &State, key: usize, index: usize, p: &RackParam, c
     let target = crate::params::target_of(s, key, index);
     let eligible = s.mod_routing.is_some() && target.is_some_and(|t| crate::modulation::is_modulatable(s, t));
     if eligible {
-        ui.c.fill_rrect(cell, 2.0, Color::rgb(MOD_BLUE).with_alpha(30));
-        ui.c.stroke_rrect(cell, 2.0, 1.0, Color::rgb(MOD_BLUE).with_alpha(110));
+        ui.c.fill_rrect(cell, 2.0, ui.t.modulation.with_alpha(30));
+        ui.c.stroke_rrect(cell, 2.0, 1.0, ui.t.modulation.with_alpha(110));
     }
-    ui.c.text_clip(fnt(11.0), cell.x + 2.0, cell.y + 1.0, CELL_W - 4.0, if eligible { Color::rgb(0x9ccbff) } else { t.text_dim }, &p.name);
+    ui.c.text_clip(fnt(11.0), cell.x + 2.0, cell.y + 1.0, CELL_W - 4.0, if eligible { Color::rgb(0x9ff5ea) } else { t.text_dim }, &p.name);
     // Clamped to the body like the paint: a row the body's top edge cuts through does not take the header's clicks.
     let hit = Rect::new(cell.x + 4.0, cell.y + 18.0, CELL_W - 8.0, CELL_H - 20.0).intersect(&body);
     // A switch flips on the press; a dial starts at its value and follows a vertical drag (the one set path,
@@ -794,7 +819,7 @@ fn cell_paint(ui: &mut Ui, s: &State, key: usize, index: usize, p: &RackParam, c
     // an endpoint handle that drags that depth, and a moving cursor at the live value. The knob keeps showing the
     // base, independently draggable — modulation applies on top and never rewrites it.
     if let Some(target) = target {
-        cell_modulation(ui, s, target, cx, cell.y + 35.0, p.value.clamp(0.0, 1.0) as f32);
+        mod_arcs(ui, s, target, cx, cell.y + 35.0, 17.5, p.value.clamp(0.0, 1.0) as f32);
     }
 }
 
@@ -802,17 +827,26 @@ fn cell_paint(ui: &mut Ui, s: &State, key: usize, index: usize, p: &RackParam, c
 const ARC_START: f32 = 2.356_194_5;
 const ARC_SWEEP: f32 = 4.712_389;
 
-fn cell_modulation(ui: &mut Ui, s: &State, target: u32, cx: f32, cy: f32, base: f32) {
+/// One assignment's ink, by its place in the list: the first is warm, the next cool, so two sources on one control
+/// stay apart.
+fn mod_ink(base: Color, n: usize, enabled: bool) -> Color {
+    const INK: [u8; 3] = [255, 220, 200];
+    base.with_alpha(if enabled { INK[n % INK.len()] } else { 70 })
+}
+
+/// The arcs a control's assignments draw round a knob (`r0` is the first arc's radius): one per source, from the
+/// base value to base + depth, an endpoint handle that drags that depth, and a cursor at the live value. Shared by
+/// the rack's parameter cells, the mixer's knobs and the docked plugin editors' knobs.
+pub(crate) fn mod_arcs(ui: &mut Ui, s: &State, target: u32, cx: f32, cy: f32, r0: f32, base: f32) {
     let routings = crate::modulation::routings_on(s, target);
     if routings.is_empty() {
         return;
     }
-    let ink = [255u8, 205, 160];
     for (n, (id, depth, enabled)) in routings.iter().enumerate() {
-        let r = 17.5 + n as f32 * 2.5;
+        let r = r0 + n as f32 * 2.5;
         let a0 = ARC_START + base * ARC_SWEEP;
         let a1 = ARC_START + (base + depth).clamp(-1.5, 2.5) * ARC_SWEEP;
-        let c = Color::rgb(0x4a9eff).with_alpha(if *enabled { ink[n % ink.len()] } else { 70 });
+        let c = mod_ink(ui.t.modulation, n, *enabled);
         ui.c.arc(cx, cy, r, a0.min(a1), (a1 - a0).abs(), 2.0, c);
         // The endpoint handle: drag up / down for more or less depth on this one source.
         let (hx, hy) = (cx + r * a1.cos(), cy + r * a1.sin());
@@ -823,9 +857,35 @@ fn cell_modulation(ui: &mut Ui, s: &State, target: u32, cx: f32, cy: f32, base: 
     // The moving cursor: where the modulated value actually is, from the engine's lock-free snapshot.
     if let Some(v) = crate::modulation::live_value(s, target) {
         let a = ARC_START + v.clamp(-1.5, 2.5) * ARC_SWEEP;
-        let (x0, y0) = (cx + 14.0 * a.cos(), cy + 14.0 * a.sin());
-        let (x1, y1) = (cx + 20.0 * a.cos(), cy + 20.0 * a.sin());
-        ui.c.line(x0, y0, x1, y1, 2.0, Color::rgb(0xd8ecff).with_alpha(230));
+        let (x0, y0) = (cx + (r0 - 3.5) * a.cos(), cy + (r0 - 3.5) * a.sin());
+        let (x1, y1) = (cx + (r0 + 2.5) * a.cos(), cy + (r0 + 2.5) * a.sin());
+        ui.c.line(x0, y0, x1, y1, 2.0, Color::rgb(0xd8fffa).with_alpha(230));
+    }
+}
+
+/// A fader's assignments: a vertical range beside the track from the base to base + depth, a handle at that end that
+/// drags the depth, and a tick at the live value. `y_at` maps a normalized 0..1 value to the track's y, so the range
+/// follows whatever law the fader uses.
+///
+/// A control's own hits are registered before this runs, so its handles are the last word under the pointer.
+pub(crate) fn mod_fader(ui: &mut Ui, s: &State, target: u32, x: f32, base: f32, y_at: impl Fn(f32) -> f32) {
+    let routings = crate::modulation::routings_on(s, target);
+    if routings.is_empty() {
+        return;
+    }
+    let y0 = y_at(base);
+    for (n, (id, depth, enabled)) in routings.iter().enumerate() {
+        let y1 = y_at(base + depth);
+        let c = mod_ink(ui.t.modulation, n, *enabled);
+        let xx = x + 4.0 + n as f32 * 2.5;
+        ui.c.line(xx, y0, xx, y1, 2.0, c);
+        let hr = Rect::new(xx - 4.0, y1 - 4.0, 8.0, 8.0);
+        let hov = ui.hit(hr, Action::Mod(crate::modulation::ModAct::DepthDrag(*id, target)), "Drag to set this modulation's depth");
+        ui.c.fill_circle(xx, y1, if hov { 4.0 } else { 3.0 }, c);
+    }
+    if let Some(v) = crate::modulation::live_value(s, target) {
+        let y = y_at(v);
+        ui.c.line(x - 3.5, y, x + 3.5, y, 1.5, Color::rgb(0xd8fffa).with_alpha(230));
     }
 }
 
@@ -872,9 +932,6 @@ fn header_button(ui: &mut Ui, r: Rect, label: &str, on: bool, action: Action, hi
         label,
     );
 }
-
-/// The blue project-modulation colour (Bitwig's convention, handoff §9).
-const MOD_BLUE: u32 = 0x4a9eff;
 
 /// One slot's short line: what it is and how fast ("sine 1/4", "random 1/2", "low band").
 pub(crate) fn slot_text(m: &os_model::modulation::Modulator) -> String {
@@ -942,9 +999,9 @@ fn mod_slot_paint(ui: &mut Ui, s: &State, r: Rect, slot: u8, m: &os_model::modul
     let id = m.id;
     let routing = s.mod_routing == Some(id);
     let edge = if routing {
-        Color::rgb(MOD_BLUE).with_alpha(route_flash())
+        ui.t.modulation.with_alpha(route_flash())
     } else if s.mod_editor == Some(id) {
-        Color::rgb(MOD_BLUE).with_alpha(170)
+        ui.t.modulation.with_alpha(170)
     } else {
         t.splitter_dark
     };
@@ -957,7 +1014,7 @@ fn mod_slot_paint(ui: &mut Ui, s: &State, r: Rect, slot: u8, m: &os_model::modul
     ui.c.text_clip(fnt(10.5), r.x + 5.0, r.y + 2.0, (r.w - 26.0).max(8.0), ink, &crate::modulation::name_of(m));
     let led = Rect::new(r.right() - 16.0, r.y + 2.0, 12.0, 12.0);
     let lhov = ui.hit(led, Action::Mod(crate::modulation::ModAct::Enable(id)), if m.enabled { "On: click to turn it off" } else { "Off: click to turn it on" });
-    ui.c.fill_circle(led.cx(), led.cy(), 4.0, if m.enabled { Color::rgb(0x4a9eff).with_alpha(230) } else { t.s(0x30363a) });
+    ui.c.fill_circle(led.cx(), led.cy(), 4.0, if m.enabled { ui.t.modulation.with_alpha(230) } else { t.s(0x30363a) });
     if lhov {
         ui.c.stroke_circle(led.cx(), led.cy(), 5.5, 1.0, t.glyph);
     }
@@ -974,7 +1031,7 @@ fn mod_slot_paint(ui: &mut Ui, s: &State, r: Rect, slot: u8, m: &os_model::modul
             .map(|(i, &v)| (plot.x + plot.w * i as f32 / (n - 1) as f32, plot.bottom() - v.clamp(0.0, 1.0) * plot.h))
             .collect();
         if pts.len() > 1 {
-            ui.c.polyline(&pts, 1.4, Color::rgb(MOD_BLUE).with_alpha(if m.enabled { 235 } else { 90 }));
+            ui.c.polyline(&pts, 1.4, ui.t.modulation.with_alpha(if m.enabled { 235 } else { 90 }));
         }
     }
     // The rate / band line, and the patch-point button (the handoff's assignment mechanic).
@@ -985,7 +1042,7 @@ fn mod_slot_paint(ui: &mut Ui, s: &State, r: Rect, slot: u8, m: &os_model::modul
         Action::Mod(crate::modulation::ModAct::Route(id)),
         if routing { "Routing mode: click a tinted control and drag; Esc cancels" } else { "Route this modulator: click, then drag any blue-tinted control" },
     );
-    let dot = Color::rgb(MOD_BLUE).with_alpha(if routing { route_flash() } else if phov { 255 } else { 150 });
+    let dot = ui.t.modulation.with_alpha(if routing { route_flash() } else if phov { 255 } else { 150 });
     ui.c.fill_circle(patch.cx(), patch.cy(), 3.3, dot);
     ui.c.line(patch.cx(), patch.cy(), patch.right() - 2.0, patch.cy() - 4.0, 1.4, dot);
     ui.c.line(patch.right() - 2.0, patch.cy() - 4.0, patch.right() - 2.0, patch.cy() - 8.0, 1.2, dot);
@@ -1059,8 +1116,14 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
     let y = (anchor.bottom() + 2.0).min(r.bottom() - h - 2.0).max(r.y + 2.0);
     let panel = Rect::new(x, y, w, h);
     ui.c.fill_rrect(panel, 4.0, t.s(0x22272a));
-    ui.c.stroke_rrect(panel, 4.0, 1.0, Color::rgb(MOD_BLUE).with_alpha(150));
-    ui.c.text_clip(fnt(12.5), panel.x + 8.0, panel.y + 4.0, panel.w - 34.0, t.text, &crate::modulation::name_of(m));
+    ui.c.stroke_rrect(panel, 4.0, 1.0, ui.t.modulation.with_alpha(150));
+    // The title is the name field: clicking it edits the name in place (the same inline box track and slot names use).
+    let title = Rect::new(panel.x + 5.0, panel.y + 2.0, panel.w - 30.0, 18.0);
+    let th = ui.hit(title, Action::Mod(crate::modulation::ModAct::Rename(m.id, (title.x, title.y))), "Click to rename this modulator");
+    ui.c.text_clip(fnt(12.5), panel.x + 8.0, panel.y + 4.0, panel.w - 34.0, if th { t.glyph } else { t.text }, &crate::modulation::name_of(m));
+    if th {
+        ui.c.fill_rect(Rect::new(title.x + 3.0, title.bottom() - 3.0, title.w - 8.0, 1.0), t.splitter_dark);
+    }
     let close = Rect::new(panel.right() - 20.0, panel.y + 3.0, 16.0, 16.0);
     if ui.hit(close, Action::Mod(crate::modulation::ModAct::Close), "Close the modulator editor") {
         ui.c.text(fnt(13.0), close.x + 4.0, close.y, t.glyph, "x");
@@ -1071,7 +1134,7 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
         let b = Rect::new(bx, panel.y + 22.0, 74.0, 17.0);
         let on = crate::modulation::Kind::of(m.source) == kind;
         let hov = ui.hit(b, Action::Mod(crate::modulation::ModAct::Kind(m.id, kind)), kind.label());
-        ui.c.fill_rrect(b, 2.0, if on { Color::rgb(MOD_BLUE).with_alpha(190) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
+        ui.c.fill_rrect(b, 2.0, if on { ui.t.modulation.with_alpha(190) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
         ui.c.text_center(fnt(10.5), b, if on { t.glyph } else { t.text_dim }, kind.label());
         bx += 78.0;
     }
@@ -1089,7 +1152,7 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
             mod_knob(ui, s, m.id, crate::modulation::KnobField::Offset, "offset", panel.x + 126.0, cy + 42.0);
             let b = Rect::new(panel.x + 168.0, cy + 30.0, 74.0, 18.0);
             let hov = ui.hit(b, Action::Mod(crate::modulation::ModAct::ToggleBipolar(m.id)), "Bipolar / unipolar output");
-            ui.c.fill_rrect(b, 2.0, if l.bipolar { Color::rgb(MOD_BLUE).with_alpha(150) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
+            ui.c.fill_rrect(b, 2.0, if l.bipolar { ui.t.modulation.with_alpha(150) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
             ui.c.text_center(fnt(9.5), b, t.text, if l.bipolar { "bipolar" } else { "unipolar" });
         }
         ModSource::Random(rd) => {
@@ -1100,7 +1163,7 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
             ui.c.text_center(fnt(9.5), b, t.text, if rd.distribution == os_model::modulation::Distribution::Uniform { "uniform" } else { "gaussian" });
             let b = Rect::new(panel.x + 86.0, cy + 22.0, 86.0, 18.0);
             let hov = ui.hit(b, Action::Mod(crate::modulation::ModAct::ToggleInterpolate(m.id)), "Hold or interpolate");
-            ui.c.fill_rrect(b, 2.0, if rd.interpolate { Color::rgb(MOD_BLUE).with_alpha(150) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
+            ui.c.fill_rrect(b, 2.0, if rd.interpolate { ui.t.modulation.with_alpha(150) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
             ui.c.text_center(fnt(9.5), b, t.text, if rd.interpolate { "interpolated" } else { "hold" });
             mod_knob(ui, s, m.id, crate::modulation::KnobField::Amount, "amount", panel.x + 30.0, cy + 58.0);
             mod_knob(ui, s, m.id, crate::modulation::KnobField::Smooth, "smoothing", panel.x + 78.0, cy + 58.0);
@@ -1135,11 +1198,11 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
     let route = Rect::new(panel.x + 8.0, panel.bottom() - 26.0, 92.0, 19.0);
     let on = s.mod_routing == Some(m.id);
     let hov = ui.hit(route, Action::Mod(crate::modulation::ModAct::Route(m.id)), "Route this modulator: click, then drag a blue-tinted control");
-    ui.c.fill_rrect(route, 2.0, if on { Color::rgb(MOD_BLUE).with_alpha(route_flash()) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
+    ui.c.fill_rrect(route, 2.0, if on { ui.t.modulation.with_alpha(route_flash()) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
     ui.c.text_center(fnt(10.0), route, t.text, if on { "routing..." } else { "route to..." });
     let sw = Rect::new(panel.right() - 68.0, panel.bottom() - 26.0, 60.0, 19.0);
     let hov = ui.hit(sw, Action::Mod(crate::modulation::ModAct::Enable(m.id)), "On / off");
-    ui.c.fill_rrect(sw, 2.0, if m.enabled { Color::rgb(MOD_BLUE).with_alpha(150) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
+    ui.c.fill_rrect(sw, 2.0, if m.enabled { ui.t.modulation.with_alpha(150) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
     ui.c.text_center(fnt(10.0), sw, t.text, if m.enabled { "on" } else { "off" });
 }
 

@@ -277,7 +277,8 @@ pub(crate) fn role(name: &str) -> Role {
         "record" | "meter_low" | "meter_high" | "meter_clip" | "cat_project" | "cat_recent" | "cat_plugin_db"
         | "cat_plugin_presets" | "cat_channel_presets" | "cat_mixer_presets" | "clip" | "note_top" | "note_bottom" | "note_rim"
         | "note_text" | "note_sel_top" | "note_sel_bottom" | "note_sel_rim" | "note_sel_text" | "key_white" | "key_white_left"
-        | "key_black" | "key_black_left" | "key_c" | "key_label" | "step_on" => Role::Fixed,
+        | "key_black" | "key_black_left" | "key_c" | "key_label" | "step_on" | "signal" | "modulation" | "warning"
+        | "clipping" => Role::Fixed,
         _ => Role::Surface,
     }
 }
