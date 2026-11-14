@@ -6,7 +6,7 @@
 //! Automatic crossfades: with the project's switch on (event 44), audio clips that overlap on one track crossfade. A
 //! crossfade is two ordinary fades in the clip records, the earlier clip's fade-out and the later clip's fade-in,
 //! written without their "set by hand" bits (byte 56). An edge whose bit is clear belongs to the switch and follows
-//! the clips ([`derive`]); one whose bit is set keeps its own fade. The records keep FL's bytes: the lengths and
+//! the clips ([`derive`]); one whose bit is set keeps its own fade. The records keep the original's bytes: the lengths and
 //! tensions are the fades' own fields, the bits are never touched here.
 //!
 // spec: audio/audio-clips.md "Automatic crossfades", flp/events/playlist.md (event 233, bytes 36..56)
@@ -110,7 +110,7 @@ pub fn ms(ticks: u32, tempo: f64, ppq: u16) -> f32 {
 }
 
 /// The tension a crossfade's fade-out takes from the later clip's fade-in tension `t`: `-t` (0, not -0, for 0, so the
-/// stored bytes are FL's; an unusable value counts as 0).
+/// stored bytes are the original's; an unusable value counts as 0).
 pub fn opposite(t: f32) -> f32 {
     if t == 0.0 || !t.is_finite() { 0.0 } else { -t }
 }
@@ -475,7 +475,7 @@ mod tests {
 
     #[test]
     fn stored_lengths_close_to_ours_are_kept() {
-        // FL's own bytes for the measured crossfade, an ulp or so from ours: kept as they are.
+        // the original's own bytes for the measured crossfade, an ulp or so from ours: kept as they are.
         let mut p = project(vec![audio(0, 480, 0), audio(240, 480, 0)]);
         let fl = f32::from_bits(ms(240, 130.0, 96).to_bits() + 1);
         p.arrangements[0].clips[0].set_fade_out_length(fl);

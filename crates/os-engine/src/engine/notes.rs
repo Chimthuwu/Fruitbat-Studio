@@ -215,7 +215,7 @@ struct Glide {
 /// One channel's voices and note state.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(super) struct Voices {
-    /// In FL's pool order: a new voice goes to the end, and when one is over the last takes its place.
+    /// In the original's pool order: a new voice goes to the end, and when one is over the last takes its place.
     pool: Vec<Voice>,
     /// Mono: the keys of the notes that started and have not ended, oldest first, and the sounding voice (its
     /// instrument key and its own note's key).

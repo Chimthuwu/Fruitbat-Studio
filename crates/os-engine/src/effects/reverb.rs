@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Studio's plate reverb (a recreation of FL's Fruity Reeverb 2 mixer effect), configured from its saved state.
+//! Lemon Studio's plate reverb (a recreation of the original's Fruity Reeverb 2 mixer effect), configured from its saved state.
 //!
 //! The two sides are summed to mono, filtered (high cut, low cut), diffused by four all-passes, delayed (pre-delay)
 //! and fed into a tank of two halves that feed each other; seven taps per side make the reverb, one tap per side from a
@@ -51,7 +51,7 @@ pub const RANGES: [(i32, i32); PARAMS] = [
     (0, 2048),
 ];
 
-/// A fresh instance (FL's Default preset, with its wet level at 100 %).
+/// A fresh instance (the original's Default preset, with its wet level at 100 %).
 pub const DEFAULTS: [i32; PARAMS] = [75, 40, 0, 50, 100, 15, 40, 100, 500, 0, 128, 128, 128, 684, 0];
 
 /// The value that switches a filter off: low cut 19, high cut / high damping 221.
@@ -94,7 +94,7 @@ fn int_at(b: &[u8], at: usize) -> Option<i32> {
 
 impl Settings {
     /// A saved state: version 10001 (fifteen knobs and two switches), 10000 (thirteen knobs, no modulation) or a
-    /// state without a version (FL's factory presets: thirteen knobs and one byte).
+    /// state without a version (the original's factory presets: thirteen knobs and one byte).
     pub fn from_state(b: &[u8]) -> Option<Settings> {
         let mut s = Settings { knobs: DEFAULTS, tempo_sync: false, mid_side: false };
         let first = int_at(b, 0)?;
@@ -112,7 +112,7 @@ impl Settings {
             s.knobs[MOD_DEPTH] = 0;
         }
         let sw = at + 4 * n;
-        // The presets' single byte is 0 in all of FL's; read as the tempo switch.
+        // The presets' single byte is 0 in all of the original's; read as the tempo switch.
         s.tempo_sync = b.get(sw).is_some_and(|&x| x != 0);
         if bytes == 2 {
             s.mid_side = b.get(sw + 1).is_some_and(|&x| x != 0);
@@ -801,7 +801,7 @@ mod tests {
         assert!(m[2] < 0.0 && m[0] > 0.5);
         let m = matrix(0.5, 64, false);
         assert!((m[0] - m[2]).abs() < 1e-6, "fully merged: the cross terms equal the direct ones");
-        // The pan's cosine and sine stay double: FL's entries at wet 50 %, half merged and fully separated (fitted to
+        // The pan's cosine and sine stay double: the original's entries at wet 50 %, half merged and fully separated (fitted to
         // its renders).
         let v = slider(0.5);
         let m = matrix(v, 32, false);

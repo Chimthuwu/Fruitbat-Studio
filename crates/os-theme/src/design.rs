@@ -833,11 +833,11 @@ fn skin_palette(design: Design, theme: Option<&FlTheme>) -> Palette {
     p
 }
 
-/// FL's base palette toolbar (spec: ui/flstheme.md §5): its slight blue tint is what a theme's Hue and Saturation turn.
+/// the original's base palette toolbar (spec: ui/flstheme.md §5): its slight blue tint is what a theme's Hue and Saturation turn.
 const BASE_TINT: Color = Color::rgb(0x434c51);
 
 /// A theme laid over a skin's own colours: the theme's surface adjustment tints and lights the skin's greys (read as
-/// stock Dark surfaces, given FL's base tint), its selection / highlight / mute colours take the place of the skin's
+/// stock Dark surfaces, given the original's base tint), its selection / highlight / mute colours take the place of the skin's
 /// key colour, and its text colour the skin's text, keeping each text's place between the skin's background and text.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Retint {

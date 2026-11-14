@@ -15,7 +15,7 @@ use os_engine::effects::reverb::{lowpass, Geometry};
 use crate::num::{curve, round, s, trunc, TINY};
 use crate::state::State;
 
-/// The largest host block the lines are sized for (FL's own is not measured; the spec assumes 2048).
+/// The largest host block the lines are sized for (the original's own is not measured; the spec assumes 2048).
 pub const HOST_BLOCK: usize = 2048;
 
 pub type Bus = [Vec<f32>; 2];

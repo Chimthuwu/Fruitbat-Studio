@@ -13,7 +13,7 @@ use crate::app::App;
 fn app() -> App {
     let mut a = App::new(None);
     a.state.project = crate::app::test_project();
-    a.state.project.arrangements = vec![os_flp::project::default_arrangement()];
+    a.state.project.arrangements = vec![os_project::project::default_arrangement()];
     a.state.control.settle(&mut a.state.project);
     a
 }
@@ -425,7 +425,7 @@ fn saving_asks_the_user_unless_headless() {
     let mut c = rpc::Client { name: "Script".into(), level: Level::Edit, saves: true, token: None };
     let r = a.rpc(&mut c, "save", &json!({"path": path})).ok().unwrap();
     assert_eq!(r["saved"], json!(path.display().to_string()));
-    let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+    let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
     assert_eq!(saved.channels.len(), a.state.project.channels.len());
     let _ = std::fs::remove_file(&path);
 }

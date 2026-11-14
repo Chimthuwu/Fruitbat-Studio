@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Limiter: Lemon Studio's limiter, compressor and noise gate (a recreation of FL's Fruity Limiter) as a VST3 /
+//! Lemon Limiter: Lemon Studio's limiter, compressor and noise gate (a recreation of the original's Fruity Limiter) as a VST3 /
 //! CLAP plugin (nih-plug). The sound is `os_engine::effects::dynamics`.
 //!
 // spec: plugins/lemon-limiter.md, plugins/fruity-limiter-dsp.md, plugins/plugin-formats.md

@@ -17,7 +17,7 @@ pub const KEYS_LOW: u8 = 48;
 pub const PADS: u8 = 4;
 /// The keyboard's octaves.
 pub const OCTAVES: u8 = 2;
-/// Velocity of a press: FL's default note velocity (spec §2 Playing).
+/// Velocity of a press: the original's default note velocity (spec §2 Playing).
 pub const VELOCITY: u8 = 100;
 
 /// What the window's controls do.

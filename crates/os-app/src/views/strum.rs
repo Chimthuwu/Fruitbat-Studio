@@ -3,7 +3,7 @@
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! The piano roll's Strum dialog ("Piano roll - strumizer"): the Start and End sections, Chop chords, Alternate
-//! direction, Reset and Accept, laid out as FL's (312 × 219).
+//! direction, Reset and Accept, laid out as the original's (312 × 219).
 // spec: ui/piano-strum.md §1
 
 use os_ui::kit::lemon as lk;

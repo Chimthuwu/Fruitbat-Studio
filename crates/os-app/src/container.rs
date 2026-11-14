@@ -871,7 +871,7 @@ fn relink(s: &mut State, name: &str, moved: &Moved) {
 /// always is (a plain slot keeps its bytes and plays nothing). Lemon Studio's own: the effects the engine plays for a
 /// plain slot without a plugin instance (`os_engine::effects::from_slot`, Fruity Stereo Shaper) are not found here, as
 /// a container's members are plugin instances.
-fn member_of(n: &os_flp::patcher::Node, effects: &[crate::plugins::Available]) -> Member {
+fn member_of(n: &os_project::patcher::Node, effects: &[crate::plugins::Available]) -> Member {
     use crate::plugins::{recreation_of, recreation_state_from_fl, EDISON_FILE_NAME, EQ_FILE_NAME, LEMON_EQ, LOVE_PHILTER_FILE_NAME, MAXIMUS_FILE_NAME, PRESS, PULP_FILTER, TESLA};
     use crate::project_plugins::{find, find_native, native_first, switched_format};
     let (fl, file) = (n.state.as_slice(), n.plugin.as_str());
@@ -883,7 +883,7 @@ fn member_of(n: &os_flp::patcher::Node, effects: &[crate::plugins::Available]) -
         EDISON_FILE_NAME => Some(TESLA),
         _ => recreation_of(file),
     };
-    let wrapped = (file == os_flp::wrapper::WRAPPER).then(|| os_flp::wrapper::decode(fl)).flatten();
+    let wrapped = (file == os_project::wrapper::WRAPPER).then(|| os_project::wrapper::decode(fl)).flatten();
     let (uid, name, state) = if let Some(i) = find_native(effects, file).filter(|_| native_first()) {
         found(i, fl.to_vec())
     } else if let Some((i, lemon)) = lemon.and_then(|l| Some((effects.iter().position(|a| a.desc.name == l)?, l))) {
@@ -920,14 +920,14 @@ fn member_of(n: &os_flp::patcher::Node, effects: &[crate::plugins::Available]) -
 }
 
 /// Opening a project (README.md slice 5, serial part): each mixer slot holding the original's Patcher whose patch is
-/// one plain serial chain of effects (`os_flp::patcher::Patch::serial_chain`) becomes a container in the same slot,
+/// one plain serial chain of effects (`os_project::patcher::Patch::serial_chain`) becomes a container in the same slot,
 /// its nodes the members in chain order at wet 100 %, dry 0 % (every link level is 1.0), each with its plugin and state
 /// ([`member_of`]). The slot keeps its id, switch, mix, name, colour and icon. Any other Patcher slot, and every Patcher
 /// channel (an instrument patch, slice 3), stays as the project had it. What was opened and what was not, and why, is
 /// returned for the hint bar. The project is opened that way, not changed: a save writes the containers (decision #7).
 // spec: plugins/patcher/state.md §1 to §7; plugins/patcher/README.md §3.1, §4 slice 5
 pub fn open_patchers(s: &mut State, effects: &[crate::plugins::Available]) -> Option<String> {
-    use os_flp::patcher::{self, NotChain, PATCHER};
+    use os_project::patcher::{self, NotChain, PATCHER};
     let mut opened = Vec::new();
     let mut left = Vec::new();
     let places: Vec<(u16, u8)> = s
@@ -2551,8 +2551,8 @@ mod tests {
             g.extend(chunk(5008, &utf16(plugin)));
             g.extend(chunk(5010, &utf16(name)));
             g.extend(chunk(5005, state));
-            g.extend(chunk(5009, &words(&[0, 0, id + 1, 0, os_flp::patcher::AUDIO_IN, 0, 0])));
-            g.extend(chunk(5009, &words(&[0, 0, id + 2, 0, os_flp::patcher::AUDIO_OUT, 0, 0])));
+            g.extend(chunk(5009, &words(&[0, 0, id + 1, 0, os_project::patcher::AUDIO_IN, 0, 0])));
+            g.extend(chunk(5009, &words(&[0, 0, id + 2, 0, os_project::patcher::AUDIO_OUT, 0, 0])));
             g.extend(chunk(5001, &[]));
             b.extend(chunk(0, &g));
         }
@@ -2592,15 +2592,15 @@ mod tests {
         a.plugins.effects = crate::plugins::builtin_effects();
         let effect = |a: &App, n: &str| a.plugins.effects.iter().position(|e| e.desc.name == n).unwrap_or_else(|| panic!("{n}"));
         let (lim, delay) = (effect(&a, "Lemon Limiter"), effect(&a, "Lemon Delay"));
-        let wrapped = os_flp::wrapper::encode(None, &crate::project_plugins::plugin_ref(&a.plugins.effects[delay].desc, vec![9, 9]));
+        let wrapped = os_project::wrapper::encode(None, &crate::project_plugins::plugin_ref(&a.plugins.effects[delay].desc, vec![9, 9]));
         let fl_lim = [7u8; 169];
-        let nodes: [(&str, &str, &[u8]); 3] = [("Fruity Limiter", "Compressor", &fl_lim), ("Fruity Squeeze", "Fruity Squeeze", &[5, 5]), (os_flp::wrapper::WRAPPER, "Echo", &wrapped)];
+        let nodes: [(&str, &str, &[u8]); 3] = [("Fruity Limiter", "Compressor", &fl_lim), ("Fruity Squeeze", "Fruity Squeeze", &[5, 5]), (os_project::wrapper::WRAPPER, "Echo", &wrapped)];
         let serial = patcher_state(&nodes, &chain_links(3, 1.0));
         let leveled = patcher_state(&nodes[..1], &chain_links(1, 0.5));
-        let patcher = |state: &[u8]| Some(SlotPlugin { id: Id::NONE, name: os_flp::patcher::PATCHER.into(), state: state.to_vec() });
+        let patcher = |state: &[u8]| Some(SlotPlugin { id: Id::NONE, name: os_project::patcher::PATCHER.into(), state: state.to_vec() });
         let t = crate::mixer::track_mut(&mut a.state, 2).unwrap();
         (t.slots[0], t.slots[1]) = (patcher(&serial), patcher(&leveled));
-        a.state.project.channels[0].plugin = Some(os_flp::patcher::PATCHER.into());
+        a.state.project.channels[0].plugin = Some(os_project::patcher::PATCHER.into());
         a.state.project.channels[0].name = Some("Keys".into());
         let msg = open_patchers(&mut a.state, &a.plugins.effects).expect("a hint");
         let bus = crate::mixer::name(&a.state, 2);
@@ -2617,7 +2617,7 @@ mod tests {
         assert_eq!(list[2].state, [9, 9], "the wrapped plugin's own state");
         let t = crate::mixer::track(&a.state, 2).unwrap();
         assert_eq!(t.slots[1], patcher(&leveled), "left as it was");
-        assert_eq!(a.state.project.channels[0].plugin.as_deref(), Some(os_flp::patcher::PATCHER));
+        assert_eq!(a.state.project.channels[0].plugin.as_deref(), Some(os_project::patcher::PATCHER));
         // The chain plays the two plugins found and passes the other by; the hint says so after the opening's.
         a.state.message = Some(msg);
         a.sync_containers();

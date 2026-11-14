@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Studio's stereo enhancer (a recreation of FL's Fruity Stereo Enhancer mixer effect), configured from its saved
+//! Lemon Studio's stereo enhancer (a recreation of the original's Fruity Stereo Enhancer mixer effect), configured from its saved
 //! state.
 //!
 //! A stereo separation mixes each channel into the other, with a positive weight (narrower) or a negative one (wider);
@@ -27,7 +27,7 @@ pub const INVERT: usize = 5;
 /// The settings' ranges (stored values are used as they are).
 pub const RANGES: [(i32, i32); PARAMS] = [(-128, 128), (0, 320), (-96, 96), (-512, 512), (0, 1), (0, 2)];
 
-/// FL's "Default" preset, also the plugin database's state (what a new Stereo Enhancer holds).
+/// the original's "Default" preset, also the plugin database's state (what a new Stereo Enhancer holds).
 pub const DEFAULTS: [i32; PARAMS] = [0, 256, 0, 0, 1, 0];
 
 /// Delay placements.
@@ -170,7 +170,7 @@ impl StereoEnhancer {
         }
     }
 
-    /// FL's start of a render: created, the rate set, the state applied (its gains glide there in the pre-roll).
+    /// the original's start of a render: created, the rate set, the state applied (its gains glide there in the pre-roll).
     pub fn with_settings(sample_rate: u32, s: &Settings) -> StereoEnhancer {
         let mut e = StereoEnhancer::new(sample_rate);
         for k in 0..PARAMS {
@@ -275,7 +275,7 @@ impl StereoEnhancer {
         }
     }
 
-    /// FL's silence before the song, in blocks of 512: the gains glide from the creation values to the state's.
+    /// the original's silence before the song, in blocks of 512: the gains glide from the creation values to the state's.
     pub fn start(&mut self) {
         let mut l = [0.0f32; 512];
         let mut r = [0.0f32; 512];
@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn states_round_trip() {
-        // FL's "For strings" preset.
+        // the original's "For strings" preset.
         let s = Settings { v: [-18, 256, -54, -248, 1, 0] };
         assert_eq!(Settings::from_state(&s.to_state()), Some(s));
         assert_eq!(s.to_state().len(), STATE_LEN);

@@ -55,7 +55,7 @@ pub fn note_of(hz: f64) -> i32 {
     (69.0 + 12.0 * (hz / 440.0).log2()).round() as i32
 }
 
-/// A note's name with FL's octave numbering (note 60 = "C5").
+/// A note's name with the original's octave numbering (note 60 = "C5").
 pub fn note_name(note: i32) -> String {
     const NAMES: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
     format!("{}{}", NAMES[note.rem_euclid(12) as usize], note.div_euclid(12))

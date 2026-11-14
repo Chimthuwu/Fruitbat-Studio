@@ -2,22 +2,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! What a VST 3 instance saves: the state record FL Studio's plugin wrapper keeps for a VST 3 plugin, so a project's
-//! VST 3 plugins move between the two programs (spec: flp/events/plugins.md §4, "FL 26's own VST3 wrapper" and
+//! What a VST 3 instance saves: the state record the original's plugin wrapper keeps for a VST 3 plugin, so a project's
+//! VST 3 plugins move between the two programs (spec: project/events/plugins.md §4, "FL 26's own VST3 wrapper" and
 //! "Third-party plugins in producers' projects").
 //!
 //! The 32-bit value 1, then chunks of a 32-bit kind, a 64-bit size and that many bytes: kind 1 (the value 1 and 60
 //! zero bytes, its meaning not known), kind 3 the component's state, kind 2 the edit controller's (only a plugin with
 //! a separate controller has one), kind 4 the 32-bit count and ids of the plugin's parameters in its own order.
-// spec: flp/events/plugins.md §4
+// spec: project/events/plugins.md §4
 
 const VERSION: u32 = 1;
-/// Chunk kinds, in the order FL Studio writes them: 1, 3, 2, 4.
+/// Chunk kinds, in the order the original writes them: 1, 3, 2, 4.
 const KIND_HEAD: u32 = 1;
 const KIND_CONTROLLER: u32 = 2;
 const KIND_COMPONENT: u32 = 3;
 const KIND_PARAMS: u32 = 4;
-/// Kind 1's bytes: the value 1, then zeros (in every state FL Studio wrote that has been seen).
+/// Kind 1's bytes: the value 1, then zeros (in every state the original wrote that has been seen).
 const HEAD_LEN: usize = 64;
 
 /// The parts of a saved state.

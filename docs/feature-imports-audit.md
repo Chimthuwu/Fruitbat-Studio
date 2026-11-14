@@ -14,7 +14,7 @@ Cargo workspace, ~26 crates. Data flows one way:
   `Channel` (lib.rs:680) holds `plugin: Option<String>` — channels are
   plugin-name-keyed, so a new instrument is mostly a new plugin crate plus
   registration, not model surgery.
-- `os-flp` — lossless `.flp` event reader/writer; anything unknown is kept and
+- `os-project` — lossless `.flp` event reader/writer; anything unknown is kept and
   written back. `os-smf` for MIDI files.
 - `os-engine` — `engine.rs` (9,515 lines) owns channels, voices, envelopes,
   channel `midi(channel, bytes, bend_cents)` (engine.rs:1905) for live MIDI,
@@ -45,7 +45,7 @@ Cargo workspace, ~26 crates. Data flows one way:
 
 ### 1. Master Assistant (oXygen integration)
 Touches: `os-engine` (offline render + a tap on the mix), `os-dsp` (analysis
-chain), `os-app` (assistant UI), `os-flp`/`os-model` (storing applied settings),
+chain), `os-app` (assistant UI), `os-project`/`os-model` (storing applied settings),
 plugin system (could alternatively ship as a Lemon effect plugin).
 - The `--render` / `os-render` offline path gives the analysis pass a clean
   entry point without touching the audio thread; real-time later hits the same
@@ -59,7 +59,7 @@ plugin system (could alternatively ship as a Lemon effect plugin).
 ### 2. MPE support
 Touches: `os-app/src/midi_in.rs` (parse MPE zone, per-channel bend/pressure),
 `os-engine` (`Voice`/channel state, `instrument.rs` MIDI routing), `os-model`
-(Note, if per-note expression is recorded), `os-flp` (round-trip of any new
+(Note, if per-note expression is recorded), `os-project` (round-trip of any new
 per-note data).
 - The seam already exists: `engine.midi()` takes raw 3-byte messages with a
   `bend_cents` scale, and `instrument.rs` already models per-note tuning vs
@@ -86,7 +86,7 @@ Touches: CI only + two small code areas. Least invasive of the six.
 
 ### 4. Lemon Chop sampler
 Touches: a new `plugins/` crate (or an extension of lemon-sampler), `os-model`
-Channel/sampler settings, `os-flp` mapping if it plays an FL channel type,
+Channel/sampler settings, `os-project` mapping if it plays an FL channel type,
 `os-app` (browser/drop integration, piano-roll dump).
 - Lemon Slicer (`plugins/lemon-slicer`: slicing.rs, dump.rs) already does
   load → slice by markers/beats/transients → play slice n on C5+n → dump to
@@ -98,7 +98,7 @@ Channel/sampler settings, `os-flp` mapping if it plays an FL channel type,
 
 ### 5. Lemon Wave wavetable synth
 Touches: new `plugins/lemon-wave` crate on the nih-plug/os-ui/os-hostlink
-pattern, `os-dsp` (wavetable playback/morph), `os-model` + `os-flp` only if it
+pattern, `os-dsp` (wavetable playback/morph), `os-model` + `os-project` only if it
 must play an FL/Sytrus-style channel.
 - Citrus is the direct precedent: a six-op synth with engine.rs/voice.rs/
   wave.rs/patch.rs/preset.rs, playing Sytrus state byte-for-byte. Lemon Wave
@@ -127,7 +127,7 @@ networked code in the repo.
   engine the quality audit marked "needs RT-hardening before product work" —
   per-note MPE and a wavetable voice add per-voice cost to the sinc-resampler
   hot path (engine.rs:4020-4091).
-- `engine.rs` (9,515 lines) and `os-flp/project.rs` (7,098 lines) are already
+- `engine.rs` (9,515 lines) and `os-project/project.rs` (7,098 lines) are already
   at the size where two of these imports (MPE, any new FLP mapping) make the
   split urgent rather than optional.
 - The clean-room rule applies to all six: Michael's fork and oXygen are

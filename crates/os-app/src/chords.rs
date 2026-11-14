@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! FL's chords file (`System/Config/Chords.map`) as FL 24.1 and 2026 ship it: 66 chords, then 22 scales, numbered from
+//! the original's chords file (`System/Config/Chords.map`) as FL 24.1 and 2026 ship it: 66 chords, then 22 scales, numbered from
 //! 1 in that order. The piano roll's Limit dialog lists them as its scales; the arpeggiator's stored chord `k` names
 //! entry `k`.
 // spec: audio/channel-misc.md "The chords file"; ui/piano-limit.md §1

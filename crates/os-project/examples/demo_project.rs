@@ -5,11 +5,11 @@
 
 //! Writes the README's demo project: an original 64-bar house song in A minor, made only from this file.
 //!
-//! `cargo run -p os-flp --example demo_project -- <dir>` writes `<dir>/Lemon Studio Demo.flp` and the drum and audio
+//! `cargo run -p os-project --example demo_project -- <dir>` writes `<dir>/Lemon Studio Demo.flp` and the drum and audio
 //! clip samples it plays (`<dir>/samples/*.wav`, synthesised here). Its patterns, notes, arrangement, names and sounds
 //! are all generated below, so screenshots of it hold no one else's music.
 
-use os_flp::project::{create, default_arrangement, new_automation};
+use os_project::project::{create, default_arrangement, new_automation};
 use os_model::*;
 use std::f64::consts::TAU;
 use std::path::Path;

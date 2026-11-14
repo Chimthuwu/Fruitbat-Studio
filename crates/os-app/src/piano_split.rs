@@ -4,7 +4,7 @@
 
 //! The splitter between the piano roll's note grid and its event panel (spec: ui/event-panel-splitter.md §2): the
 //! share of the height under the ruler that goes to the grid, kept as a fraction so it follows window resizes, with
-//! FL's minimums and collapsing, and a double click that hides / brings back the event panel.
+//! the original's minimums and collapsing, and a double click that hides / brings back the event panel.
 
 /// The band's height (spec: ui/piano-roll.md §1).
 pub const BAND: f32 = 8.0;

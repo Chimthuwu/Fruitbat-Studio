@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Studio's stereo shaper (a recreation of FL's Fruity Stereo Shaper mixer effect), configured from its saved
+//! Lemon Studio's stereo shaper (a recreation of the original's Fruity Stereo Shaper mixer effect), configured from its saved
 //! state.
 //!
 //! A 2 x 2 matrix mixes the two channels with four gliding gains, each with a sign. A delay of whole samples and a
@@ -32,7 +32,7 @@ pub const POSITION: usize = 7;
 pub const RANGES: [(i32, i32); PARAMS] =
     [(-25600, 25600), (-25600, 25600), (-25600, 25600), (-25600, 25600), (-4096, 4096), (-4096, 4096), (0, 126), (-1, 1)];
 
-/// FL's "Default" preset (what a new Stereo Shaper holds): the levels at 100 %, nothing else, the effects "post".
+/// the original's "Default" preset (what a new Stereo Shaper holds): the levels at 100 %, nothing else, the effects "post".
 pub const DEFAULTS: [i32; PARAMS] = [0, 12800, 12800, 0, 0, 0, 0, 1];
 
 /// Effects positions. The editor's Off (-1, and any value below 0) plays as Pre: FL 2026's exports of such states put
@@ -386,7 +386,7 @@ mod tests {
 
     #[test]
     fn states_round_trip_whatever_the_version() {
-        // FL's "Stereoize 3" preset.
+        // the original's "Stereoize 3" preset.
         let s = Settings { v: [0, 12800, 12800, 0, 1408, -2496, 0, 1] };
         let b = s.to_state();
         assert_eq!(b.len(), STATE_LEN);
@@ -454,7 +454,7 @@ mod tests {
 
     #[test]
     fn the_matrix_and_the_difference() {
-        // FL's "LR to MS": mid on the left, side on the right, a half each.
+        // the original's "LR to MS": mid on the left, side on the right, a half each.
         let mut e = StereoShaper::with_settings(44100, &Settings { v: [8076, 8076, -8076, 8076, 0, 0, 1, 1] });
         let mut buf = frames(&[0.5, 0.25], &[0.25, -0.5]);
         Effect::process(&mut e, &mut buf);

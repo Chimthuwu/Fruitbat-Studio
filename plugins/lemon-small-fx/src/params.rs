@@ -422,7 +422,7 @@ mod tests {
     fn a_mapped_state_keeps_the_ints_it_leaves_out() {
         let spec = stereo_shaper::SPEC;
         assert_eq!((ints(spec), state_len(spec)), (8, 36));
-        // FL's "Mid - aSide splitter": difference output 2.
+        // the original's "Mid - aSide splitter": difference output 2.
         let fl = os_engine::effects::stereo_shaper::Settings { v: [8076, 8076, 8076, 8076, 0, 0, 2, 1] }.to_state();
         let mut vals = values_of(spec, &fl);
         assert_eq!(vals, [8076, 8076, 8076, 8076, 0, 0, 1]);

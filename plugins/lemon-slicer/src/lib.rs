@@ -130,7 +130,7 @@ pub fn file_state(path: &str, mut st: State) -> Result<(State, Arc<Sample>), Str
     Ok((st, s))
 }
 
-/// The file a state's sample is opened from: the host's resolved path, else the stored one (FL's placeholders made
+/// The file a state's sample is opened from: the host's resolved path, else the stored one (the original's placeholders made
 /// real where the factory data is found).
 pub fn sample_file(params: &SlicerParams) -> String {
     let given = params.sample_path.read().map(|p| p.clone()).unwrap_or_default();

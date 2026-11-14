@@ -24,7 +24,7 @@ pub struct Surface {
 /// The stock "Dark" theme: Lemon Studio's default palette was measured in it.
 pub const DARK: Surface = Surface { hue: 0.0, saturation: 0.0, lightness: -153.0, contrast: -8.0 };
 
-/// No adjustment (every parameter 0): surfaces stay in FL's base palette (spec §4, §5).
+/// No adjustment (every parameter 0): surfaces stay in the original's base palette (spec §4, §5).
 pub const BASE: Surface = Surface { hue: 0.0, saturation: 0.0, lightness: 0.0, contrast: 0.0 };
 
 /// The stock Dark theme's file text (its key colours; what Lemon Studio's default palette was measured with). A theme's

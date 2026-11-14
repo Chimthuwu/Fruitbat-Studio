@@ -12,9 +12,9 @@
 //! file's parametric EQ). Native plugins keep their own state format: a hosted native instance writes its state into
 //! its channel or slot as it is, and native plugins that are not hosted keep the bytes the file had.
 //!
-// spec: flp/events/plugins.md (§4 the wrapper state, §6 what Lemon Studio writes)
+// spec: project/events/plugins.md (§4 the wrapper state, §6 what Lemon Studio writes)
 
-use os_flp::wrapper::{self, WRAPPER};
+use os_project::wrapper::{self, WRAPPER};
 use os_host::{Descriptor, Format};
 use os_model::{Channel, ChannelKind, PluginRef, Project, SlotPlugin};
 
@@ -274,7 +274,7 @@ pub fn find(list: &[Available], r: &PluginRef) -> Option<usize> {
 /// When `d`, found for wrapped plugin `r`, is its copy in another format: what the hint bar says about it ("Kars (VST2
 /// as CLAP)"). The saved state is the other format's, which a copy may take without reading it the same way, so the
 /// copy starts from its defaults instead. The very file the project names is that plugin, whatever format its
-/// extension suggested (spec: flp/events/plugins.md §4).
+/// extension suggested (spec: project/events/plugins.md §4).
 pub fn switched_format(d: &Descriptor, r: &PluginRef) -> Option<String> {
     let saved = Format::parse(&r.format)?;
     let same = saved == d.format || (!r.path.is_empty() && same_file(&d.path, &r.path));
@@ -314,7 +314,7 @@ pub fn slot_title(s: &SlotPlugin) -> String {
 }
 
 impl crate::app::App {
-    /// Hosts the wrapped plugins of an opened project (spec: flp/events/plugins.md §4): each wrapped channel and slot
+    /// Hosts the wrapped plugins of an opened project (spec: project/events/plugins.md §4): each wrapped channel and slot
     /// whose plugin is found starts from the state the file holds, or from its defaults when only a copy in another
     /// format is found (the hint bar names those; a save keeps the file's wrapper for them until they are changed,
     /// `Hosted::stand_in`). A plugin that is not found keeps its saved data (written back unchanged) and is not looked
@@ -622,7 +622,7 @@ mod tests {
 
     /// A hosted plugin channel and a mixer slot plugin are saved as wrapped plugins holding their identity and state,
     /// and the reopened project hosts them again with that state; a second save keeps working on the saved file
-    /// (spec: flp/events/plugins.md). The built-in Lemon plugins stand in for third-party plugins.
+    /// (spec: project/events/plugins.md). The built-in Lemon plugins stand in for third-party plugins.
     #[test]
     fn hosted_plugins_save_and_reopen() {
         WRAP_BUILTINS.with(|w| w.set(true));
@@ -646,8 +646,8 @@ mod tests {
         assert!(a.state.message.as_deref().is_some_and(|m| m.starts_with("Saved") && !m.contains("not stored")), "{:?}", a.state.message);
 
         // The file: a wrapped plugin channel and a wrapped slot.
-        let file = os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap();
-        let saved = os_flp::project::load(&file).unwrap();
+        let file = os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap();
+        let saved = os_project::project::load(&file).unwrap();
         let ch = &saved.channels[row];
         assert_eq!((ch.kind, ch.plugin.as_deref()), (ChannelKind::Plugin, Some(WRAPPER)));
         let r = wrapped_channel(ch).unwrap();
@@ -676,7 +676,7 @@ mod tests {
         assert!(b.plugins.load_sample(row, "C:/samples/two.wav"));
         b.save_to(path.clone());
         assert!(b.state.message.as_deref().is_some_and(|m| m.starts_with("Saved")), "{:?}", b.state.message);
-        let again = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let again = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
         let r2 = wrapped_channel(&again.channels[row]).unwrap();
         assert_eq!(Some(r2.state), b.plugins.state(row));
@@ -741,7 +741,7 @@ mod tests {
         a.save_to(path.clone());
         assert!(a.state.message.as_deref().is_some_and(|m| m.starts_with("Saved") && !m.contains("not stored")), "{:?}", a.state.message);
 
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         for (k, name) in LINKED_EFFECTS.iter().enumerate() {
             let (t, slot) = at(k);
             let r = wrapped_slot(saved.mixer[usize::from(t)].slots[usize::from(slot)].as_ref().unwrap()).unwrap_or_else(|| panic!("{name} wrapped"));
@@ -767,7 +767,7 @@ mod tests {
     }
 
     /// Mixer tracks added in the app are saved (before the hidden last track) and come back on reopening; deleting a
-    /// track keeps the hidden track last (spec: flp/events/mixer.md "Adding tracks").
+    /// track keeps the hidden track last (spec: project/events/mixer.md "Adding tracks").
     #[test]
     fn added_mixer_tracks_save_and_reopen() {
         let path = std::env::temp_dir().join(format!("openstudio-tracks-{}.flp", std::process::id()));
@@ -895,7 +895,7 @@ mod tests {
     }
 
     /// A hosted native effect writes its own state into its slot (not wrapped); the file reads it back
-    /// (spec: flp/events/plugins.md §1).
+    /// (spec: project/events/plugins.md §1).
     #[test]
     fn hosted_native_effects_save_their_state() {
         let path = std::env::temp_dir().join(format!("openstudio-native-{}.flp", std::process::id()));
@@ -921,7 +921,7 @@ mod tests {
         );
         a.save_to(path.clone());
         assert!(a.state.message.as_deref().is_some_and(|m| m.starts_with("Saved")), "{:?}", a.state.message);
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(saved.mixer[2].slots[1], Some(SlotPlugin { id: os_model::Id::NONE, name: "Fruity Balance".into(), state: vec![9, 8, 7, 6] }));
         assert_eq!(a.state.project.mixer[2].slots[1], saved.mixer[2].slots[1]);
@@ -970,7 +970,7 @@ mod tests {
         assert!(a.plugins.set_state(harmor, &[11, 12]) && a.plugins.set_state(balance, &[13]) && a.plugins.set_state(gross, &[14]));
         a.save_to(path.clone());
         assert!(a.state.message.as_deref().is_some_and(|m| m.starts_with("Saved")), "{:?}", a.state.message);
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!((saved.channels[harmor].plugin.as_deref(), saved.channels[harmor].plugin_state.as_deref()), (Some("Harmor"), Some(&[11, 12][..])));
         assert_eq!((saved.channels[sytrus].plugin.as_deref(), saved.channels[sytrus].plugin_state.as_deref()), (Some("Sytrus"), Some(&[4][..])));
@@ -1099,7 +1099,7 @@ mod tests {
 
         // Saved untouched: the VST2 plugin's wrapper is written as the file had it; the CLAP plugin as itself.
         let path = std::env::temp_dir().join(format!("openstudio-stand-in-{}.flp", std::process::id()));
-        let reload = |path: &std::path::Path| os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(path).unwrap()).unwrap()).unwrap();
+        let reload = |path: &std::path::Path| os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(path).unwrap()).unwrap()).unwrap();
         let named = a.state.project.mixer[2].slots[0].clone();
         a.save_to(path.clone());
         assert!(a.state.message.as_deref().is_some_and(|m| m.starts_with("Saved")), "{:?}", a.state.message);

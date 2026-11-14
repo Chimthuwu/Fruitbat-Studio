@@ -4,10 +4,10 @@
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! Lemon Studio project data model: channels, patterns, playlist, mixer, automation.
-//! Pure data, no I/O. Populated by `os-flp` and (later) edited by the UI and engine.
+//! Pure data, no I/O. Populated by `os-project` and (later) edited by the UI and engine.
 //!
 //! Units are the project's own: positions and lengths in ticks (see [`Project::ppq`]),
-//! levels as normalized `f64`s. File encodings live in `os-flp`, not here.
+//! levels as normalized `f64`s. File encodings live in `os-project`, not here.
 
 pub mod clip_lfo;
 pub mod crossfade;
@@ -69,18 +69,18 @@ pub struct Project {
     pub patterns: Vec<Pattern>,
     pub mixer: Vec<MixerTrack>,
     pub arrangements: Vec<Arrangement>,
-    /// Number (event 99 value) of the arrangement the playlist shows (spec: flp/events/playlist.md, event 100).
+    /// Number (event 99 value) of the arrangement the playlist shows (spec: project/events/playlist.md, event 100).
     pub current_arrangement: Option<u16>,
-    /// Automation clip data, one per automation channel (spec: flp/events/automation.md).
+    /// Automation clip data, one per automation channel (spec: project/events/automation.md).
     pub automations: Vec<Automation>,
-    /// Main swing, 0..=128 (spec: flp/events/project-info.md, event 11); `None` = not in the file.
+    /// Main swing, 0..=128 (spec: project/events/project-info.md, event 11); `None` = not in the file.
     pub swing: Option<u8>,
     /// Channel rack filter group names in file order (event 231); a channel's [`ChannelRack::group`] indexes it.
     /// FL files always end with "Unsorted", the group of channels in no user group.
     pub groups: Vec<String>,
     /// Current display filter (event 146): a group index, `None` = All.
     pub current_group: Option<u32>,
-    /// The bar (events 17 and 18; spec: flp/engine-events.md "Project"): beats per bar and steps per beat, a step
+    /// The bar (events 17 and 18; spec: project/engine-events.md "Project"): beats per bar and steps per beat, a step
     /// being a sixteenth. A time signature n/d is (n, 16 / d): 4/4 = (4, 4), 3/8 = (3, 2). `None` = not in the file
     /// (4, 4). See [`Project::bar`].
     pub bar: Option<(u16, u16)>,
@@ -88,12 +88,12 @@ pub struct Project {
     /// division". `None` = not in the file (a time signature).
     pub bar_as_signature: Option<bool>,
     /// "Play truncated notes in clips" (event 30; spec: audio/song-structure.md): on when the file has the event
-    /// with 1, off when it has none (spec: flp/engine-events.md "Event 30").
+    /// with 1, off when it has none (spec: project/engine-events.md "Event 30").
     pub play_truncated: bool,
-    /// Song or pattern mode as saved (event 9: 1 = song, 0 = pattern; spec: flp/engine-events.md "Project"). `None` =
+    /// Song or pattern mode as saved (event 9: 1 = song, 0 = pattern; spec: project/engine-events.md "Project"). `None` =
     /// not in the file, which FL opens in song mode.
     pub song_mode: Option<bool>,
-    /// Project settings Lemon Studio shows but does not play yet, as the file holds them (spec: flp/engine-events.md
+    /// Project settings Lemon Studio shows but does not play yet, as the file holds them (spec: project/engine-events.md
     /// "Project"): panning law (event 23: 0 Circular, 2 Triangular), fast declick for cut groups (event 40),
     /// automatic crossfades (event 44). `None` = not in the file. Saving leaves their events as they are.
     pub panning_law: Option<u8>,
@@ -108,10 +108,10 @@ pub struct Project {
     pub main_volume: Option<u16>,
     /// Main pitch in cents, -1200..=1200 (event 80; spec: audio/voice-levels.md). `None` = not in the file (0).
     pub main_pitch: Option<i16>,
-    /// When the project was started and the time spent working on it (event 237; spec: flp/events/project-info.md).
+    /// When the project was started and the time spent working on it (event 237; spec: project/events/project-info.md).
     /// `None` = not in the file.
     pub work_time: Option<WorkTime>,
-    /// "Show info on opening" (event 10; spec: flp/events/project-info.md): opening the project shows its Song info
+    /// "Show info on opening" (event 10; spec: project/events/project-info.md): opening the project shows its Song info
     /// box. `None` = not in the file (off).
     pub show_info: Option<bool>,
     /// The project's data folder: the Project page's choice and the folder (events 167 and 202; spec:
@@ -124,20 +124,20 @@ pub struct Project {
     /// flp/events/automation.md "Controller links"): a controller plugin's output driving a target.
     pub controller_links: Vec<ControllerLink>,
     /// Mixer options ▸ Plugin delay compensation ▸ Automatic unticked: the plugins' delays are not compensated, only
-    /// the tracks' latency settings are (spec: audio/delay-compensation.md "Automatic"). Not in the FLP (where the
+    /// the tracks' latency settings are (spec: audio/delay-compensation.md "Automatic"). Not in the legacy project (where the
     /// original keeps it was not found): a `.lemon` file keeps it in its own events (os-app `lemon_state`).
     pub pdc_off: bool,
     /// Linear mode (Lemon Studio's track model, spec: model/track-model.md): one [`Track`] per instrument, audio or
-    /// bus, whose lane, mixer strip and channel are created together. Not in the FLP (the original has no such
+    /// bus, whose lane, mixer strip and channel are created together. Not in the legacy project (the original has no such
     /// mode): a `.lemon` file keeps it in its own events (os-app `lemon_state`). Classic mode, `false`, is the
     /// default and what every project that is not made Linear stays in.
     pub linear_mode: bool,
     /// The linear mode's tracks, in creation order (Lemon Studio's design; spec: model/track-model.md). Not in the
-    /// FLP: a `.lemon` file keeps them in its own events (os-app `lemon_state`); an `.flp` round trip loses them,
+    /// legacy project: a `.lemon` file keeps them in its own events (os-app `lemon_state`); an `.flp` round trip loses them,
     /// like the rest of the Lemon-only state.
     pub tracks: Vec<Track>,
     /// The linear mode's per-track automation lanes, in binding order (spec: model/track-model.md §6b): lemon-side
-    /// view state over the automation (which stays automation-clip channels + clips), not in the FLP. A `.lemon`
+    /// view state over the automation (which stays automation-clip channels + clips), not in the legacy project. A `.lemon`
     /// file keeps them in its own events (os-app `lemon_state`); an `.flp` round trip loses them, like the rest of
     /// the Lemon-only state. A lane names its track by its position in [`Project::tracks`].
     pub auto_lanes: Vec<AutoLane>,
@@ -207,7 +207,7 @@ impl Track {
     }
 }
 
-/// One internal controller link (spec: flp/events/automation.md "Controller links"): output `output` of the controller
+/// One internal controller link (spec: project/events/automation.md "Controller links"): output `output` of the controller
 /// plugin at `source` drives `target`. The record's 20 bytes are kept as read, so the fields not understood are written
 /// back as they were.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -295,7 +295,7 @@ impl InitControl {
     pub const LEN: usize = 12;
 
     /// The project's main volume (stored 0..=16000), main swing (0..=128) and main pitch (cents) at the project's place
-    /// (spec: flp/layouts.md "Parameter ids in an automation link").
+    /// (spec: project/layouts.md "Parameter ids in an automation link").
     pub const MAIN_VOLUME: u32 = 0x4000_0000;
     pub const MAIN_SWING: u32 = target::MAIN_SWING;
     pub const MAIN_PITCH: u32 = target::MAIN_PITCH;
@@ -317,7 +317,7 @@ impl InitControl {
 
     /// Control `t` at the automation value `v` (0..1), in the setting's stored units; `None` for a control whose stored
     /// units aren't known (plugin parameters, see [`InitControl::unit`]). The channel rack's controls keep their own
-    /// units (spec: flp/engine-events.md "Event 216", "Channel rack records"): the main swing event 11's 0..128, a
+    /// units (spec: project/engine-events.md "Event 216", "Channel rack records"): the main swing event 11's 0..128, a
     /// channel's mixer track the track number, its switch 1 = on.
     pub fn from_unit(t: u32, v: f64) -> Option<InitControl> {
         use target::Target;
@@ -368,7 +368,7 @@ impl InitControl {
     }
 }
 
-/// Event 237: two doubles in days (spec: flp/events/project-info.md).
+/// Event 237: two doubles in days (spec: project/events/project-info.md).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct WorkTime {
     /// When the project was started: days since 1899-12-30 00:00, local time.
@@ -470,7 +470,7 @@ pub fn rescale_length(t: u32, from: u16, to: u16) -> u32 {
 }
 
 /// The playlist view a project stores: scroll, time zoom and track height (event 242, 28 bytes; spec:
-/// flp/events/playlist.md "Playlist view"). Pixels are FL's at 100 % UI scale.
+/// flp/events/playlist.md "Playlist view"). Pixels are the original's at 100 % UI scale.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct PlaylistView {
     pub raw: [u8; 28],
@@ -536,7 +536,7 @@ impl PlaylistView {
     }
 }
 
-/// Name of the group of channels that are in no user filter group (spec: flp/events/project-info.md).
+/// Name of the group of channels that are in no user filter group (spec: project/events/project-info.md).
 pub const UNSORTED_GROUP: &str = "Unsorted";
 
 impl Project {
@@ -635,7 +635,7 @@ impl Project {
     /// notes, control points, loop lengths and clips go too); a repeated one is a clone (a copy without notes that
     /// keeps the source's [`ChannelRack::origin`]). Every channel reference is renumbered: notes, control points,
     /// loop lengths, automation clips and their channel targets (a deleted target leaves the clip unlinked),
-    /// playlist clips, layer children (spec: flp/events/channels.md "Deleting, cloning and moving channels").
+    /// playlist clips, layer children (spec: project/events/channels.md "Deleting, cloning and moving channels").
     pub fn reorder_channels(&mut self, order: &[usize]) {
         let n = self.channels.len();
         let mut map: Vec<Option<u16>> = vec![None; n];
@@ -694,7 +694,7 @@ impl Project {
                 ClipSource::Channel(ch) => m(ch)
                     .map(|n| {
                         c.source = ClipSource::Channel(n);
-                        // The stored record holds the item index too (bytes 6..8, spec: flp/events/playlist.md).
+                        // The stored record holds the item index too (bytes 6..8, spec: project/events/playlist.md).
                         c.raw[6..8].copy_from_slice(&n.to_le_bytes());
                     })
                     .is_some(),
@@ -765,7 +765,7 @@ pub struct Channel {
     /// Generator plugin name for [`ChannelKind::Plugin`].
     pub plugin: Option<String>,
     /// The plugin's saved state as the project file stores it (event 213), for plugin channels. `None` = not known
-    /// (the file's state is kept as it is). spec: flp/events/plugins.md
+    /// (the file's state is kept as it is). spec: project/events/plugins.md
     pub plugin_state: Option<Vec<u8>>,
     /// `None` = default color.
     pub color: Option<Rgb>,
@@ -802,7 +802,7 @@ impl Channel {
     }
 }
 
-/// A channel's filter, sampler and declick settings as stored (spec: flp/engine-events.md "A channel",
+/// A channel's filter, sampler and declick settings as stored (spec: project/engine-events.md "A channel",
 /// audio/channel-filter.md, audio/sampler.md, audio/declick.md, audio/audio-clips.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelSound {
@@ -835,9 +835,9 @@ impl ChannelSound {
     pub const LOAD_SLICES: u32 = 4;
     pub const USE_LOOP: u32 = 8;
     pub const KEEP_ON_DISK: u32 = 0x100;
-    /// Flags of a channel without event 143 (FL's new sampler channel).
+    /// Flags of a channel without event 143 (the original's new sampler channel).
     pub const DEFAULT_FLAGS: u32 = Self::LOAD_REGIONS | Self::USE_LOOP;
-    /// Flags of FL's audio clip channels (258, spec: audio/audio-clips.md): no Use loop points, so a clip plays a
+    /// Flags of the original's audio clip channels (258, spec: audio/audio-clips.md): no Use loop points, so a clip plays a
     /// file's `smpl` loop through once.
     pub const AUDIO_CLIP_FLAGS: u32 = Self::LOAD_REGIONS | Self::KEEP_ON_DISK;
 
@@ -1120,7 +1120,7 @@ pub struct ChannelMisc {
 }
 
 /// A hosted plugin's CPU switches, its window menu's Allow threaded processing (on for a new plugin) and Smart disable
-/// (off), as event 212 stores them (flags 0x40 and 0x20; spec: flp/events/plugins.md §3, ui/plugin-window.md "CPU").
+/// (off), as event 212 stores them (flags 0x40 and 0x20; spec: project/events/plugins.md §3, ui/plugin-window.md "CPU").
 /// Saved with the plugin. The engine passes a silent mixer slot by when its Smart disable is on (spec:
 /// audio/auto-bypass.md); what is heard is the same either way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1260,7 +1260,7 @@ impl Default for Echo {
     }
 }
 
-/// Channel rack settings of one channel (spec: flp/events/channels.md).
+/// Channel rack settings of one channel (spec: project/events/channels.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ChannelRack {
     /// Index of the file block this channel was loaded from (`None` = created in Lemon Studio). A clone keeps its
@@ -1275,7 +1275,7 @@ pub struct ChannelRack {
     /// The colour event 128 holds, whether or not it is a custom colour: the playlist draws audio and automation
     /// clips with it (spec: ui/playlist.md §2, "Channel-colour rule"). Display only; saving writes `Channel::color`.
     pub stored_color: Option<Rgb>,
-    /// The icon number event 155 holds, 0 = none (spec: flp/events/channels.md, flp/events/mixer.md "Icon numbers").
+    /// The icon number event 155 holds, 0 = none (spec: project/events/channels.md, flp/events/mixer.md "Icon numbers").
     /// Read only: saving keeps the file's own event.
     pub icon: u32,
 }
@@ -1380,10 +1380,10 @@ pub struct Pattern {
     /// Sorted by position.
     pub notes: Vec<Note>,
     /// Channel control points drawn in the piano roll's event panel, ordered by position
-    /// (spec: flp/events/patterns.md, "Control points").
+    /// (spec: project/events/patterns.md, "Control points").
     pub controls: Vec<ControlPoint>,
     /// Length set in the channel rack's pattern length box, in ticks; `None` = Auto (whole bars past the last
-    /// note). Stored as metadata event 164 plus a "Length" marker (spec: flp/events/patterns.md).
+    /// note). Stored as metadata event 164 plus a "Length" marker (spec: project/events/patterns.md).
     pub length: Option<u32>,
     /// Per-channel loop lengths `(channel, steps)` in channel order (events 160/161 after the notes);
     /// steps [`Pattern::LOOP_FOLLOW`] = a channel that only follows "Loop all channels".
@@ -1458,19 +1458,19 @@ pub struct Note {
     pub group: u8,
     /// Unknown record bytes 14–15, kept as read.
     pub unk14: u16,
-    /// Note repeat index 0..=14 (byte 17; 0 = off; spec: flp/events/patterns.md).
+    /// Note repeat index 0..=14 (byte 17; 0 = off; spec: project/events/patterns.md).
     pub repeat: u8,
 }
 
 impl Note {
-    /// Byte-19 bit of a muted note (spec: flp/events/patterns.md, note flags).
+    /// Byte-19 bit of a muted note (spec: project/events/patterns.md, note flags).
     pub const MUTED: u8 = 0x20;
 
     pub fn muted(&self) -> bool {
         self.group & Self::MUTED != 0
     }
 
-    /// Flag of a slide note (spec: flp/events/patterns.md, note flags).
+    /// Flag of a slide note (spec: project/events/patterns.md, note flags).
     pub const SLIDE: u16 = 0x0008;
 
     /// A slide note: it makes no sound and glides the channel's sounding voices (spec: audio/song-structure.md
@@ -1508,7 +1508,7 @@ impl Note {
         }
     }
 
-    /// Highest repeat index (spec: flp/events/patterns.md, note repeat table).
+    /// Highest repeat index (spec: project/events/patterns.md, note repeat table).
     pub const MAX_REPEAT: u8 = 14;
 
     /// Spacing of the repeat in ticks at `ppq`, `None` when the note doesn't repeat. The table is the
@@ -1665,7 +1665,7 @@ pub struct MixerTrack {
     /// flp/layouts.md "A mixer track's record", audio/delay-compensation.md "Settings").
     pub latency_out: f32,
     pub latency_in: f32,
-    /// The track's icon (event 95) as the file numbers it; `None` = no icon (spec: flp/events/mixer.md "Track blocks",
+    /// The track's icon (event 95) as the file numbers it; `None` = no icon (spec: project/events/mixer.md "Track blocks",
     /// flp/engine-events.md "The mixer"). It stays with its track; Lemon Studio does not draw it.
     pub icon: Option<u16>,
     /// The audio device input the track takes and the output pair it plays on directly, as stored (events 154 / 147):
@@ -1841,7 +1841,7 @@ pub struct SlotPlugin {
 }
 
 /// A third-party plugin (CLAP, VST3, VST2) as a project file names it: its format, identity and saved state.
-/// spec: flp/events/plugins.md §4
+/// spec: project/events/plugins.md §4
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PluginRef {
     /// `clap`, `vst3` or `vst2`.
@@ -1866,7 +1866,7 @@ pub struct Arrangement {
     /// Sorted by position.
     pub clips: Vec<Clip>,
     pub tracks: Vec<PlaylistTrack>,
-    /// Time markers in file order (spec: flp/events/playlist.md "Time markers").
+    /// Time markers in file order (spec: project/events/playlist.md "Time markers").
     pub markers: Vec<TimeMarker>,
 }
 
@@ -1878,11 +1878,11 @@ pub enum ClipSource {
     Channel(u16),
 }
 
-/// Length of a stored clip record (spec: flp/events/playlist.md).
+/// Length of a stored clip record (spec: project/events/playlist.md).
 pub const CLIP_RECORD_LEN: usize = 88;
 
 /// A playlist clip. `start` / `end` are the clip's window into its source in the source's unit: pattern ticks,
-/// audio milliseconds, automation beats (spec: flp/events/playlist.md "Clip offsets"); `None` = from the
+/// audio milliseconds, automation beats (spec: project/events/playlist.md "Clip offsets"); `None` = from the
 /// source's start for the clip's length.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Clip {
@@ -1895,12 +1895,12 @@ pub struct Clip {
     pub source: ClipSource,
     pub muted: bool,
     pub window: Option<(f64, f64)>,
-    /// The stored record (fields not modeled are written back from here; a new clip gets FL's defaults).
+    /// The stored record (fields not modeled are written back from here; a new clip gets the original's defaults).
     pub raw: [u8; CLIP_RECORD_LEN],
 }
 
 impl Clip {
-    /// A new clip record as FL 26 writes one (spec: flp/events/playlist.md).
+    /// A new clip record as version 26 writes one (spec: project/events/playlist.md).
     pub const TEMPLATE: [u8; CLIP_RECORD_LEN] = {
         let mut r = [0u8; CLIP_RECORD_LEN];
         r[4] = 0x00;
@@ -1953,7 +1953,7 @@ impl Clip {
         self.raw[32..36].copy_from_slice(&id.to_le_bytes());
     }
 
-    /// Clip group stored in the record (bytes 14..16, 0 = none; spec: flp/events/playlist.md).
+    /// Clip group stored in the record (bytes 14..16, 0 = none; spec: project/events/playlist.md).
     pub fn group(&self) -> u16 {
         u16::from_le_bytes([self.raw[14], self.raw[15]])
     }
@@ -2080,18 +2080,18 @@ pub fn fade_curve(x: f64, tension: f64) -> f64 {
     }
 }
 
-/// A time marker (spec: flp/events/playlist.md "Time markers").
+/// A time marker (spec: project/events/playlist.md "Time markers").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimeMarker {
     pub position: u32,
-    /// High byte of the stored position: the marker's action (the constants below; spec: flp/events/playlist.md
+    /// High byte of the stored position: the marker's action (the constants below; spec: project/events/playlist.md
     /// "Marker kinds"). Kinds not listed there (6, 0xB) are kept as read.
     pub kind: u8,
     pub name: String,
     pub numerator: u8,
     pub denominator: u8,
     /// Event 101: a key marker's scale as the notes it leaves out, bit 11 − pitch class (C = bit 11); 0 for the
-    /// other kinds (spec: flp/events/playlist.md "Key markers").
+    /// other kinds (spec: project/events/playlist.md "Key markers").
     pub scale: u16,
     /// Event 46: a key marker's root note, 0 = C … 11 = B.
     pub root: u8,
@@ -2102,7 +2102,7 @@ pub struct TimeMarker {
 }
 
 /// The Add key marker list's scales in its order, each with the notes it leaves out at root C in event 101's bits
-/// (bit 11 − pitch class; spec: flp/events/playlist.md "Key markers", read from the original's saves).
+/// (bit 11 − pitch class; spec: project/events/playlist.md "Key markers", read from the original's saves).
 pub const SCALES: [(&str, u16); 37] = [
     ("Major (Ionian)", 0x52A),
     ("Major Bebop", 0x522),
@@ -2197,7 +2197,7 @@ pub struct PlaylistTrack {
     pub color: Option<Rgb>,
     pub enabled: bool,
     /// Grouped with the track above: a member of the group led by the nearest ungrouped track above it (event 238
-    /// byte 46; spec: flp/events/playlist.md, ui/playlist.md §6a).
+    /// byte 46; spec: project/events/playlist.md, ui/playlist.md §6a).
     pub grouped: bool,
     /// On a group track: its group is collapsed (byte 61 = 0).
     pub collapsed: bool,
@@ -2206,11 +2206,11 @@ pub struct PlaylistTrack {
     /// Performance settings (bytes 22..46; spec: ui/performance-mode.md §4).
     pub perf: PerfSettings,
     /// The source this track is locked to: Draw and Paint place it here whatever the picker's current source is
-    /// (TOOLS ▸ Lock all tracks to their clips). Lemon Studio's design: no FLP field stores it, a `.lemon`
+    /// (TOOLS ▸ Lock all tracks to their clips). Lemon Studio's design: no legacy project field stores it, a `.lemon`
     /// file's own events do (os-app `lemon_state`; spec: ui/playlist.md "Locking tracks to their clips").
     pub clip_lock: Option<ClipSource>,
     /// The track's link to a mixer track or a channel: the original's audio and instrument tracks (event 238 bytes 49 to
-    /// 60; spec: flp/events/playlist.md, ui/playlist.md §6c).
+    /// 60; spec: project/events/playlist.md, ui/playlist.md §6c).
     pub link: TrackLink,
 }
 
@@ -2232,7 +2232,7 @@ impl PlaylistTrack {
     }
 }
 
-/// What a playlist track is linked to (spec: flp/events/playlist.md "Event 238 layout", bytes 49 to 60): an **audio
+/// What a playlist track is linked to (spec: project/events/playlist.md "Event 238 layout", bytes 49 to 60): an **audio
 /// track** names a mixer track, an **instrument track** a channel (and sometimes a mixer track too). Kinds other than
 /// the two known ones are kept as read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -2441,7 +2441,7 @@ impl PerfSettings {
     }
 }
 
-/// The data of an automation clip channel (spec: flp/events/automation.md): its points (event 234) and the
+/// The data of an automation clip channel (spec: project/events/automation.md): its points (event 234) and the
 /// targets it moves (one event 227 each).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Automation {
@@ -2480,7 +2480,7 @@ impl AutoPoint {
     }
 }
 
-/// Segment shapes, by stored value (spec: flp/events/automation.md).
+/// Segment shapes, by stored value (spec: project/events/automation.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutoMode {
     Single,
@@ -2584,7 +2584,7 @@ impl AutoMode {
     }
 }
 
-/// Automation targets (spec: flp/events/automation.md "Targets").
+/// Automation targets (spec: project/events/automation.md "Targets").
 pub mod modulation;
 pub mod target {
     pub const CHANNEL_VOLUME: u16 = 0;
@@ -2672,7 +2672,7 @@ pub mod target {
     }
 
     /// A plugin parameter's control point holds the plain value as the plugin states its range when that range runs
-    /// between whole numbers at least 2 apart (FL's own plugins, and Lemon Studio's recreations of them, keep whole
+    /// between whole numbers at least 2 apart (the original's own plugins, and Lemon Studio's recreations of them, keep whole
     /// values in their own unit), else the normalized value times 65536 (a Lemon Studio choice: the unit FL keeps for
     /// other plugins is not measured). This is the level 0..1 such a value stands for.
     pub fn plugin_point_level(min: f64, max: f64, value: i32) -> f64 {
@@ -2717,7 +2717,7 @@ pub mod target {
     }
 
     /// The main swing (0..=128, event 11's unit) an automation value `v` (0..1) gives: `v × 128` to the nearest step
-    /// (spec: flp/events/automation.md "Targets": 0.25 → 32, 0.333 → 43, 0.01 → 1, 1 → 128).
+    /// (spec: project/events/automation.md "Targets": 0.25 → 32, 0.333 → 43, 0.01 → 1, 1 → 128).
     pub fn swing_of(v: f64) -> u8 {
         (v.clamp(0.0, 1.0) * 128.0).round() as u8
     }
@@ -2736,7 +2736,7 @@ pub mod target {
         (f64::from(track) / 500.0).min(1.0)
     }
 
-    /// Whether automation value `v` switches a channel on: from 0.5 (spec: flp/events/automation.md "Targets": 0.5 and
+    /// Whether automation value `v` switches a channel on: from 0.5 (spec: project/events/automation.md "Targets": 0.5 and
     /// 0.5001 on, 0.4999 off).
     pub fn channel_on(v: f64) -> bool {
         v >= 0.5
@@ -2802,7 +2802,7 @@ pub mod target {
         if hi < 0x4000 && lo >= PLUGIN_PARAM {
             return Target::ChannelParam(hi, lo - PLUGIN_PARAM);
         }
-        // Mixer places from FL 24.2 on (spec: flp/layouts.md "Mixer places", "Parameter ids in an automation link").
+        // Mixer places from FL 24.2 on (spec: project/layouts.md "Mixer places", "Parameter ids in an automation link").
         if (0x7000..0x7000 + 127 * 64).contains(&hi) && (hi - 0x7000) % 64 < 10 {
             let (track, slot) = ((hi - 0x7000) / 64, ((hi - 0x7000) % 64) as u8);
             let id = lo as u8;
@@ -2933,7 +2933,7 @@ pub mod target {
             assert!(!bipolar(slot_param(1, 0, 0)));
         }
 
-        // spec: flp/events/automation.md "Targets"; flp/layouts.md "Parameter ids in an automation link"
+        // spec: project/events/automation.md "Targets"; flp/layouts.md "Parameter ids in an automation link"
         #[test]
         fn mixer_targets() {
             assert_eq!(decode(0x7001_1F01), Target::SlotMix(0, 1), "master slot 1 mix");
@@ -2960,7 +2960,7 @@ pub mod target {
             assert!(bipolar(channel(0, CHANNEL_VOLUME_MULT)) && !bipolar(channel(0, CHANNEL_CUTOFF)));
         }
 
-        /// The channel rack's swing knob, mixer box and LED as targets (spec: flp/events/automation.md "Targets", measured
+        /// The channel rack's swing knob, mixer box and LED as targets (spec: project/events/automation.md "Targets", measured
         /// 2026-11-02): ids, names in both directions, and the values a clip's level gives, with the measured examples.
         #[test]
         fn rack_targets_and_their_scales() {
@@ -3027,7 +3027,7 @@ pub mod target {
                 let v = c.unit().unwrap();
                 assert_eq!(InitControl::from_unit(t, v), Some(c), "{t:#010x}");
             }
-            // The channel rack's controls in their own units (spec: flp/engine-events.md "Channel rack records"): the main
+            // The channel rack's controls in their own units (spec: project/engine-events.md "Channel rack records"): the main
             // swing 0..128 as event 11 keeps it (swing 64 → 64), the mixer box's track number (Insert 2 → 2), the LED's
             // 1 = on.
             assert_eq!(InitControl::from_unit(InitControl::MAIN_SWING, 0.5), Some(InitControl { head: 0, target: InitControl::MAIN_SWING, value: 64 }));

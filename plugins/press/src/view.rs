@@ -34,7 +34,7 @@ pub const ACCENT: Color = brand::MAIN;
 const LABEL: Font = Font::new(10);
 const SMALL: Font = Font::new(9);
 
-/// The bands' colours (FL's, measured from its band tabs): LOW, MID, HIGH, MASTER.
+/// The bands' colours (the original's, measured from its band tabs): LOW, MID, HIGH, MASTER.
 pub const BAND_COLORS: [Color; BANDS] = [Color::rgb(0xbf5b56), Color::rgb(0xc09354), Color::rgb(0xb8c354), Color::rgb(0x80c354)];
 pub const BAND_NAMES: [&str; BANDS] = ["LOW", "MID", "HIGH", "MASTER"];
 

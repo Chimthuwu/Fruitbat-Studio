@@ -374,7 +374,7 @@ pub enum Action {
     Pat(crate::patterns::Hit),
     /// A message box or the file dialog (spec: ui/dialogs.md).
     Dlg(crate::dialog::DHit),
-    /// The Song info box: a click closes it (spec: flp/events/project-info.md "The Song info box").
+    /// The Song info box: a click closes it (spec: project/events/project-info.md "The Song info box").
     SongInfo,
 }
 
@@ -1031,7 +1031,7 @@ pub enum Drag {
     /// follows the mouse while the other end stays on the same time, so the view zooms. `fixed` = the other end and `units` = the
     /// whole bar, both in content pixels at zoom 1; `grab` = where the mouse held the end, relative to it.
     BarEdge { t: Scroll, right: bool, fixed: f32, units: f32, grab: f32 },
-    /// Right-drag on a vertical scroll bar: vertical movement scrolls (as in FL), horizontal movement resizes the
+    /// Right-drag on a vertical scroll bar: vertical movement scrolls (as in the original), horizontal movement resizes the
     /// rows around the view centre where the bar has rows (right = taller). `last` = mouse at the previous move,
     /// `row` = unrounded row height so slow drags still add up (None: the bar only scrolls). Spec: ui/scroll-bars.md.
     BarRows { t: Scroll, last: (f32, f32), row: Option<f32> },
@@ -1067,7 +1067,7 @@ pub enum Drag {
 pub struct State {
     pub project: Project,
     /// Persistent device/parameter identity for the modulation system (M0). Lives here (app state),
-    /// persisted in the `.lemon` extension — never inside FLP target bytes (audit K.1/K.3).
+    /// persisted in the `.lemon` extension — never inside legacy project target bytes (audit K.1/K.3).
     pub identity: os_model::modulation::IdentityRegistry,
     /// The modulation graph (M1): each modulator's source and the parameters it drives, saved in the `.lemon`
     /// extension beside the identity registry.
@@ -1138,7 +1138,7 @@ pub struct State {
     pub sample_loads: Vec<(usize, String)>,
     /// An undo or redo changed the timebase (`history::Timebase`): playback stops on the next tick.
     pub retimed: bool,
-    pub file: Option<os_flp::FlpFile>,
+    pub file: Option<os_project::FlpFile>,
     pub path: Option<PathBuf>,
     /// Open child windows, bottom to top.
     pub z: Vec<Win>,
@@ -1275,7 +1275,7 @@ pub struct State {
     pub browser_index: crate::browser_index::Index,
     /// Plugin parameter lists and the last tweaked parameters (spec: plugins/plugin-parameters.md).
     pub params: crate::params::ParamUi,
-    /// "Copy value": a normalized value for "Paste value", one for every control and automation point, as in FL
+    /// "Copy value": a normalized value for "Paste value", one for every control and automation point, as in the original
     /// (spec: ui/playlist.md §8 "Point menu").
     pub value_clip: Option<f64>,
     pub tempo: f64,
@@ -1674,7 +1674,7 @@ impl App {
                 file: None,
                 path: None,
                 // The step sequencer / channel rack is out of the UI until it is rebuilt as a group instrument
-                // (todo.md): new projects show no channel rack — the channel model stays for FLP import.
+                // (todo.md): new projects show no channel rack — the channel model stays for legacy project import.
                 z: vec![Win::Playlist],
                 no_focus: false,
                 show_browser: !crate::browser::load_hidden(),
@@ -1940,16 +1940,16 @@ impl App {
             return crate::zipped::import(self, path);
         }
         // A project in the layout used before version 24.2 is converted to the current one as it opens, and is saved in
-        // that layout (spec: flp/layouts.md "Converting to the newer layout"). One the conversion cannot handle gets a
+        // that layout (spec: project/layouts.md "Converting to the newer layout"). One the conversion cannot handle gets a
         // dialog that says so, not just a line in the hint bar.
         let mut legacy = None;
         let result = std::fs::read(&path)
             .map_err(|e| e.to_string())
-            .and_then(|b| os_flp::FlpFile::parse(&b).map_err(|e| e.to_string()))
-            .and_then(|mut f| match os_flp::project::upgrade(&mut f).and_then(|_| os_flp::project::load(&f)) {
+            .and_then(|b| os_project::FlpFile::parse(&b).map_err(|e| e.to_string()))
+            .and_then(|mut f| match os_project::project::upgrade(&mut f).and_then(|_| os_project::project::load(&f)) {
                 Ok(p) => Ok((f, p)),
-                Err(os_flp::project::ProjectError::LegacyLayout(v)) => {
-                    let e = os_flp::project::ProjectError::LegacyLayout(v.clone()).to_string();
+                Err(os_project::project::ProjectError::LegacyLayout(v)) => {
+                    let e = os_project::project::ProjectError::LegacyLayout(v.clone()).to_string();
                     legacy = Some(v);
                     Err(e)
                 }
@@ -1980,11 +1980,11 @@ impl App {
                 s.rack.reset();
                 s.hide(Win::Plugin);
                 s.mixer_scroll = 0.0;
-                // As saved (event 9); a file without it opens in song mode, as in FL 26 (spec: flp/engine-events.md
+                // As saved (event 9); a file without it opens in song mode, as in version 26 (spec: project/engine-events.md
                 // "Project").
                 s.song_mode = project.song_mode.unwrap_or(true);
                 s.project = project;
-                // Opening in song mode sets the initial values, as FL 26 does (spec: flp/engine-events.md "Event
+                // Opening in song mode sets the initial values, as version 26 does (spec: project/engine-events.md "Event
                 // 216"); the project is opened with them, not changed.
                 crate::init::apply(s);
                 crate::project_info::opened(s);
@@ -2035,7 +2035,7 @@ impl App {
         }
     }
 
-    /// Saves the project to its file, or asks where (a project without one, or one opened from an FLP, which is never
+    /// Saves the project to its file, or asks where (a project without one, or one opened from a legacy project, which is never
     /// saved over: spec flp/lemon-format.md "Opening and saving"); then `next`, once it is saved.
     fn save_then(&mut self, next: Option<crate::dialog::Next>) {
         let Some(path) = self.state.path.clone().filter(|p| !crate::project_files::is_flp(p)) else { return self.save_dialog(next) };
@@ -2054,7 +2054,7 @@ impl App {
         self.save_file_dialog(next);
     }
 
-    /// The Save project as dialog, starting in the project's folder with its name (an FLP's with `.lemon`).
+    /// The Save project as dialog, starting in the project's folder with its name (a legacy project's with `.lemon`).
     pub(crate) fn save_file_dialog(&mut self, next: Option<crate::dialog::Next>) {
         use crate::filedlg::{FileDlg, Mode};
         use crate::project_files::{as_lemon, EXT};
@@ -2140,7 +2140,7 @@ impl App {
     fn write_project(&mut self, target: PathBuf, edit: &mut dyn FnMut(&mut os_model::Project)) -> Option<u64> {
         // A file saved over is kept as an "overwritten on" backup (spec: ui/settings-choices.md "Backup files").
         crate::backup::keep_overwritten(&target, crate::data_folder::backup_folder(&self.state, Some(&target)));
-        // Sampler channels keep their sample and settings in Lemon Sampler: copy them to the channel so the FLP stores
+        // Sampler channels keep their sample and settings in Lemon Sampler: copy them to the channel so the legacy project stores
         // them.
         for row in self.state.hosted_rows.clone() {
             if self.state.project.channels.get(row).is_some_and(|c| c.kind.is_sampler()) {
@@ -2154,7 +2154,7 @@ impl App {
                     if ch.sample_path.as_deref().is_some_and(|old| crate::plugins::resolve_sample(old) == p) {
                         continue;
                     }
-                    // An empty path: the sample was taken out (spec: flp/events/channels.md "Loop points (event 251)").
+                    // An empty path: the sample was taken out (spec: project/events/channels.md "Loop points (event 251)").
                     if !p.is_empty() {
                         ch.sample_path = Some(p);
                     } else if ch.sample_path.is_some() {
@@ -2169,23 +2169,23 @@ impl App {
         s.project.song_mode = Some(s.song_mode);
         // Lock, zip, filter groups and loop lengths live in the rack UI (spec: ui/channel-rack.md, Saving).
         crate::rack::to_model(s);
-        // The playlist's track height, zoom and scroll (event 242, spec: flp/events/playlist.md).
+        // The playlist's track height, zoom and scroll (event 242, spec: project/events/playlist.md).
         crate::playlist::store_view(s);
-        // A file Lemon Studio made before the project had a playlist has no arrangement block (FL's files always have
+        // A file Lemon Studio made before the project had a playlist has no arrangement block (the original's files always have
         // one): build it again from the model, which holds everything that file stored.
-        let lacks_playlist = s.file.as_ref().and_then(|f| os_flp::project::load(f).ok()).is_some_and(|p| p.arrangements.is_empty())
+        let lacks_playlist = s.file.as_ref().and_then(|f| os_project::project::load(f).ok()).is_some_and(|p| p.arrangements.is_empty())
             && !s.project.arrangements.is_empty();
-        // A project that was not opened from a file gets a new FLP built from the model.
+        // A project that was not opened from a file gets a new legacy project built from the model.
         let mut file = if s.file.is_none() || lacks_playlist {
             // The new file's blocks are the model's channels and mixer tracks in order.
             settle_origins(&mut s.project);
-            // FL's files always have a playlist, and the mixer is stored after it (spec: flp/events/mixer.md).
+            // the original's files always have a playlist, and the mixer is stored after it (spec: project/events/mixer.md).
             if s.project.arrangements.is_empty() {
-                s.project.arrangements.push(os_flp::project::default_arrangement());
+                s.project.arrangements.push(os_project::project::default_arrangement());
             }
             let mut first = s.project.clone();
             crate::project_plugins::store_hosted(&mut first, &self.plugins);
-            match os_flp::project::create(&first) {
+            match os_project::project::create(&first) {
                 Ok(f) => f,
                 Err(e) => {
                     s.message = Some(format!("Save failed: {e}"));
@@ -2195,11 +2195,11 @@ impl App {
         } else {
             s.file.clone().expect("checked")
         };
-        // Deleted, cloned and moved channels are written by `apply` (os-flp `restructure`); it edits a copy so a
+        // Deleted, cloned and moved channels are written by `apply` (os-project `restructure`); it edits a copy so a
         // failed save leaves the loaded file as it was.
-        let lost = os_flp::project::unsaved_parts(&s.project, &file);
+        let lost = os_project::project::unsaved_parts(&s.project, &file);
         // Mixer parts the file format mapping does not write yet (spec: ui/mixer.md, Lemon Studio status).
-        // Hosted CLAP / VST3 plugins are written as wrapped plugins with their current state (spec: flp/events/plugins.md).
+        // Hosted CLAP / VST3 plugins are written as wrapped plugins with their current state (spec: project/events/plugins.md).
         let mut proj = s.project.clone();
         // Lemon Studio's own state goes into `LMex` (a .lemon target only, `lemon_or_flp`).
         crate::modulation::assign_all(s);
@@ -2208,8 +2208,8 @@ impl App {
         crate::data_folder::stamp(s, &mut proj);
         crate::project_plugins::store_hosted(&mut proj, &self.plugins);
         edit(&mut proj);
-        // Added mixer tracks are written before the hidden last track (spec: flp/events/mixer.md "Adding tracks").
-        let result = os_flp::project::apply(&proj, &mut file)
+        // Added mixer tracks are written before the hidden last track (spec: project/events/mixer.md "Adding tracks").
+        let result = os_project::project::apply(&proj, &mut file)
             .map_err(|e| e.to_string())
             .and_then(|()| lemon_or_flp(&mut file, &target, extra))
             .and_then(|()| file.to_bytes().map_err(|e| e.to_string()))
@@ -2602,7 +2602,7 @@ impl App {
         s.path = None;
         s.tempo = 130.0;
         s.pattern = 1;
-        // FL's default template is saved in pattern mode.
+        // the original's default template is saved in pattern mode.
         s.song_mode = false;
         s.piano.reset();
         s.playlist.reset();
@@ -2663,7 +2663,7 @@ impl App {
     }
 
     /// FILE > Save new version (Ctrl+N): saves next to the project as "name_2.lemon", "name_3.lemon", ... (the first
-    /// free number; an FLP's versions too), which becomes the project's file. A project without a file asks for a name.
+    /// free number; a legacy project's versions too), which becomes the project's file. A project without a file asks for a name.
     fn save_new_version(&mut self) {
         let Some(path) = self.state.path.clone() else { return self.save(true) };
         let stem = path.file_stem().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
@@ -2800,7 +2800,7 @@ impl App {
         if let Some(l) = &mut self.loading {
             l.label.clear();
             l.plugins_done = done;
-            // Plugins no host plays (FL's own effects without a recreation) are not waited for.
+            // Plugins no host plays (the original's own effects without a recreation) are not waited for.
             if !more {
                 l.plugins = done;
             }
@@ -5555,12 +5555,12 @@ impl App {
         let cfg = &st.audio;
         let rate = st.rate.unwrap_or(44100);
         let items: Vec<PItem> = match label {
-            // Project ▸ Time settings (spec: ui/settings-choices.md "Project"): the timebase, FL's list.
+            // Project ▸ Time settings (spec: ui/settings-choices.md "Project"): the timebase, the original's list.
             views::settings::TIMEBASE => {
                 let now = self.state.project.ppq;
                 views::settings::TIMEBASES.iter().map(|&v| PItem::new(v.to_string(), Cmd::Timebase(v)).mark(Mark::Radio(v == now))).collect()
             }
-            // The "Set as" mode (event 35), in FL's order.
+            // The "Set as" mode (event 35), in the original's order.
             views::settings::SET_AS => {
                 let sig = self.state.project.bar_is_signature();
                 vec![
@@ -5568,7 +5568,7 @@ impl App {
                     PItem::new(views::settings::SET_AS_SIGNATURE, Cmd::TimeMode(true)).mark(Mark::Radio(sig)),
                 ]
             }
-            // Project ▸ Advanced ▸ Panning law (event 23), FL's two choices.
+            // Project ▸ Advanced ▸ Panning law (event 23), the original's two choices.
             views::settings::PANNING_LAW => {
                 let now = self.state.project.panning_law.unwrap_or(0);
                 views::settings::PANNING_LAWS.iter().map(|&(name, v)| PItem::new(name, Cmd::PanningLaw(v)).mark(Mark::Radio(v == now))).collect()
@@ -5690,7 +5690,7 @@ impl App {
         self.invalidate();
     }
 
-    /// Theme import (spec: ui/flstheme.md): pick a .flstheme, starting in FL's theme folder when installed.
+    /// Theme import (spec: ui/flstheme.md): pick a .flstheme, starting in the original's theme folder when installed.
     fn theme_dialog(&mut self) {
         let fl = std::path::Path::new(r"C:\Program Files\Image-Line\FL Studio 2026\Artwork\Themes");
         let dlg = crate::filedlg::FileDlg::new(crate::filedlg::Mode::Open, "Load theme", "theme", crate::dialog::Then::LoadTheme)
@@ -6115,7 +6115,7 @@ impl App {
                     }
                 }
                 Drag::BarRows { t, last, row } => {
-                    // The picker's bar resizes its previews either way, down / right = taller, as FL's resizes them
+                    // The picker's bar resizes its previews either way, down / right = taller, as the original's resizes them
                     // (spec: ui/scroll-bars.md §3); the others scroll up/down.
                     let picker = t == Scroll::PlPick;
                     // Only when it moved up/down: the clamp uses last frame's bar, stale once the rows were resized.
@@ -7842,7 +7842,7 @@ impl App {
             let t0 = crate::piano_snap::cell(&self.state, g.tick_at(last_x));
             let t1 = crate::piano_snap::cell(&self.state, g.tick_at(x));
             // A point is set when the cursor enters a snap unit (its value is the path height at the
-            // unit's start, as in FL's captured ramps) and on the press; staying inside a unit keeps it.
+            // unit's start, as in the original's captured ramps) and on the press; staying inside a unit keeps it.
             // Without a unit, one point at the pointer (spec: ui/piano-snap.md §8).
             let (lo, hi, step) = match crate::piano_snap::unit(&self.state) {
                 Some(u) => (t0.min(t1), t0.max(t1), u),
@@ -7869,7 +7869,7 @@ impl App {
         let (ta, tb) = (g.tick_at(last_x.min(x)), g.tick_at(last_x.max(x)));
         // The notes the cursor's path covers: those starting inside it, and the note already playing where the path
         // begins (the latest start at or before it; before the first note, the first one), so a click anywhere above
-        // or below a note's line sets it. A selection limits this to the selected notes (FL's manual: select first to
+        // or below a note's line sets it. A selection limits this to the selected notes (the original's manual: select first to
         // reach one of several notes that start together).
         let cand = piano::targets(&self.state);
         let starts = || cand.iter().filter_map(|&i| piano::notes(&self.state).get(i)).map(|n| n.position);
@@ -7926,7 +7926,7 @@ impl App {
         }
     }
 
-    /// The wheel over an open menu, as in FL (spec: ui/menus.md "The wheel in menus"): each notch lights the next row
+    /// The wheel over an open menu, as in the original (spec: ui/menus.md "The wheel in menus"): each notch lights the next row
     /// down (or up) that can be picked, skipping separators, headings and greyed-out rows, on into the next column and
     /// round from the last row to the first; the cursor moves to the row's middle. Returns whether a menu was open (it
     /// takes the wheel).
@@ -8471,14 +8471,14 @@ impl App {
         }
         
         match key {
-            // Space starts and stops (rewinding); Ctrl+Space starts and pauses, like the Play button (FL's manual,
+            // Space starts and stops (rewinding); Ctrl+Space starts and pauses, like the Play button (the original's manual,
             // keyboard shortcuts: "Start/Stop Playback", "Start/Pause Playback").
             // Tab flips the Playlist between the arrangement and the clip launcher (Bitwig's Tab); Shift+Tab stays
             // the playlist's snap cycle.
             Key::Named(NamedKey::Tab) if !ctrl && !alt && !self.shift => self.act(Action::ToggleLauncher),
             Key::Named(NamedKey::Space) if ctrl => self.act(Action::Play),
             Key::Named(NamedKey::Space) => self.act(if self.transport.playing() { Action::Stop } else { Action::Play }),
-            // L flips the PAT / SONG switch, as in FL (the typing keyboard, when on, takes L first).
+            // L flips the PAT / SONG switch, as in the original (the typing keyboard, when on, takes L first).
             Key::Character(c) if !ctrl && !alt && !self.shift && c.eq_ignore_ascii_case("l") => self.act(Action::PatSong(!self.state.song_mode)),
             // spec: ui/tempo-tapper.md §1
             Key::Named(NamedKey::F5) if ctrl => self.act(Action::ToggleWin(Win::Tapper)),
@@ -8714,7 +8714,7 @@ impl App {
         self.invalidate();
     }
 
-    /// Enable groups switch (toolbar, OPTIONS menu, Shift+Alt+G): the playlist's clips are deselected, as in FL.
+    /// Enable groups switch (toolbar, OPTIONS menu, Shift+Alt+G): the playlist's clips are deselected, as in the original.
     pub fn toggle_groups(&mut self) {
         let on = crate::enable_groups::toggle();
         self.state.playlist.sel.clear();
@@ -10215,7 +10215,7 @@ impl App {
         }
         let Some(entry) = item_at(menu, item) else { return };
         match entry.cmd {
-            // Theme import (spec: ui/flstheme.md): pick a .flstheme, starting in FL's theme folder when installed.
+            // Theme import (spec: ui/flstheme.md): pick a .flstheme, starting in the original's theme folder when installed.
             MenuCmd::Settings(tab) => self.open_settings(tab),
             MenuCmd::ExportZip => crate::zipped::export_dialog(self),
             // ADD > Sampler: a new Lemon Sampler channel at the bottom of the rack (spec: ui/plugin-menu.md §1).
@@ -10605,17 +10605,17 @@ fn typing_semitone(code: KeyCode) -> Option<i32> {
 }
 
 /// The file just written holds the model's channels and mixer tracks in order: each one's file block is its position
-/// (os-flp `apply` follows moved channels and the effect slots of moved mixer tracks by these).
-/// Makes the file written to `target` a `.lemon` file (Lemon Studio's chunks around the FLP's, saved by this version,
-/// with `extra`: Lemon Studio's own state, `crate::lemon_state`), or a plain FLP for a target named `.flp`, which has no
-/// place for `extra` (spec: flp/lemon-format.md).
-fn lemon_or_flp(file: &mut os_flp::FlpFile, target: &std::path::Path, mut extra: Vec<os_flp::Event>) -> Result<(), String> {
+/// (os-project `apply` follows moved channels and the effect slots of moved mixer tracks by these).
+/// Makes the file written to `target` a `.lemon` file (Lemon Studio's chunks around the legacy project's, saved by this version,
+/// with `extra`: Lemon Studio's own state, `crate::lemon_state`), or a plain legacy project for a target named `.flp`, which has no
+/// place for `extra` (spec: project/lemon-format.md).
+fn lemon_or_flp(file: &mut os_project::FlpFile, target: &std::path::Path, mut extra: Vec<os_project::Event>) -> Result<(), String> {
     if crate::project_files::is_flp(target) {
-        os_flp::lemon::to_flp(file);
+        os_project::lemon::to_flp(file);
         return Ok(());
     }
-    extra.insert(0, os_flp::lemon::saved_by(&format!("Fruitbat Studio {}", env!("CARGO_PKG_VERSION"))));
-    os_flp::lemon::to_lemon(file, &extra).map_err(|e| e.to_string())
+    extra.insert(0, os_project::lemon::saved_by(&format!("Fruitbat Studio {}", env!("CARGO_PKG_VERSION"))));
+    os_project::lemon::to_lemon(file, &extra).map_err(|e| e.to_string())
 }
 
 fn settle_origins(p: &mut Project) {
@@ -10749,11 +10749,11 @@ pub fn test_project() -> Project {
 }
 
 /// Sampler channels named `names` (channel i on insert i + 1), 18 mixer tracks (master, Insert 1-16 and the hidden
-/// last one, as FL's default template stores them; spec: ui/mixer.md §1) routed to the master, pattern 1.
+/// last one, as the original's default template stores them; spec: ui/mixer.md §1) routed to the master, pattern 1.
 fn template_project(names: &[&str]) -> Project {
     let channel = |i: u16, name: &str| sampler_channel(i, name, i + 1);
     let mut mixer: Vec<MixerTrack> = (0..18u16).map(MixerTrack::new).collect();
-    // The hidden last track is routed nowhere, as FL stores it (spec: flp/events/mixer.md).
+    // The hidden last track is routed nowhere, as FL stores it (spec: project/events/mixer.md).
     mixer[17].routes.clear();
     Project {
         ppq: 96,
@@ -10762,7 +10762,7 @@ fn template_project(names: &[&str]) -> Project {
         channels: names.iter().enumerate().map(|(i, n)| channel(i as u16, n)).collect(),
         patterns: vec![Pattern { number: 1, ..Pattern::default() }],
         mixer,
-        // FL's default template holds event 30 = 1: "Play truncated notes in clips" is on in a new project (spec:
+        // the original's default template holds event 30 = 1: "Play truncated notes in clips" is on in a new project (spec:
         // flp/engine-events.md "Project", "Event 30").
         play_truncated: true,
         // Automatic crossfades (event 44) as the program setting says, whatever the template holds (spec:
@@ -11168,7 +11168,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("lemon-fl-recreations-{}.flp", std::process::id()));
         a.save_to(path.clone());
         assert!(a.state.message.as_deref().is_some_and(|m| m.starts_with("Saved")), "{:?}", a.state.message);
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
         for (t, k, file, _, fl) in &cases {
             let slot = saved.mixer[usize::from(*t)].slots[usize::from(*k)].clone().unwrap();
@@ -11207,7 +11207,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("lemon-fl-modulation-{}.flp", std::process::id()));
         a.save_to(path.clone());
         assert!(a.state.message.as_deref().is_some_and(|m| m.starts_with("Saved")), "{:?}", a.state.message);
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
         for (t, k, file, _, fl) in &cases {
             let slot = saved.mixer[usize::from(*t)].slots[usize::from(*k)].clone().unwrap();
@@ -11239,7 +11239,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("lemon-fl-peak-controller-{}.flp", std::process::id()));
         a.save_to(path.clone());
         assert!(a.state.message.as_deref().is_some_and(|m| m.starts_with("Saved")), "{:?}", a.state.message);
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
         let slot = saved.mixer[1].slots[0].clone().unwrap();
         assert_eq!((slot.name.as_str(), &slot.state), ("Fruity Peak Controller", &fl));
@@ -11276,7 +11276,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("lemon-vocodex-{}.flp", std::process::id()));
         a.save_to(path.clone());
         assert!(a.state.message.as_deref().is_some_and(|m| m.starts_with("Saved")), "{:?}", a.state.message);
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
         let slot = saved.mixer[1].slots[0].clone().unwrap();
         assert_eq!((slot.name.as_str(), &slot.state), (VOCODEX_FILE_NAME, &fl));
@@ -11310,7 +11310,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("lemon-fl-formula-controller-{}.flp", std::process::id()));
         a.save_to(path.clone());
         assert!(a.state.message.as_deref().is_some_and(|m| m.starts_with("Saved")), "{:?}", a.state.message);
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
         let slot = saved.mixer[1].slots[0].clone().unwrap();
         assert_eq!((slot.name.as_str(), &slot.state), ("Fruity Formula Controller", &fl));
@@ -11465,7 +11465,7 @@ mod tests {
     }
 
     /// Knobs drag vertically (1/1024 per px), step with the wheel, and model-backed ones write the project.
-    /// A project that was never opened from a file saves as a new FLP that loads back (spec: flp/container.md).
+    /// A project that was never opened from a file saves as a new legacy project that loads back (spec: project/container.md).
     #[test]
     fn new_project_saves_and_reloads() {
         let mut app = App::new(None);
@@ -11481,11 +11481,11 @@ mod tests {
         let path = std::env::temp_dir().join(format!("openstudio-new-{}.flp", std::process::id()));
         app.save_to(path.clone());
         assert!(app.state.message.as_deref().is_some_and(|m| m.starts_with("Saved") && !m.contains("not stored")), "{:?}", app.state.message);
-        let file = os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap();
+        let file = os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap();
         if let Some(keep) = std::env::var_os("OS_KEEP_FLP") {
             let _ = std::fs::copy(&path, keep); // for checking the file in FL by hand
         }
-        let back = os_flp::project::load(&file).unwrap();
+        let back = os_project::project::load(&file).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(back.tempo, Some(111.0));
         assert_eq!(back.channels.len(), 5);
@@ -11496,7 +11496,7 @@ mod tests {
         // Saving again goes through apply on the same file.
         app.state.project.patterns[0].notes.push(Note::step(1, 96));
         app.save_to(path.clone());
-        let back = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let back = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(back.patterns[0].notes.len(), 2);
         assert_eq!(back.mixer[3].name.as_deref(), Some("Drums"));
@@ -11550,7 +11550,7 @@ mod tests {
         assert_eq!(app.state.project.bar, Some((3, 2)), "an eighth is two sixteenths");
         assert_eq!((shown(&app, NUMERATOR).as_deref(), shown(&app, DENOMINATOR).as_deref()), (Some("3"), Some("8")));
         assert_eq!(crate::piano::pattern_length(&app.state, app.state.pattern), 432);
-        // Play truncated notes: on in a new project, as in FL's default template (spec: flp/engine-events.md "Event
+        // Play truncated notes: on in a new project, as in the original's default template (spec: project/engine-events.md "Event
         // 30"), on File > New too; a click switches it.
         assert!(default_project().play_truncated);
         let r = hit_rect(&app, &Action::Settings(SAct::Group("Advanced")));
@@ -12024,7 +12024,7 @@ mod tests {
         let shown = |app: &App| (combo(app, SET_AS), combo(app, NUMERATOR), combo(app, DENOMINATOR), value(app, BEATS_PER_BAR), value(app, STEPS_PER_BEAT));
         let some = |v: &str| Some(v.to_string());
         assert_eq!(shown(&app), (some(SET_AS_SIGNATURE), some("4"), some("4"), None, None), "a file without event 35 is a time signature");
-        // The menu: FL's two choices, the current one marked.
+        // The menu: the original's two choices, the current one marked.
         let r = app.hits.iter().rev().find(|h| matches!(&h.action, Action::Settings(SAct::Combo(l, ..)) if *l == SET_AS)).map(|h| h.rect).expect("Set as works");
         click(&mut app, &mut c, r);
         let items: Vec<_> = app.state.playlist.popup.as_ref().expect("a menu").items.iter().map(|it| (it.label.to_string(), it.mark.clone())).collect();
@@ -12084,7 +12084,7 @@ mod tests {
         assert_eq!(opened.state.project.bar_ticks(), 360);
     }
 
-    /// Settings > Project ▸ Timebase (PPQ) (spec: ui/settings-choices.md "Project"): FL's eleven choices, the
+    /// Settings > Project ▸ Timebase (PPQ) (spec: ui/settings-choices.md "Project"): the original's eleven choices, the
     /// project's marked; a pick rescales every tick count of the project at once (notes, pattern controls, clips,
     /// markers; automation data stays) and asks nothing. The editors follow (marker, song position, selections,
     /// clipboards, undo steps), so an undo after it restores the new timebase's ticks. Saved, the file's header holds
@@ -12154,7 +12154,7 @@ mod tests {
         project_pick(&mut app, &mut c, TIMEBASE, "72", 11);
         let path = std::env::temp_dir().join(format!("lemon-project-timebase-{}.flp", std::process::id()));
         app.save_to(path.clone());
-        let back = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let back = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!((back.ppq, back.patterns[0].notes[0].position, back.patterns[0].notes[0].length), (72, 54, 207));
         assert_eq!((back.arrangements[0].clips[0].position, back.arrangements[0].markers[0].position), (144, 72));
@@ -12248,7 +12248,7 @@ mod tests {
         // A file without event 44 opens without one (shown off), whatever the setting.
         let mut p = test_project();
         p.auto_crossfades = None;
-        std::fs::write(&path, os_flp::project::create(&p).unwrap().to_bytes().unwrap()).unwrap();
+        std::fs::write(&path, os_project::project::create(&p).unwrap().to_bytes().unwrap()).unwrap();
         for on in [false, true] {
             prefs::set_check(&AUTO_CROSSFADES_NEW, on);
             let mut app = App::new(None);
@@ -12494,7 +12494,7 @@ mod tests {
     }
 
     /// Settings > Project ▸ Advanced ▸ Panning law (spec: ui/settings-choices.md "Project", audio/gain-laws.md
-    /// "Panning law: Triangular"): FL's two choices with the project's marked; a pick changes event 23 at once (the
+    /// "Panning law: Triangular"): the original's two choices with the project's marked; a pick changes event 23 at once (the
     /// engine gets the project again, the project counts as changed), saved and opened again, also patched in an
     /// opened file.
     #[test]
@@ -12536,7 +12536,7 @@ mod tests {
         crate::playlist::run(&mut opened, crate::playlist::Cmd::PanningLaw(0));
         assert!(opened.unsaved());
         opened.save_to(path.clone());
-        let back = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let back = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(back.panning_law, Some(0));
     }
@@ -14085,10 +14085,10 @@ mod tests {
     /// A project in the layout used before version 24.2 opens, converted to the current layout, and is saved in it.
     #[test]
     fn older_projects_open_converted() {
-        let mut file = os_flp::project::create(&test_project()).expect("create");
+        let mut file = os_project::project::create(&test_project()).expect("create");
         // Channel blocks without their end event: the older layout.
         for c in &mut file.chunks {
-            if let os_flp::ChunkBody::Events(v) = &mut c.body {
+            if let os_project::ChunkBody::Events(v) = &mut c.body {
                 v.retain(|e| e.id != 51);
             }
         }
@@ -14101,9 +14101,9 @@ mod tests {
         assert_eq!(app.state.project.channels.len(), test_project().channels.len());
         // The file kept for saving is the converted one: every channel block has its end event again.
         let open = app.state.file.as_ref().expect("the project's file");
-        let events: Vec<os_flp::Event> = open.events().cloned().collect();
+        let events: Vec<os_project::Event> = open.events().cloned().collect();
         assert_eq!(events.iter().filter(|e| e.id == 51).count(), test_project().channels.len());
-        assert!(!os_flp::project::is_legacy(&events));
+        assert!(!os_project::project::is_legacy(&events));
     }
 
     /// Press `k` (a character or a named key) with the modifiers given.
@@ -15412,7 +15412,7 @@ mod tests {
         assert!(buf.iter().any(|v| v.abs() > 0.05), "preview is silent");
     }
 
-    /// Audio-clip channels (dropped audio, FL's audio clips) are hosted and opened by Lemon Sampler, never the info
+    /// Audio-clip channels (dropped audio, the original's audio clips) are hosted and opened by Lemon Sampler, never the info
     /// window (spec: plugins/lemon-sampler.md §7).
     #[test]
     fn audio_clip_channels_use_lemon_sampler() {
@@ -15455,8 +15455,8 @@ mod tests {
         }
     }
 
-    /// A minute-long audio clip whose file has a `smpl` loop (as FL's exports write), exported as the whole song: the
-    /// clip plays the file through once, frame for frame to its end, without jumping back at the loop's end (FL's
+    /// A minute-long audio clip whose file has a `smpl` loop (as the original's exports write), exported as the whole song: the
+    /// clip plays the file through once, frame for frame to its end, without jumping back at the loop's end (the original's
     /// clip channels never use loop points: sampler flags 258, spec: audio/audio-clips.md). Also for a clip channel
     /// without sampler flags (made before they were set).
     #[test]
@@ -15708,7 +15708,7 @@ mod tests {
         // The pitch record's amount is in cents (±2400).
         assert_eq!(ch.envelopes[os_model::Envelope::PITCH].amount, 600);
         assert_eq!(ch.envelopes[os_model::Envelope::PAN].flags & 0x20, 0x20, "global LFO");
-        // FL's new channel's flags (Load regions, Use loop points), loop points off, Keep on disk and Resample on.
+        // the original's new channel's flags (Load regions, Use loop points), loop points off, Keep on disk and Resample on.
         assert_eq!((ch.sound.cutoff, ch.sound.filter_type, ch.sound.declick, ch.sound.sampler_flags), (64, 3, 2, Some(0x103)));
         assert_eq!(ch.sound.start_offset(), 0.125);
         let m = ch.misc;
@@ -15776,7 +15776,7 @@ mod tests {
     }
 
     /// Loop points are frames of the sample file and Lemon Sampler's loop knobs fractions of its last frame's index
-    /// (2000 for this 2001-frame file; spec: plugins/lemon-sampler.md §7): FL's values for the sample's ends show the
+    /// (2000 for this 2001-frame file; spec: plugins/lemon-sampler.md §7): the original's values for the sample's ends show the
     /// whole sample, stored points come back while the knobs are untouched, and a moved knob stores its frame.
     #[test]
     fn sampler_loop_points_are_frames_of_the_file() {
@@ -15984,8 +15984,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Projects save as .lemon files that open again; one opened from an FLP is never saved over: Save asks for a name,
-    /// offering the FLP's with .lemon, and the project then lives there (spec: flp/lemon-format.md).
+    /// Projects save as .lemon files that open again; one opened from a legacy project is never saved over: Save asks for a name,
+    /// offering the legacy project's with .lemon, and the project then lives there (spec: project/lemon-format.md).
     #[test]
     fn flps_migrate_to_lemon_files() {
         use crate::dialog::fake;
@@ -15996,8 +15996,8 @@ mod tests {
         app.state.tempo = 123.0;
         let flp = dir.join("Old.flp");
         app.save_to(flp.clone());
-        let plain = os_flp::FlpFile::parse(&std::fs::read(&flp).unwrap()).unwrap();
-        assert!(!os_flp::lemon::is_lemon(&plain), "a target named .flp is still written as an FLP");
+        let plain = os_project::FlpFile::parse(&std::fs::read(&flp).unwrap()).unwrap();
+        assert!(!os_project::lemon::is_lemon(&plain), "a target named .flp is still written as an FLP");
         let before = std::fs::read(&flp).unwrap();
         let mut app = App::new(None);
         app.open(flp.clone());
@@ -16016,9 +16016,9 @@ mod tests {
         assert_eq!(app.state.path.as_deref(), Some(lemon.as_path()), "the project now lives in the .lemon file");
         assert!(!app.unsaved());
         assert_eq!(std::fs::read(&flp).unwrap(), before, "the FLP is still not written");
-        let file = os_flp::FlpFile::parse(&std::fs::read(&lemon).unwrap()).unwrap();
-        assert_eq!(os_flp::lemon::version(&file), Some(os_flp::lemon::VERSION));
-        assert_eq!(os_flp::lemon::saved_by_text(&file), Some(format!("Fruitbat Studio {}", env!("CARGO_PKG_VERSION"))));
+        let file = os_project::FlpFile::parse(&std::fs::read(&lemon).unwrap()).unwrap();
+        assert_eq!(os_project::lemon::version(&file), Some(os_project::lemon::VERSION));
+        assert_eq!(os_project::lemon::saved_by_text(&file), Some(format!("Fruitbat Studio {}", env!("CARGO_PKG_VERSION"))));
         // Save again: in place, no dialog.
         app.state.tempo = 125.0;
         app.act(Action::MenuItem(0, views::menus::FILE_SAVE));
@@ -16676,7 +16676,7 @@ mod tests {
         click(&mut app, &mut a, hr);
         assert_eq!(crate::rack::pattern_steps(&app.state), 32);
 
-        // Sizes snap to whole steps / rows (FL's widths plus the wider name button), down to four beats of the
+        // Sizes snap to whole steps / rows (the original's widths plus the wider name button), down to four beats of the
         // project's signature but never under 16 steps (the title bar's buttons would collide), and one row.
         let d = crate::rack::NAME_W - crate::rack::FL_NAME_W;
         assert_eq!(views::rack::snap_size(&app.state, 822.0 + d, 300.0), (819.0 + d, 306.0));
@@ -16972,7 +16972,7 @@ mod tests {
         assert_eq!(app.state.piano.marker, 48);
     }
 
-    /// L flips the PAT / SONG switch (FL's key); with the typing keyboard on, L is a note instead.
+    /// L flips the PAT / SONG switch (the original's key); with the typing keyboard on, L is a note instead.
     #[test]
     fn l_flips_pat_and_song() {
         use winit::keyboard::{Key, KeyCode};
@@ -17516,7 +17516,7 @@ mod tests {
         assert_eq!(starts(&app), [48, 72, 432, 816]);
     }
 
-    /// The piano roll's keys as FL 26 does them (spec: ui/piano-keys.md §2, §4), sent the way main.rs sends a key (the
+    /// The piano roll's keys as version 26 does them (spec: ui/piano-keys.md §2, §4), sent the way main.rs sends a key (the
     /// typing keyboard first, then `App::key` with the repeat flag) to the project those measurements used.
     mod piano_keys {
         use super::*;
@@ -17630,7 +17630,7 @@ mod tests {
             v
         }
 
-        /// Held keys (§4 rule 1): FL's 5 key-downs of Shift+Up = 5 semitones, 4 of Shift+Right = 4 steps, 3 of Ctrl+B =
+        /// Held keys (§4 rule 1): the original's 5 key-downs of Shift+Up = 5 semitones, 4 of Shift+Right = 4 steps, 3 of Ctrl+B =
         /// 3 copies; a held switch acts once; nothing repeats into the channel rack.
         #[test]
         fn held_keys_repeat_the_moving_and_copying_keys() {
@@ -19257,7 +19257,7 @@ mod tests {
         app.state.project.channels[row].sound.set_stretch_multiplier(2.0);
         let path = std::env::temp_dir().join(format!("os-app-stretch-{}.flp", std::process::id()));
         app.save_to(path.clone());
-        let back = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let back = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let ch = back.channels.iter().find(|c| c.kind == ChannelKind::AudioClip).expect("the audio clip channel");
         assert_eq!(ch.sound.stretch, [0, 0, 10000, 0]);
         // And changed in that existing file (its event 215 patched).
@@ -19265,7 +19265,7 @@ mod tests {
         let row2 = app2.state.project.channels.iter().position(|c| c.kind == ChannelKind::AudioClip).unwrap();
         app2.state.project.channels[row2].sound.set_stretch_multiplier(0.5);
         app2.save_to(path.clone());
-        let back = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let back = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         assert_eq!(back.channels[row2].sound.stretch, [0, 0, (-10000i32) as u32, 0]);
         let _ = (std::fs::remove_file(&path), std::fs::remove_file(&wav));
     }
@@ -19390,7 +19390,7 @@ mod tests {
         let _ = std::fs::remove_file(&wav);
     }
 
-    /// The tempo counts the bar's beats (spec: audio/timing.md "The tempo counts the bar's beats"): FL 26 gives a 4 s
+    /// The tempo counts the bar's beats (spec: audio/timing.md "The tempo counts the bar's beats"): version 26 gives a 4 s
     /// sample at 140 BPM and PPQ 96 a clip of 448 ticks in 3/8, 896 in 4/4 (4 s × 140 / 60 × 96 × steps / 4). A
     /// stretch TIME is in quarter notes and keeps its ticks.
     #[test]
@@ -19494,7 +19494,7 @@ mod tests {
         // Saved and read back with "Verse" shown.
         let path = std::env::temp_dir().join(format!("os-app-arrangements-{}.flp", std::process::id()));
         app.save_to(path.clone());
-        let back = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let back = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let names: Vec<_> = back.arrangements.iter().map(|a| a.name.clone().unwrap_or_default()).collect();
         assert_eq!(names, vec!["Arrangement".to_string(), "Verse".to_string()]);
         assert_eq!(back.arrangement().unwrap().name.as_deref(), Some("Verse"));
@@ -19505,7 +19505,7 @@ mod tests {
         pl::run(&mut app2, pl::Cmd::ArrAdd);
         pl::commit_edit(&mut app2.state);
         app2.save_to(path.clone());
-        let back = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let back = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let names: Vec<_> = back.arrangements.iter().map(|a| a.name.clone().unwrap_or_default()).collect();
         assert_eq!(names, vec!["Verse".to_string(), "Arrangement 2".to_string()], "removed and added in an existing file");
         assert!(back.arrangements[0].clips.iter().any(|c| c.position == bar), "the kept arrangement keeps its clips");
@@ -19692,7 +19692,7 @@ mod tests {
         assert!(!opened.unsaved(), "an opened project's crossfades are not a change");
         assert_eq!(bytes(&opened.state.project), read);
         opened.save_to(flp.clone());
-        let back = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&flp).unwrap()).unwrap()).unwrap();
+        let back = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&flp).unwrap()).unwrap()).unwrap();
         assert_eq!(bytes(&back), read);
         assert_eq!(back.auto_crossfades, Some(true));
         let _ = std::fs::remove_file(&flp);
@@ -19958,7 +19958,7 @@ mod tests {
         // Save (new project) and read back.
         let path = std::env::temp_dir().join(format!("openstudio-pl-{}.flp", std::process::id()));
         app.save_to(path.clone());
-        let back = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let back = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
         let arr = back.arrangement().expect("arrangement saved");
         assert_eq!(arr.clips.len(), pl::clips(&app.state).len());
@@ -20098,7 +20098,7 @@ mod tests {
 
     /// The step sequencer / channel rack is out of the UI until its group-instrument rebuild (todo.md): a new
     /// project shows no channel rack, and no toolbar button, VIEW entry or F6 brings it back. The model stays:
-    /// the channels and their step data are still there (FLP import keeps working).
+    /// the channels and their step data are still there (legacy project import keeps working).
     #[test]
     fn the_channel_rack_is_out_of_the_ui() {
         use winit::keyboard::{Key, NamedKey};
@@ -20210,7 +20210,7 @@ mod tests {
         assert_eq!(app.state.z, vec![Win::Mixer]);
     }
 
-    /// The toolbar's song position slider (spec: ui/song-position-slider.md), with FL's measured numbers: an 8.25-bar
+    /// The toolbar's song position slider (spec: ui/song-position-slider.md), with the original's measured numbers: an 8.25-bar
     /// song; a click beside the handle steps 1/88 of it toward the pointer and holding repeats up to the pointer; the
     /// handle drags; right-click jumps; the wheel moves 3/64 (down = later); PAT mode moves through the pattern (the
     /// play-start marker); an empty playlist disables it in SONG mode.
@@ -20282,7 +20282,7 @@ mod tests {
     }
 
     /// Playlist navigation and editing shortcuts (spec: ui/playlist.md §3, §3a, §4, §5, §6): Alt+wheel = track
-    /// height (FL's 6 px steps and limits), Ctrl+wheel and the plain wheel over the ruler = time zoom, End = zoom on
+    /// height (the original's 6 px steps and limits), Ctrl+wheel and the plain wheel over the ruler = time zoom, End = zoom on
     /// selection, Shift+G / Alt+G / Alt+U clip groups (lowest free number, move together, duplicates get their own
     /// group, ungroup deselects, saved), Right-Shift+drag slice in Draw, Shift+Tab snap cycle, Ctrl+Insert without a
     /// time selection, Ctrl+P / Ctrl+Shift+P switch performance mode, F5 raises, the view saved in the project (event 242).
@@ -20362,7 +20362,7 @@ mod tests {
         // The group survives saving.
         let path = std::env::temp_dir().join(format!("openstudio-pl-groups-{}.flp", std::process::id()));
         app.save_to(path.clone());
-        let back = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let back = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
         let saved: Vec<u16> = back.arrangement().unwrap().clips.iter().map(|c| c.group()).collect();
         assert_eq!(saved.iter().filter(|&&g| g == orig.group()).count(), 2, "{saved:?}");
@@ -20496,7 +20496,7 @@ mod tests {
         app.state.playlist_scroll = (180.0, 24.0);
         let path = std::env::temp_dir().join(format!("openstudio-pl-view-{}.flp", std::process::id()));
         app.save_to(path.clone());
-        let back = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let back = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let v = back.playlist_view.expect("view saved");
         assert_eq!((v.row_px(), v.height(), v.scroll_y()), (60, 22, 24));
         assert!((v.ticks_per_px() - f64::from(bar) / 90.0).abs() < 1e-9 && (v.left() - 180.0 * f64::from(bar) / 90.0).abs() < 1e-6);
@@ -21185,7 +21185,7 @@ mod tests {
     }
 
     /// Every drop-down entry fits its row in this font: the label is not clipped and stops before its shortcut or its
-    /// ▸ (the columns are FL's widths, widened where an entry needs it; macOS test of #61: TOOLS > Change declicking
+    /// ▸ (the columns are the original's widths, widened where an entry needs it; macOS test of #61: TOOLS > Change declicking
     /// for selected channels to ▸ was cut at "channels t").
     #[test]
     fn menu_entries_fit_their_columns() {
@@ -21252,7 +21252,7 @@ mod tests {
         assert_ne!(second(&mut app, &mut c, long), empty, "the rest goes on the second line");
     }
 
-    /// The channel rack and time signatures (spec: ui/channel-rack.md §23, FL's numbers): the lit steps, the Auto
+    /// The channel rack and time signatures (spec: ui/channel-rack.md §23, the original's numbers): the lit steps, the Auto
     /// length and the mini roll's bars are the pattern's own bars; the step colour groups (a beat) and Set to ▸ N bars
     /// are the project's; a step past an explicit length grows it to the end of the pattern's bar holding it.
     #[test]
@@ -21727,7 +21727,7 @@ mod tests {
         // Saved and loaded back: the levels as the range, the LFO's fields as set.
         let path = std::env::temp_dir().join(format!("os_clip_lfo_{}.flp", std::process::id()));
         app.save_to(path.clone());
-        let back = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let back = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
         let bc = back.channels.iter().find(|x| x.index == ch.index).unwrap();
         assert_eq!((bc.pan, bc.volume), (-0.5, 1.0));
@@ -21738,7 +21738,7 @@ mod tests {
 
     /// ADD > Audio clip / Automation clip (spec: ui/add-clip-channels.md §3): the channel goes last, named and routed to
     /// the master, alone selected, into its filter group (made before Unsorted) with the filter on it, as the
-    /// playlist's clip source; its window opens; the automation clip has FL's default points and no target and saves
+    /// playlist's clip source; its window opens; the automation clip has the original's default points and no target and saves
     /// so; each add is one undo step. Layer stays greyed out.
     #[test]
     fn add_audio_and_automation_clip_channels() {
@@ -21793,7 +21793,7 @@ mod tests {
         // Saved as FL stores them: types 4 and 5, the groups before Unsorted, the automation's points and no link.
         let path = std::env::temp_dir().join(format!("os_add_clips_{}.flp", std::process::id()));
         app.save_to(path.clone());
-        let back = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let back = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(back.groups, ["Drums", "Audio", "Automation", os_model::UNSORTED_GROUP]);
         let kinds: Vec<_> = back.channels[5..].iter().map(|c| (c.kind, c.name.clone().unwrap_or_default(), c.rack.group)).collect();
@@ -21841,7 +21841,7 @@ mod tests {
         let ch = app.state.project.channels.last().unwrap();
         assert_eq!((ch.name.as_deref(), ch.layer_children.clone()), (Some("Layer #2"), vec![app.state.project.channels[n].index]));
         // The writer keeps it a layer with its children.
-        let back = os_flp::project::load(&os_flp::project::create(&app.state.project).unwrap()).unwrap();
+        let back = os_project::project::load(&os_project::project::create(&app.state.project).unwrap()).unwrap();
         let saved = back.channels.iter().find(|c| c.name.as_deref() == Some("Layer")).unwrap();
         assert_eq!((saved.kind, saved.layer_children.clone()), (ChannelKind::Layer, wanted));
         let undo = |app: &mut App| crate::playlist::run(app, crate::playlist::Cmd::Undo);
@@ -22038,7 +22038,7 @@ mod tests {
         // Saving keeps the methods.
         let path = std::env::temp_dir().join(format!("os-app-switch-{}.flp", std::process::id()));
         app.save_to(path.clone());
-        let back = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let back = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let clips: Vec<[u32; 4]> = back.channels.iter().filter(|c| c.kind == ChannelKind::AudioClip).map(|c| c.sound.stretch).collect();
         assert_eq!(clips, [[kept[0], kept[1], kept[2], sm::STRETCH_PRO as u32], [0, 0, 0, sm::E2_SPEECH as u32]]);
         let _ = (std::fs::remove_file(&path), std::fs::remove_file(&wav));
@@ -22123,7 +22123,7 @@ mod tests {
         // Saved with the pattern.
         let path = std::env::temp_dir().join(format!("os-app-timesig-{}.flp", std::process::id()));
         app.save_to(path.clone());
-        let back = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let back = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         assert_eq!(back.pattern(1).unwrap().markers, [want.clone(), TimeMarker::new(192, "Mid")]);
         let _ = std::fs::remove_file(&path);
         // Again, from the pattern menu: the conflict question; No leaves the marker.
@@ -22294,7 +22294,7 @@ mod tests {
     }
 
     /// The playlist's time markers (spec: ui/playlist.md §7a): the ▸ menu's Time markers items and the marker menus,
-    /// what they add, Move content (FL's measured case), the actions and the time signature dialog, Delete in the
+    /// what they add, Move content (the original's measured case), the actions and the time signature dialog, Delete in the
     /// time selection, undo, position order, the song position on a click and on opening.
     #[test]
     fn playlist_time_markers() {
@@ -22311,7 +22311,7 @@ mod tests {
             pl::arr_mut(&mut app.state).markers = list.iter().map(|&(p, k, n)| M { kind: k, ..M::new(p, n) }).collect();
         };
 
-        // The ▸ menu's submenu in FL's order; Add two... is greyed without a time selection, as in FL.
+        // The ▸ menu's submenu in the original's order; Add two... is greyed without a time selection, as in the original.
         let menu = pl::options_menu(&app.state, 0.0, 0.0);
         let sub = &menu.items.iter().find(|it| it.label == "Time markers").expect("Time markers").children;
         let want = [
@@ -22440,7 +22440,7 @@ mod tests {
         pl::load_view(&mut app.state);
         assert_eq!(app.state.playlist.pos, 768);
 
-        // Add two...: the base-name box, then FL's "<base> -  start" / "<base> -  end" (two spaces) at the time
+        // Add two...: the base-name box, then the original's "<base> -  start" / "<base> -  end" (two spaces) at the time
         // selection's ends (measured: bars 7 to 9 gave 2304 and 3072); one undo step.
         set(&mut app, &[]);
         app.state.playlist.range = Some((2304, 3072));
@@ -22468,7 +22468,7 @@ mod tests {
         frame(&mut app, &mut c, None);
     }
 
-    /// Add key marker ▸ (spec: ui/playlist.md §7a, flp/events/playlist.md "Key markers"): FL's two columns, a root
+    /// Add key marker ▸ (spec: ui/playlist.md §7a, flp/events/playlist.md "Key markers"): the original's two columns, a root
     /// that keeps the list open, and key markers at the song position with the events FL saved for them.
     #[test]
     fn playlist_key_markers() {
@@ -22509,7 +22509,7 @@ mod tests {
         let m = pl::markers(&app.state)[0].clone();
         assert_eq!((m.position, m.kind, m.name.as_str(), m.root, m.flag, m.scale_index, m.scale), (1536, M::KEY, "D Major (Ionian)", 2, 0, 0, 0x94A));
         assert_eq!(pl::key_items(&app.state)[18].mark, Mark::Check(true), "the scale added is checked");
-        // FL's saves, each marker's events 46, 45, 168 and 101.
+        // the original's saves, each marker's events 46, 45, 168 and 101.
         let ev = |root: u8, k: i32| {
             let m = M::key(0, root, k);
             (m.name, m.root, m.flag, m.scale_index, m.scale)
@@ -22826,7 +22826,7 @@ mod tests {
             std::fs::copy(&path, &keep).unwrap();
         }
         assert!(a.state.message.as_deref().is_some_and(|m| m.starts_with("Saved")), "{:?}", a.state.message);
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let r = crate::project_plugins::wrapped_channel(&saved.channels[row]).expect("a wrapped channel");
         assert_eq!((r.format.as_str(), r.id.as_str(), r.name.as_str()), ("vst2", a.plugins.descriptor(row).unwrap().id.as_str(), "Kars"));
         assert_eq!(r.state, ch_state);
@@ -22878,9 +22878,9 @@ mod tests {
         };
         assert_eq!(v.plugins.state(row), fresh, "Kars' copy starts from its defaults");
         // Saved untouched: the copies leave both wrappers as the file had them, so the VST2 plugins and their settings
-        // stay in the project (spec: flp/events/plugins.md §4).
+        // stay in the project (spec: project/events/plugins.md §4).
         let path2 = std::env::temp_dir().join(format!("lemon-vst2-copies-{}.flp", std::process::id()));
-        let reread = |p: &std::path::Path| os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(p).unwrap()).unwrap()).unwrap();
+        let reread = |p: &std::path::Path| os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(p).unwrap()).unwrap()).unwrap();
         let wrappers = |p: &os_model::Project| {
             let slot = p.mixer.iter().find(|m| m.index == track).and_then(|m| m.slots[0].clone());
             ((p.channels[row].plugin.clone(), p.channels[row].plugin_state.clone()), slot)

@@ -182,7 +182,7 @@ impl Plugin for LemonEq {
         true
     }
 
-    /// A new instance's state, with FL's silent buffers before a render already run (LIN starts at full level).
+    /// A new instance's state, with the original's silent buffers before a render already run (LIN starts at full level).
     fn reset(&mut self) {
         self.eq.reset();
         self.eq.preroll();

@@ -1304,8 +1304,8 @@ dependencies = [
 name = "flp-dump"
 version = "0.0.1"
 dependencies = [
- "os-flp",
  "os-model",
+ "os-project",
 ]
 
 [[package]]
@@ -3281,13 +3281,13 @@ dependencies = [
  "os-clap",
  "os-dsp",
  "os-engine",
- "os-flp",
  "os-host",
  "os-hostlink",
  "os-model",
  "os-native",
  "os-paths",
  "os-plugkit",
+ "os-project",
  "os-smf",
  "os-theme",
  "os-ui",
@@ -3350,15 +3350,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "os-flp"
-version = "0.0.1"
-dependencies = [
- "chrono",
- "os-model",
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "os-host"
 version = "0.0.1"
 dependencies = [
@@ -3412,7 +3403,7 @@ version = "0.0.1"
 dependencies = [
  "cpal",
  "os-engine",
- "os-flp",
+ "os-project",
 ]
 
 [[package]]
@@ -3436,12 +3427,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "os-project"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "os-model",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "os-render"
 version = "0.0.1"
 dependencies = [
  "os-engine",
- "os-flp",
  "os-model",
+ "os-project",
 ]
 
 [[package]]

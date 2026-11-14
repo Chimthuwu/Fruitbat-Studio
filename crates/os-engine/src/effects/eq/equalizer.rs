@@ -335,7 +335,7 @@ impl Equalizer {
     }
 
     /// The buffers of silence FL runs before a render: four of 2048 frames, five when LIN's `N` is 8192 or more, so
-    /// that LIN's first fade is over when the song starts and its blocks fall where FL's do. In the other modes
+    /// that LIN's first fade is over when the song starts and its blocks fall where the original's do. In the other modes
     /// silence does nothing (the gate closes on the first buffer).
     pub fn preroll(&mut self) {
         let buffers = if self.mode() == Mode::Lin && self.opts.lin_n(self.rate) >= 8192 { 5 } else { 4 };
@@ -505,7 +505,7 @@ mod tests {
     use super::*;
     use crate::effects::eq::{HIGH_PASS, HIGH_SHELF, LOW_SHELF};
 
-    /// FL's factory preset "Default" with band 4 at `level`, in the given options.
+    /// the original's factory preset "Default" with band 4 at `level`, in the given options.
     fn preset(level: i32) -> [i32; PARAMS] {
         let mut p = [0; PARAMS];
         let freqs = [10923, 18204, 25486, 32768, 40050, 47332, 54613];

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-// spec: flp/container.md (Conformance requirements, item 3)
+// spec: project/container.md (Conformance requirements, item 3)
 
 use crate::container::Tag;
 use crate::event::Kind;

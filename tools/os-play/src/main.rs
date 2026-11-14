@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! os-play: play an FLP project through the default audio output (WASAPI on Windows).
+//! os-play: play a legacy project project through the default audio output (WASAPI on Windows).
 //!
 //! Usage: os-play <project.flp> [--pattern N] [--factory DIR]
 
@@ -44,8 +44,8 @@ fn run() -> Result<(), String> {
     let input = input.ok_or("usage: os-play <project.flp> [--pattern N] [--factory DIR]")?;
 
     let bytes = std::fs::read(&input).map_err(|e| format!("{input}: {e}"))?;
-    let file = os_flp::FlpFile::parse(&bytes).map_err(|e| format!("{input}: {e}"))?;
-    let project = os_flp::project::load(&file).map_err(|e| format!("{input}: {e}"))?;
+    let file = os_project::FlpFile::parse(&bytes).map_err(|e| format!("{input}: {e}"))?;
+    let project = os_project::project::load(&file).map_err(|e| format!("{input}: {e}"))?;
 
     let host = cpal::default_host();
     let device = host.default_output_device().ok_or("no audio output device")?;

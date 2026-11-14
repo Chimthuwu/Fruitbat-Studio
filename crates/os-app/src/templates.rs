@@ -6,7 +6,7 @@
 //!
 //! The Default template is what FILE ▸ New gives (the FILE menu's first item names it, "New (<name>)"): the built-in
 //! "Empty" (`app::default_project`), or a template found in the `Templates` folder of Lemon Studio's user folder, laid
-//! out as FL's: a folder per category, holding a folder per template with `<name>.flp` in it. A template is opened as a
+//! out as the original's: a folder per category, holding a folder per template with `<name>.flp` in it. A template is opened as a
 //! project and the result is untitled; a picked template whose file has gone gives Empty. The pick is a program setting
 //! kept as free text (`prefs::text`): "Empty" or "<category>/<template>".
 //!
@@ -50,7 +50,7 @@ pub struct Category {
     pub templates: Vec<String>,
 }
 
-/// Template `name`'s file in category `cat`: `<name>.lemon`, else an existing `<name>.flp` (spec: flp/lemon-format.md
+/// Template `name`'s file in category `cat`: `<name>.lemon`, else an existing `<name>.flp` (spec: project/lemon-format.md
 /// "Templates").
 pub(crate) fn file_in(root: &Path, cat: &str, name: &str) -> PathBuf {
     let dir = root.join(cat).join(name);
@@ -381,7 +381,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The Startup project: exactly FL's three choices, Default template by default; the last used project is the file
+    /// The Startup project: exactly the original's three choices, Default template by default; the last used project is the file
     /// last opened or saved (not a backup copy); a missing one gives the default template (spec: as above).
     #[test]
     fn startup_project_choices() {

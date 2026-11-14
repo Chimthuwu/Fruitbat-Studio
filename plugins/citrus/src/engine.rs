@@ -28,7 +28,7 @@ pub struct NoteOn {
     pub levels: Levels,
     /// Velocity 0..1 (velocity / 128).
     pub velocity: f32,
-    /// Release velocity 0..1 (0.5 = FL's default of 64).
+    /// Release velocity 0..1 (0.5 = the original's default of 64).
     pub release: f32,
 }
 

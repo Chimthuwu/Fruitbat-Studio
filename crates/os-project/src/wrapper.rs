@@ -6,14 +6,14 @@
 //! third-party plugin (VST2, VST3, CLAP). A `u32` type, then `(u32 id, u64 size, bytes)` records. Unknown records
 //! are kept verbatim when a state is changed.
 //!
-// spec: flp/events/plugins.md §4
+// spec: project/events/plugins.md §4
 
 use os_model::PluginRef;
 
 /// The wrapper's internal name (event 201): a file-format identifier.
 pub const WRAPPER: &str = "Fruity Wrapper";
 
-/// Record ids (spec: flp/events/plugins.md §4).
+/// Record ids (spec: project/events/plugins.md §4).
 pub mod rec {
     /// MIDI settings: i32 input port, i32 output port, u32 pitch-bend range in semitones, ...
     pub const MIDI: u32 = 1;
@@ -30,7 +30,7 @@ pub mod rec {
     pub const NAME: u32 = 54;
     pub const PATH: u32 = 55;
     pub const VENDOR: u32 = 56;
-    /// A VST2 plugin's VST version (2400 in every VST2 wrapper state FL Studio wrote that has been seen).
+    /// A VST2 plugin's VST version (2400 in every VST2 wrapper state the original wrote that has been seen).
     pub const VST_VERSION: u32 = 57;
 }
 
@@ -110,7 +110,7 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 }
 
 /// The format of a wrapped plugin: by the file extension, else a VST2 id record = VST2, else a class-id record = VST3,
-/// else VST2. FL Studio 2026 keeps a 16-byte class-id record next to some VST2 plugins' id, so the id decides first
+/// else VST2. the original keeps a 16-byte class-id record next to some VST2 plugins' id, so the id decides first
 /// (spec: plugins.md §4).
 fn format_of(r: &Records, path: &str) -> &'static str {
     let lower = path.to_ascii_lowercase();
@@ -199,7 +199,7 @@ pub fn encode(base: Option<&[u8]>, p: &PluginRef) -> Vec<u8> {
 }
 
 /// The port of each input bus (record 31) in the plugin's bus order: the number of a track's input counted from 1, 0
-/// for none (spec: flp/events/plugins.md "FL 26's own VST3 wrapper"). Empty when the state has no audio ports.
+/// for none (spec: project/events/plugins.md "FL 26's own VST3 wrapper"). Empty when the state has no audio ports.
 pub fn input_ports(data: &[u8]) -> Vec<i32> {
     let Some(r) = Records::parse(data) else { return Vec::new() };
     r.get(rec::INPUTS).unwrap_or(&[]).chunks_exact(12).map(|e| i32::from_le_bytes([e[0], e[1], e[2], e[3]])).collect()
@@ -271,7 +271,7 @@ mod tests {
         assert_eq!(decode(&b), Some(v));
     }
 
-    /// The pitch-bend range is the MIDI record's third field (FL Studio's states hold 12 or 2).
+    /// The pitch-bend range is the MIDI record's third field (the original's states hold 12 or 2).
     #[test]
     fn bend_range_from_the_midi_record() {
         let midi = [(-1i32).to_le_bytes(), (-1i32).to_le_bytes(), 12u32.to_le_bytes(), [0; 4], [0; 4]].concat();
@@ -310,7 +310,7 @@ mod tests {
         assert_eq!(out.get(rec::STATE), Some(&[9; 7][..]));
     }
 
-    /// FL Studio keeps a VST2 plugin's unique id little-endian (TruePianos, `'4FTP'`, is stored `PTF4`).
+    /// the original keeps a VST2 plugin's unique id little-endian (TruePianos, `'4FTP'`, is stored `PTF4`).
     #[test]
     fn vst2_ids_are_stored_as_fl_studio_stores_them() {
         let p = PluginRef {
@@ -334,7 +334,7 @@ mod tests {
         assert_eq!(decode(&r.to_bytes()).unwrap().format, "vst3");
     }
 
-    /// FL Studio 2026 saved Krush (a VST2 plugin) with a 16-byte class-id record next to its VST2 id: still VST2. A
+    /// the original saved Krush (a VST2 plugin) with a 16-byte class-id record next to its VST2 id: still VST2. A
     /// class id without a VST2 id or a known extension is VST3.
     #[test]
     fn the_vst2_id_decides_before_a_class_id() {

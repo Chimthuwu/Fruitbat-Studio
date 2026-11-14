@@ -9,11 +9,11 @@
 //! - On: a random hue of the note-colour greens (80°–155°), drawn at saturation 0.20 and lightness 0.35; when the
 //!   theme gives `NoteColor0..15`, a random entry of that list instead, stored as given.
 //!
-//! Drawn, not stored: the measured values are channel buttons as FL's rack draws them, and Lemon Studio's rack draws a
+//! Drawn, not stored: the measured values are channel buttons as the original's rack draws them, and Lemon Studio's rack draws a
 //! stored colour mixed with the name button's face (`views::rack::NAME_MIX`). The colour stored is the one the Classic
 //! rack in its default palette (the stock Dark theme the values were measured in) draws at the measured values. Those
 //! land among the pastels FL stores for audio-clip channels (`ui/playlist.md` "Channel-colour rule": one component
-//! about 0x68, one about 0x7e), so the clips' title strips and waveforms look as FL's do.
+//! about 0x68, one about 0x7e), so the clips' title strips and waveforms look as the original's do.
 // spec: ui/settings-choices.md "Light mode and clip note colours (2026-10-16)", ui/flstheme.md §3 (OverrideClips)
 
 use os_model::Rgb;
@@ -299,7 +299,7 @@ mod tests {
     }
 
     /// The colour stored is the one the rack draws at the measured values: for the measured buttons it lands among
-    /// FL's stored audio-clip pastels (one component near 0x68, one near 0x7e).
+    /// the original's stored audio-clip pastels (one component near 0x68, one near 0x7e).
     #[test]
     fn stored_colours_draw_as_measured() {
         // Three measured "off" buttons (spec table): #57665d, #655856, #5e5565.

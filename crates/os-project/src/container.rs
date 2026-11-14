@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-// spec: flp/container.md (Chunks; FLhd payload; FLdt payload; Conformance requirements)
+// spec: project/container.md (Chunks; FLhd payload; FLdt payload; Conformance requirements)
 
 use std::fmt;
 
@@ -80,7 +80,7 @@ pub struct Chunk {
     pub body: ChunkBody,
 }
 
-/// A whole FLP file: chunks in file order plus any trailing bytes too short to be a chunk.
+/// A whole legacy project file: chunks in file order plus any trailing bytes too short to be a chunk.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FlpFile {
     pub chunks: Vec<Chunk>,

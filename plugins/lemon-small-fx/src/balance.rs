@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Balance: Lemon Studio's balance (a recreation of FL's Fruity Balance) as a plugin. The sound is
+//! Lemon Balance: Lemon Studio's balance (a recreation of the original's Fruity Balance) as a plugin. The sound is
 //! `os_engine::effects::balance`; the editor has the two knobs on one card and the two outputs' levels in a well.
 //!
 // spec: plugins/lemon-balance.md, plugins/fruity-balance.md

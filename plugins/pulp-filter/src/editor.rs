@@ -410,7 +410,7 @@ impl Logic {
         }
     }
 
-    /// The hint of a target: FL's measured hints (`Name: value`), the Lemon Studio choices where FL's were not read
+    /// The hint of a target: the original's measured hints (`Name: value`), the Lemon Studio choices where the original's were not read
     /// (plugins/lemon-pulp-filter.md §3).
     fn hint_for(&self, t: Option<&Target>) -> String {
         let f = self.f();
@@ -1389,7 +1389,7 @@ mod tests {
         crate::state_of(&l.params.state.read().unwrap().0)
     }
 
-    /// The knobs, sliders and switches sit in FL's arrangement on the 6 px grid (plugins/lemon-pulp-filter.md §2).
+    /// The knobs, sliders and switches sit in the original's arrangement on the 6 px grid (plugins/lemon-pulp-filter.md §2).
     #[test]
     fn controls_sit_on_the_grid() {
         let l = logic();

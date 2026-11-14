@@ -6,7 +6,7 @@
 // spec: ui/channel-rack.md §5 (name button). FL shows the generator plugin's own window here; until
 // plugins have editors Lemon Studio shows a plain settings window for the channel (Lemon Studio layout).
 // An automation clip's window adds its range and its LFO (audio/automation.md "Range", "The LFO"; no page measures
-// FL's automation clip window, so the layout is Lemon Studio's own).
+// the original's automation clip window, so the layout is Lemon Studio's own).
 
 use os_model::ChannelKind;
 use os_ui::{Font, Rect};

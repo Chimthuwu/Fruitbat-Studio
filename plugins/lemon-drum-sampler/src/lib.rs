@@ -42,7 +42,7 @@ pub struct Shared {
 }
 
 impl Shared {
-    /// The file layer `n` (state order) of stored path `stored` opens: the host's, else the stored one with FL's
+    /// The file layer `n` (state order) of stored path `stored` opens: the host's, else the stored one with the original's
     /// placeholders made real where the factory data is found.
     pub fn file_for(params: &DrumParams, n: usize, stored: &str) -> String {
         let given = params.given_path(n);

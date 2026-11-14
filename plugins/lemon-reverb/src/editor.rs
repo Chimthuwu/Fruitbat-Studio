@@ -1053,7 +1053,7 @@ mod tests {
         save(&mut l, "reverb_default", 1.0);
         save(&mut l, "reverb_default_x2", 2.0);
         l.hint.clear();
-        // FL's The Venue preset.
+        // the original's The Venue preset.
         for (id, v) in [("lcut", 400), ("hcut", 60), ("delay", 31), ("size", 60), ("diff", 65), ("dec", 23), ("damp", 37), ("bass", 70), ("cross", 330), ("wet", 102)] {
             l.vals.edit_plain(id, v as f32);
         }

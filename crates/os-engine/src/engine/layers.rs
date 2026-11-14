@@ -4,7 +4,7 @@
 
 //! Layer channels: which children get a layer's note, at what crossfade gain, and the project's random generator
 //! that the random mode draws from.
-// spec: audio/note-rules.md "Layer channels", audio/channel-misc.md "FL's random generator"
+// spec: audio/note-rules.md "Layer channels", audio/channel-misc.md "the original's random generator"
 
 use os_model::{Channel, LayerSettings};
 
@@ -36,7 +36,7 @@ impl Mt19937 {
     }
 
     /// The generator as a render starts it: seeded, with one output taken before the song begins (spec:
-    /// audio/channel-misc.md "FL's random generator").
+    /// audio/channel-misc.md "the original's random generator").
     pub fn for_playback() -> Mt19937 {
         let mut g = Mt19937::new(Mt19937::SEED);
         g.next_u32();

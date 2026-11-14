@@ -23,10 +23,10 @@ use os_ui::{Canvas, Color, Font, Rect};
 
 use crate::params::{self, note_name, KEY_MAX};
 
-/// Painted size in logical pixels (FL's window minus its title bar).
+/// Painted size in logical pixels (the original's window minus its title bar).
 pub const W: u32 = 568;
 pub const H: u32 = 442;
-/// The editor the host shows: the painted area without FL's 4 px frame (the host draws its own frame around it,
+/// The editor the host shows: the painted area without the original's 4 px frame (the host draws its own frame around it,
 /// spec: ui/plugin-window.md), i.e. `W x H` cropped at (`CROP_X`, `CROP_Y`).
 pub const CROP_X: u32 = 4;
 pub const CROP_Y: u32 = 1;
@@ -37,7 +37,7 @@ pub const HOSTED_CROP_Y: u32 = CROP_Y + STRIP_ROWS;
 pub const HOSTED_EDITOR_H: u32 = EDITOR_H - STRIP_ROWS;
 /// Height of the tab strip row the host draws instead (FL y 25..71).
 pub const STRIP_ROWS: u32 = 47;
-/// Height of FL's title bar, which the host draws instead.
+/// Height of the original's title bar, which the host draws instead.
 pub const OY: f32 = 24.0;
 
 /// Sample-page accent (knob rings, page icons).
@@ -1452,7 +1452,7 @@ fn hand_keyboard(ui: &mut Ui, root: i32) {
 // ---------------------------------------------------------------------------------------------------------------
 // Hints
 
-/// FL's hint label of a parameter (the text before ": value").
+/// the original's hint label of a parameter (the text before ": value").
 pub fn hint_label(id: &str) -> Option<&'static str> {
     let suffix = if id.starts_with("env") { id.split_once('_').map_or(id, |(_, s)| s) } else { id };
     Some(match suffix {

@@ -2,15 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-// spec: flp/layouts.md "Checked against FL"
+// spec: project/layouts.md "Checked against FL"
 //
-// Older project files against their resaves by FL 26 (OPENSTUDIO_FLP_PAIRS: a text file of lines `original<TAB>resave`;
+// Older project files against their resaves by version 26 (OPENSTUDIO_legacy project_PAIRS: a text file of lines `original<TAB>resave`;
 // the files are never committed). Both are read; the original through its conversion to the current layout. They
 // should give the same project, apart from what FL itself changes in a resave (flp/layouts.md lists it): the parts
 // compared here leave those out, and the test reports how many pairs agree in each.
 
-use os_flp::FlpFile;
-use os_flp::project::{apply, load, upgrade};
+use os_project::FlpFile;
+use os_project::project::{apply, load, upgrade};
 use os_model::{ClipSource, Project};
 
 fn pairs() -> Option<Vec<(String, String)>> {

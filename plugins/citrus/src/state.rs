@@ -71,7 +71,7 @@ impl Default for Articulator {
 }
 
 impl Articulator {
-    /// The articulator a state lacks (Lemon Studio choice; FL's own defaults were not measured): envelope and LFO off,
+    /// The articulator a state lacks (Lemon Studio choice; the original's own defaults were not measured): envelope and LFO off,
     /// every map flat at its default level (1 on product articulators, 0.5 on bipolar ones), so it takes no part.
     pub fn neutral(module: usize, art: usize) -> Self {
         let level = if crate::patch::bipolar(module, art) { 0.5 } else { 1.0 };
@@ -658,7 +658,7 @@ fn read_articulator(r: &mut Reader) -> Option<Articulator> {
 mod tests {
     use super::*;
 
-    /// FL's Sytrus factory presets (FL's install, when present).
+    /// the original's Sytrus factory presets (the original's install, when present).
     fn factory_states() -> Vec<(std::path::PathBuf, Vec<u8>)> {
         fn walk(dir: &std::path::Path, out: &mut Vec<(std::path::PathBuf, Vec<u8>)>) {
             let Ok(rd) = std::fs::read_dir(dir) else { return };
@@ -740,7 +740,7 @@ mod tests {
         assert_eq!((edited.s[8], edited.cell(0, COL_OUT)), (3, 0));
     }
 
-    /// The factory Default preset (FL's install, when present) reads to its last module.
+    /// The factory Default preset (the original's install, when present) reads to its last module.
     #[test]
     fn reads_the_default_preset() {
         let path = r"C:\Program Files\Image-Line\FL Studio 2026\Plugins\Fruity\Generators\Sytrus\Data\Default.dat";

@@ -3,16 +3,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-// spec: flp/events/*.md
+// spec: project/events/*.md
 //
-// Typed-model tests over the corpus (OPENSTUDIO_FLP_CORPUS, see corpus.rs):
+// Typed-model tests over the corpus (OPENSTUDIO_legacy project_CORPUS, see corpus.rs):
 // 1. load → apply (no edits) → bytes identical to the input (a file of an older generation: to its conversion to the
 //    current layout, which must itself load and re-serialize);
 // 2. edits survive apply → to_bytes → parse → load;
 // 3. structural sanity (channel count matches the header, notes sorted, …).
 
-use os_flp::FlpFile;
-use os_flp::project::{apply, is_legacy, load, upgrade};
+use os_project::FlpFile;
+use os_project::project::{apply, is_legacy, load, upgrade};
 use os_model::Rgb;
 
 fn corpus() -> Option<Vec<String>> {
@@ -39,7 +39,7 @@ fn unedited_model_round_trips_and_is_sane() {
     for path in &paths {
         let mut bytes = std::fs::read(path).unwrap();
         let mut file = FlpFile::parse(&bytes).unwrap();
-        // An older generation's file is converted as the app converts it on opening (spec: flp/layouts.md).
+        // An older generation's file is converted as the app converts it on opening (spec: project/layouts.md).
         if file.events().next().is_some() && is_legacy(&file.events().cloned().collect::<Vec<_>>()) {
             legacy += 1;
             if let Err(e) = upgrade(&mut file) {
@@ -48,7 +48,7 @@ fn unedited_model_round_trips_and_is_sane() {
             }
             bytes = file.to_bytes().unwrap();
             let again = FlpFile::parse(&bytes).unwrap();
-            let issues = os_flp::check_alignment(&again);
+            let issues = os_project::check_alignment(&again);
             if !issues.is_empty() {
                 failures.push(format!("{path}: converted file misaligned: {issues:?}"));
             }
@@ -150,7 +150,7 @@ fn edits_survive_a_write_read_cycle() {
     eprintln!("{checked} FL 26 files: edits survived write/read");
 }
 
-/// Playlist edits (spec: flp/events/playlist.md, automation.md): clips moved, muted, trimmed, copied, deleted;
+/// Playlist edits (spec: project/events/playlist.md, automation.md): clips moved, muted, trimmed, copied, deleted;
 /// markers added; automation points changed; a new automation channel. Everything reads back.
 #[test]
 fn playlist_edits_survive() {
@@ -166,7 +166,7 @@ fn playlist_edits_survive() {
         let bytes = opened(path);
         let mut file = FlpFile::parse(&bytes).unwrap();
         let Ok(mut project) = load(&file) else { continue };
-        // FL 24.2 and 25 files too: their clip records are 80 bytes (spec: flp/layouts.md).
+        // FL 24.2 and 25 files too: their clip records are 80 bytes (spec: project/layouts.md).
         if !matches!(project.saved_by.split('.').next(), Some("24" | "25" | "26")) || project.arrangements.first().is_none_or(|a| a.clips.len() < 3) {
             continue;
         }
@@ -198,7 +198,7 @@ fn playlist_edits_survive() {
         ch.sample_path = None;
         ch.layer_children.clear();
         project.channels.push(ch);
-        project.automations.push(os_flp::project::new_automation(next, os_model::target::channel(0, 1), 0.5, 16.0));
+        project.automations.push(os_project::project::new_automation(next, os_model::target::channel(0, 1), 0.5, 16.0));
 
         apply(&project, &mut file).unwrap_or_else(|e| panic!("{path}: {e}"));
         let reread = load(&FlpFile::parse(&file.to_bytes().unwrap()).unwrap()).unwrap();
@@ -212,7 +212,7 @@ fn playlist_edits_survive() {
     eprintln!("{checked} files: playlist edits survived");
 }
 
-/// Control points (event 223, spec: flp/events/patterns.md): adding, rewriting and removing them
+/// Control points (event 223, spec: project/events/patterns.md): adding, rewriting and removing them
 /// leaves the notes alone, and removing them again restores the original bytes.
 #[test]
 fn control_points_survive_edits() {
@@ -278,7 +278,7 @@ fn channel_envelopes_decode() {
     assert!(vol_on > 50 && pitch_on > 5, "volume {vol_on}, pitch {pitch_on}");
 }
 
-/// Patterns that have no blocks yet gain note, control and metadata blocks (spec: flp/events/patterns.md,
+/// Patterns that have no blocks yet gain note, control and metadata blocks (spec: project/events/patterns.md,
 /// "Where blocks go"): the new patterns read back as written, the others stay as they were, and the blocks keep the
 /// order FL writes them in (note blocks ascending before the first channel, metadata after the first channel).
 #[test]
@@ -327,7 +327,7 @@ fn new_pattern_blocks_are_added() {
         }
         // Order: pattern note blocks ascend and stay before the first channel.
         let events = file2.chunks.iter().find_map(|c| match &c.body {
-            os_flp::ChunkBody::Events(e) => Some(e),
+            os_project::ChunkBody::Events(e) => Some(e),
             _ => None,
         });
         if let Some(ev) = events {
@@ -346,7 +346,7 @@ fn new_pattern_blocks_are_added() {
     eprintln!("{checked} files: new pattern blocks added");
 }
 
-/// Manual helper: `OS_IN=a.flp OS_OUT=b.flp cargo test -p os-flp --test integration -- --ignored new_pattern_file`
+/// Manual helper: `OS_IN=a.flp OS_OUT=b.flp cargo test -p os-project --test integration -- --ignored new_pattern_file`
 /// writes `a.flp` with two new patterns (notes, points, name, colour) so FL can be asked to open it.
 #[test]
 #[ignore]
@@ -377,7 +377,7 @@ fn settled(mut p: os_model::Project) -> os_model::Project {
     p
 }
 
-/// Channel rack settings written into every FL 26 file read back (spec: flp/events/project-info.md, channels.md,
+/// Channel rack settings written into every version 26 file read back (spec: project/events/project-info.md, channels.md,
 /// patterns.md): swing, a new filter group, lock, zip, an explicit length and loop lengths.
 #[test]
 fn rack_settings_survive() {
@@ -411,20 +411,20 @@ fn rack_settings_survive() {
     assert!(checked > 40, "only {checked} files checked");
 }
 
-/// Project info edited in every file (spec: flp/events/project-info.md): each field changed, or set where the file has
+/// Project info edited in every file (spec: project/events/project-info.md): each field changed, or set where the file has
 /// none (comments and URL are missing in many), reads back with nothing else changed. A file whose information events
-/// stand in FL's order (spec: flp/engine-events.md "Order in the file": 194, 206, 207, 167, 202, 195, 197, 237) keeps
+/// stand in the original's order (spec: project/engine-events.md "Order in the file": 194, 206, 207, 167, 202, 195, 197, 237) keeps
 /// it.
 #[test]
 fn project_info_edits_survive() {
     let Some(paths) = corpus() else { return };
-    // Where each of the information events first stands, in FL's order: whether they ascend.
+    // Where each of the information events first stands, in the original's order: whether they ascend.
     let fl_order = |file: &FlpFile| {
         let ev = file
             .chunks
             .iter()
             .find_map(|c| match &c.body {
-                os_flp::ChunkBody::Events(e) => Some(e),
+                os_project::ChunkBody::Events(e) => Some(e),
                 _ => None,
             })
             .unwrap();
@@ -480,7 +480,7 @@ fn mixer_switches_and_main_values_survive() {
     assert!(checked > 40, "only {checked} files checked");
 }
 
-/// Restructured channels in every FL 26 file (spec: flp/events/channels.md "Deleting, cloning and moving"):
+/// Restructured channels in every version 26 file (spec: project/events/channels.md "Deleting, cloning and moving"):
 /// swapping the first two channels writes the swapped model, swapping back gives the original bytes; deleting
 /// the second channel and cloning the first reads back as the model.
 #[test]
@@ -522,7 +522,7 @@ fn restructured_channels_survive() {
     assert!(checked > 50, "only {checked} files checked");
 }
 
-/// Mixer slot plugin states written into every FL 26 file read back (spec: flp/events/mixer.md "Slot sub-block"):
+/// Mixer slot plugin states written into every version 26 file read back (spec: project/events/mixer.md "Slot sub-block"):
 /// each effect state gets a changed last byte and one extra byte, and reads back so.
 #[test]
 fn slot_plugin_states_survive() {
@@ -546,13 +546,13 @@ fn slot_plugin_states_survive() {
         apply(&project, &mut file).unwrap_or_else(|e| panic!("{path}: {e}"));
         let back = load(&FlpFile::parse(&file.to_bytes().unwrap()).unwrap()).unwrap();
         assert_eq!(back, project, "{path}");
-        assert!(os_flp::project::unsaved_parts(&project, &file).is_empty(), "{path}");
+        assert!(os_project::project::unsaved_parts(&project, &file).is_empty(), "{path}");
         checked += 1;
     }
     assert!(checked > 20, "only {checked} files checked");
 }
 
-/// Plugin channel states (event 213, spec: flp/events/plugins.md) written into every FL 26 file read back, and a new
+/// Plugin channel states (event 213, spec: project/events/plugins.md) written into every version 26 file read back, and a new
 /// wrapped plugin channel appended to each file reads back with its plugin and state.
 #[test]
 fn plugin_channel_states_survive() {
@@ -578,7 +578,7 @@ fn plugin_channel_states_survive() {
         ch.index = project.channels.len() as u16;
         ch.kind = ChannelKind::Plugin;
         ch.name = Some("Hosted synth".into());
-        ch.plugin = Some(os_flp::wrapper::WRAPPER.into());
+        ch.plugin = Some(os_project::wrapper::WRAPPER.into());
         ch.sample_path = None;
         ch.layer_children.clear();
         ch.envelopes = Default::default();
@@ -597,20 +597,20 @@ fn plugin_channel_states_survive() {
             state: vec![1, 2, 3],
             ..Default::default()
         };
-        ch.plugin_state = Some(os_flp::wrapper::encode(None, &p));
+        ch.plugin_state = Some(os_project::wrapper::encode(None, &p));
         project.channels.push(ch);
         apply(&project, &mut file).unwrap_or_else(|e| panic!("{path}: {e}"));
         let back = load(&FlpFile::parse(&file.to_bytes().unwrap()).unwrap()).unwrap();
         let want = settled(project);
         assert_eq!(back.channels, want.channels, "{path}");
         let last = back.channels.last().unwrap();
-        assert_eq!(os_flp::wrapper::decode(last.plugin_state.as_deref().unwrap()), Some(p), "{path}");
+        assert_eq!(os_project::wrapper::decode(last.plugin_state.as_deref().unwrap()), Some(p), "{path}");
         checked += 1;
     }
     assert!(checked > 20, "only {checked} files checked");
 }
 
-/// Mixer slot edits in every FL 26 file (spec: flp/events/plugins.md §2-5): slot plugins moved within a track and to
+/// Mixer slot edits in every version 26 file (spec: project/events/plugins.md §2-5): slot plugins moved within a track and to
 /// another track, one removed, one added, LEDs and mix levels changed. Everything reads back; moving the plugins
 /// back and restoring the LEDs gives the original bytes.
 #[test]
@@ -662,14 +662,14 @@ fn slot_edits_survive() {
         apply(&edited, &mut file).unwrap_or_else(|e| panic!("{path}: {e}"));
         let back = load(&FlpFile::parse(&file.to_bytes().unwrap()).unwrap()).unwrap();
         assert_eq!(back.mixer, edited.mixer, "{path}");
-        assert!(os_flp::project::unsaved_parts(&edited, &file).is_empty(), "{path}");
+        assert!(os_project::project::unsaved_parts(&edited, &file).is_empty(), "{path}");
         checked += 1;
     }
     assert!(checked > 20, "only {checked} files checked");
 }
 
 /// Mixer tracks added before the last ("current") track: the old tracks and the current track read back unchanged,
-/// the new tracks are default inserts that take edits (spec: flp/events/mixer.md "Adding tracks").
+/// the new tracks are default inserts that take edits (spec: project/events/mixer.md "Adding tracks").
 #[test]
 fn added_mixer_tracks_survive() {
     use os_model::MixerTrack;
@@ -704,7 +704,7 @@ fn added_mixer_tracks_survive() {
 fn slot_records(file: &FlpFile) -> Vec<((u32, u32), Vec<u8>)> {
     let le = |d: &[u8], at: usize| u32::from_le_bytes(d[at..at + 4].try_into().unwrap());
     let events = file.chunks.iter().find_map(|c| match &c.body {
-        os_flp::ChunkBody::Events(e) => Some(e),
+        os_project::ChunkBody::Events(e) => Some(e),
         _ => None,
     });
     let Some(ev) = events else { return Vec::new() };
@@ -722,7 +722,7 @@ fn slot_records(file: &FlpFile) -> Vec<((u32, u32), Vec<u8>)> {
 
 /// Mixer tracks moved and deleted as the Mixer window does it take their effect slots with them: each slot's window
 /// record follows its track with the new track number, a deleted track's go, and the current track keeps its own as
-/// track 501 (spec: flp/events/mixer.md "Removing tracks", "The last track").
+/// track 501 (spec: project/events/mixer.md "Removing tracks", "The last track").
 #[test]
 fn renumbered_mixer_tracks_survive() {
     use os_model::MixerTrack;
@@ -812,7 +812,7 @@ fn renumbered_mixer_tracks_survive() {
 }
 
 /// Every automation link (event 227 with a zero first field) is read into its clip's targets in file order, and a
-/// changed order is written over the same links (spec: flp/events/automation.md "Event 227").
+/// changed order is written over the same links (spec: project/events/automation.md "Event 227").
 #[test]
 fn every_automation_link_is_read() {
     let Some(paths) = corpus() else { return };

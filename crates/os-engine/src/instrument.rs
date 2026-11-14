@@ -88,7 +88,7 @@ pub trait Instrument: Send {
     fn tune(&mut self, offset: u32, key: u8, semitones: f32) {
         let _ = (offset, key, semitones);
     }
-    /// The pitch-bend range (semitones) the plugin wrapper keeps for the plugin (spec: flp/events/plugins.md, record
+    /// The pitch-bend range (semitones) the plugin wrapper keeps for the plugin (spec: project/events/plugins.md, record
     /// 1): an instrument that cannot take a note's tuning plays `tune` as MIDI pitch bend scaled by it ([`TuningBend`]).
     /// Default: ignored.
     fn set_bend_range(&mut self, semitones: u32) {
@@ -309,7 +309,7 @@ impl TransportInfo {
     }
 }
 
-/// The pitch-bend range a plugin is given when its wrapper keeps none: 12 semitones, what FL Studio's wrapper stores
+/// The pitch-bend range a plugin is given when its wrapper keeps none: 12 semitones, what the original's wrapper stores
 /// for new plugins.
 pub const DEFAULT_BEND_RANGE: u32 = 12;
 

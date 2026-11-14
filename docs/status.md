@@ -194,21 +194,21 @@ clicking it does nothing. The full, item-by-item roadmap lives on the
   the parameter's automation clip, link a controller, copy, paste, type in or set a value (a submenu of its steps, or
   its default and minimum to maximum), remove an initial value read from a file
 - Not yet in the parameter menu: Init song with this position on a plugin parameter
-- VST2 shells (one file offering several plugins); a VST2 plugin's state is saved in the layout FL Studio's projects use
+- VST2 shells (one file offering several plugins); a VST2 plugin's state is saved in the layout the original's projects use
 - A plugin that crashes is stopped (its slot passes the sound through) instead of closing Lemon Studio. On macOS
   and Linux this is new, and on macOS a crash in a plugin's editor still closes Lemon Studio
 - Not yet: 32-bit plugins, and Intel-only plugins on Apple silicon (they need a bridge)
 
 ## 🚧 Plugin delay compensation
 
-- The delay a plugin reports (CLAP, VST3, VST2 and FL Studio's native plugins), as an instrument or in a mixer
+- The delay a plugin reports (CLAP, VST3, VST2 and the original's native plugins), as an instrument or in a mixer
   slot, is made up on every other path through the mixer, sends and a slot's dry part included, so everything
   meets in time
 - An export starts late by the whole delay, so the file shows none and keeps its length; live playback skips the
   same amount, and the playhead follows what is heard
-- The mixer tracks' input and output latency settings are read from projects, count as FL Studio counts them, and
+- The mixer tracks' input and output latency settings are read from projects, count as the original counts them, and
   are saved back
-- Automation of a mixer track or slot behind late audio waits for it, as in FL Studio
+- Automation of a mixer track or slot behind late audio waits for it, as in the original
 - A sidechain input waits for the slot it feeds, so it lines up with the audio there
 - Mixer options ▸ Plugin delay compensation ▸ Automatic (on): unticked, plugins' delays are no longer made up, while
   the tracks' latency settings still are. Saved in `.lemon` projects
@@ -397,13 +397,13 @@ and Touch controller. Kept with the program's settings, not the project. Which w
   mixer's Plugin delay compensation ▸ Automatic and View ▸ checks, plugin windows' Scaling ▸, the channels' waveform
   preview and MIDI channel through checks, the plugins' keyboard focus, the playlist tracks' locks and the channels'
   Receive notes from ▸ locks; saving to a `.flp` name leaves them out). The original is not expected to open them
-- Opens `.lemon` files and `.flp` projects saved by FL Studio 24.2 and later, 25 and 26 included. A project opened
+- Opens `.lemon` files and `.flp` projects saved by the original 24.2 and later, 25 and 26 included. A project opened
   from an FLP is never saved over: Save asks for a name, offering the FLP's name with `.lemon`. Backups, new versions,
   templates and zipped projects are `.lemon` too; FLP backups and templates still open. General ▸ System ▸
   Associate project files covers `.lemon` along with `.flp`. An opened FLP shows its channels' and mixer tracks' icons
   where Lemon Studio has the same picture (drum, keys, microphone, wave, note, speaker, plug; the others show none);
   a `.lemon` save keeps the FLP's icon numbers and stores the icons shown beside them
-- Projects saved by FL Studio 10 to 24.1 open too: they are converted to the current layout as they open (channel
+- Projects saved by the original 10 to 24.1 open too: they are converted to the current layout as they open (channel
   blocks, step sequencer dots as notes, playlist clip and track records, mixer places, send levels and slot
   markers, a 105-track mixer grown to 127) and are saved in that layout, as the original does with an older file.
   Fruity effects that an old project hosts through the plugin wrapper stay wrapped, and a 3x Osc saved before FL
@@ -447,18 +447,18 @@ and Touch controller. Kept with the program's settings, not the project. Which w
 - Lemon Soft Clipper, Lemon Fast Distortion, Lemon Balance, Lemon Stereo Enhancer, Lemon Transient Processor, Lemon
   Chorus and Lemon Stereo Shaper as VST3 and CLAP plugins; a project's Fruity Soft Clipper, Fruity Fast Dist, Fruity
   Balance, Fruity Stereo Enhancer, Transient Processor, Fruity Chorus and Fruity Stereo Shaper play through the same
-  sound in the mixer. Six match FL Studio 2026's exports sample for sample in the tests; the Chorus, with the true pi
+  sound in the mixer. Six match the original's exports sample for sample in the tests; the Chorus, with the true pi
   where the original's is a hair off, in 10 of 21 cases and the rest at least 37 dB below the test signal (once each
   export's LFO start phases are known: the original draws them anew for every render)
 - Lemon Filter (Fruity Filter: a resonant low, band and high pass mix, X 2 and the DC remover) as a VST3 and CLAP
   plugin, with its response drawn in the editor; a project's Fruity Filter slots play through the same sound, which
-  matches FL Studio 2026's exports in the tests (10 of 13 cases sample for sample, the rest below -180 dB)
+  matches the original's exports in the tests (10 of 13 cases sample for sample, the rest below -180 dB)
 - Pulp Filter (Fruity Love Philter: a pattern-controlled multi-filter) and Press (Maximus: a multiband maximiser) as
   VST3 and CLAP plugins; a project's Fruity Love Philter and Maximus slots play and open in them, and are saved back
   as the original effects with their state
 - Lemon Flanger and Lemon Phaser as VST3 and CLAP plugins, each with the original's 27 presets as factory presets; a
   project's Fruity Flanger and Fruity Phaser play through the same sound in the mixer. Their sine waves use the true
-  pi, where the original's is a hair off: the flanger still matches FL Studio 2026's exports sample for sample in the
+  pi, where the original's is a hair off: the flanger still matches the original's exports sample for sample in the
   tests (36 cases), the phaser in 11 of 35 and the rest at least 86 dB below the test signal; the phaser's LFO starts
   as after 512 idle frames, one of the two starts (512 or 1024) FL's exports make
 - Vocoder: Lemon Vocoder (VST3 and CLAP, Pith editor) is a band vocoder with a sidechain input: the voice on the
@@ -466,22 +466,22 @@ and Touch controller. Kept with the program's settings, not the project. Which w
   unchanged. It plays the wet level, the pass-throughs, added noise, hold, attack and release (peak or RMS), band
   count, width and order; the original's built-in synth carrier, unison, pitch shift, contour and the band curves
   (other than where the bands start and end) are kept but not played. Its sound is Lemon Studio's own, not compared
-  with FL Studio's exports. Changing its input selectors reroutes the track only after the project is saved and
+  with the original's exports. Changing its input selectors reroutes the track only after the project is saved and
   opened again
 - Peak Controller: a project's Fruity Peak Controller slots open as Lemon Peak Controller (VST3 and CLAP, Pith editor)
   and save back unchanged; their controller links (kept byte for byte, formulas included) drive mixer volumes, pans,
-  sends and plugin parameters one tick late, as in the original, within the fader's resolution of FL Studio 2026's
+  sends and plugin parameters one tick late, as in the original, within the fader's resolution of the original's
   exports (93 cases). The link's smoothing is approximated; links can't be made or edited in the app yet, and the
   links of rack controllers (Envelope and Keyboard Controllers, Control Surface) are kept but not played
 - Drum sampler: a project's FPC channels open as Lemon Drum Sampler (VST3 and CLAP, Pith editor with the 4×4 pad
   grid, banks A and B, the chosen pad's and layer's key, cut groups, volume, pan and tune) with their pads and
   samples, and save back unchanged. It is in the generator list too. Pads play their layers by velocity through
   Lemon Sampler's voices with the original's level, pan and tune laws, cut groups, mute, solo and layers taking
-  turns, measured from FL Studio 2026's renders; a sample is loaded with LOAD or dropped on a pad. The pads'
+  turns, measured from the original's renders; a sample is loaded with LOAD or dropped on a pad. The pads'
   envelopes and the multi-output offsets are kept but not played, and the original's FPC presets aren't listed
 - Formula Controller: a project's Fruity Formula Controller slots open as Lemon Formula Controller (VST3 and CLAP,
   Pith editor with a formula field and its compile status) and save back with their knobs, formula and comments; the
-  formula is worked out once per tick and its controller links drive their targets, matching FL Studio 2026's
+  formula is worked out once per tick and its controller links drive their targets, matching the original's
   exports within the fader's resolution (158 cases: every function, the original's precedence and rounding rules). A
   formula that doesn't compile leaves its targets alone, as in the original. Rand and SeededRand use our own
   generators, Time counts from the program's start, Date is the UTC day and the mouse reads 0; the comments are kept
@@ -515,7 +515,7 @@ and Touch controller. Kept with the program's settings, not the project. Which w
 - WAV, AIFF and FLAC in; WAV out with Edison's chunks (markers, regions, loop), 24-bit too. Drag the sample or the
   selection out as a file, or send it to the playlist or the selected channel
 - A project's Edison slots open as Tesla with their audio, and are saved back as Edison so the file still opens in
-  FL Studio
+  the original
 - The toolbar's audio editor button and the mixer's Open audio editor show Tesla on the track; Open audio editor and
   record sets one up as an audio logger (records while the song plays, keeping the last 5 minutes); One-click audio
   recording and the Record button's question can record an input into the master track's Tesla; Remove all audio
@@ -649,7 +649,7 @@ and Touch controller. Kept with the program's settings, not the project. Which w
 - The mixer: faders (a drag is one step, a typed value too), polarity and swap buttons, the equaliser graph,
   routing, colours, names, resets, effect slots (adding, removing, moving, naming, their lights, sidechain inputs),
   audio inputs and outputs, record source, monitoring, latency settings, and adding, moving, deleting and trimming
-  tracks. A track's mute and solo make no step, as in FL Studio
+  tracks. A track's mute and solo make no step, as in the original
 - The channel rack: generators added, at the bottom or inserted higher up (the plugin picker, F8, ADD, Insert, a
   browser drop; undone, the instance is kept and comes back with a redo), Replace (with the old instrument's state),
   colours, names, cloning, moving, sorting, deleting (with notes, clips and the instruments'

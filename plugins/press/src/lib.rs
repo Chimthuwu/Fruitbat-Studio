@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Press: Lemon Studio's multiband maximiser (a recreation of FL's Maximus) as a VST3 / CLAP plugin (nih-plug). The
+//! Press: Lemon Studio's multiband maximiser (a recreation of the original's Maximus) as a VST3 / CLAP plugin (nih-plug). The
 //! sound is `os_engine::effects::maximus`; a project's or preset's state is loaded as it is stored, and the editor
 //! edits that state.
 //!

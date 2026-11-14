@@ -176,7 +176,7 @@ pub enum MCmd {
     CablePhysics,
     /// General settings ▸ Animations: simulate the cables (true) or hang them still; kept for the next start.
     Animations(bool),
-    /// Open audio editor: Tesla on this track (Tesla's own, as FL's Edison).
+    /// Open audio editor: Tesla on this track (Tesla's own, as the original's Edison).
     AudioEditor(u16),
     /// Open audio editor and record: a Tesla on this track set up as an audio logger.
     AudioEditorRecord(u16),
@@ -554,7 +554,7 @@ pub fn level_text(label: &str, v: f64) -> String {
 }
 
 /// "Stereo separation: Original" / "40% separated" / "40% merged" (§4). A positive stored value merges towards mono
-/// (spec: audio/mixer.md "Fader matrix"); which way FL's knob turns for it is not checked.
+/// (spec: audio/mixer.md "Fader matrix"); which way the original's knob turns for it is not checked.
 pub fn sep_text(sep: f64) -> String {
     let pct = (sep.abs() * 100.0).round();
     if pct == 0.0 {
@@ -1653,7 +1653,7 @@ pub fn add_track(s: &mut State, at: Option<u16>) -> u16 {
     // The new track takes number n; n.. move one up (the hidden last track stays last).
     let len = s.project.mixer.len() as u16;
     s.project.mixer.push(MixerTrack::new(len));
-    // The hidden last track moves too, keeping what it had (spec: flp/events/mixer.md "Adding tracks").
+    // The hidden last track moves too, keeping what it had (spec: project/events/mixer.md "Adding tracks").
     shift_tracks(s, n, len, 1);
     let fresh = MixerTrack::new(n);
     if let Some(m) = track_mut(s, n) {
@@ -1764,7 +1764,7 @@ pub(crate) fn delete_track(s: &mut State, n: u16) -> Option<String> {
     }
     remap_slot_ui(s, |t, k| (t != n).then_some((t, k)));
     remap_track_ui(s, |t| (t != n).then_some(t));
-    // The hidden last track stays last; the default track comes before it (spec: flp/events/mixer.md "The last track").
+    // The hidden last track stays last; the default track comes before it (spec: project/events/mixer.md "The last track").
     let hidden = len - 1;
     let m = move |t: u16| if t > n && t < hidden { t - 1 } else { t };
     let old = s.project.mixer.clone();
@@ -2439,8 +2439,8 @@ pub fn inputs(s: &State, n: u16) -> Vec<u16> {
 /// Sidechain input ▸: "None" and the current track's inputs by name, the slot's choice marked.
 fn sidechain_items(s: &State, slot: u8) -> Vec<PItem> {
     let t = s.selected_mixer;
-    let now = track(s, t).and_then(|m| m.slots.get(usize::from(slot))?.as_ref()).filter(|p| p.name == os_flp::wrapper::WRAPPER).map_or(0, |p| {
-        os_flp::wrapper::input_ports(&p.state).get(1).map_or(0, |&p| p.max(0) as usize)
+    let now = track(s, t).and_then(|m| m.slots.get(usize::from(slot))?.as_ref()).filter(|p| p.name == os_project::wrapper::WRAPPER).map_or(0, |p| {
+        os_project::wrapper::input_ports(&p.state).get(1).map_or(0, |&p| p.max(0) as usize)
     });
     let mut items = vec![PItem::new("None", Cmd::Mixer(MCmd::SlotSidechain(slot, 0))).mark(Mark::Radio(now == 0))];
     for (i, n) in inputs(s, t).into_iter().enumerate() {
@@ -2958,7 +2958,7 @@ fn run_now(app: &mut App, c: MCmd) -> Option<String> {
             return None;
         }
         MCmd::Route { dst, only, side } => route(s, dst, only, side),
-        // FL's layouts only change how wide the strips are (Michael Lane Edition); the view keeps its place by starting
+        // the original's layouts only change how wide the strips are (Michael Lane Edition); the view keeps its place by starting
         // from the left edge again, as the strips' widths have all changed.
         MCmd::Layout(i) => {
             s.mixer.layout = i.min(LAYOUTS.len() as u8 - 1);
@@ -3333,7 +3333,7 @@ impl App {
         self.add_tesla(t, None);
     }
 
-    /// Open audio editor and record: a Tesla on track `t` set up as an audio logger, as FL's quick load sets Edison
+    /// Open audio editor and record: a Tesla on track `t` set up as an audio logger, as the original's quick load sets Edison
     /// (spec: plugins/tesla/README.md "Recording into Tesla from Lemon Studio"): records on the host's play, for 5
     /// minutes, appended, slaved to the transport, armed.
     pub(crate) fn audio_logger(&mut self, t: u16) {
@@ -4238,7 +4238,7 @@ mod tests {
     /// a wrapped plugin says so.
     #[test]
     fn sidechain_input_submenu() {
-        use os_flp::wrapper;
+        use os_project::wrapper;
         let mut a = app();
         select(&mut a.state, 1, false);
         track_mut(&mut a.state, 3).unwrap().routes = vec![1];
@@ -4397,12 +4397,12 @@ mod tests {
         assert!(!key(&mut a, &Key::Character("q".into()), true, false));
     }
 
-    /// Moved and deleted tracks take their effects to their new numbers through saves (spec: flp/events/mixer.md
+    /// Moved and deleted tracks take their effects to their new numbers through saves (spec: project/events/mixer.md
     /// "Removing tracks"): each slot's window record (event 212), marked here in the saved file with the track it was
     /// saved on, follows its track, and the slots read back where the tracks went.
     #[test]
     fn moved_tracks_keep_their_effects_in_the_file() {
-        use os_flp::{ChunkBody, FlpFile, Value};
+        use os_project::{ChunkBody, FlpFile, Value};
         use os_model::SlotPlugin;
         let mut a = app();
         (a.state.file, a.state.path) = (None, None);

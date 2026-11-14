@@ -2,25 +2,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! What a VST 2 instance saves: the state record FL Studio's plugin wrapper keeps for a VST 2 plugin, so a project's
-//! VST 2 plugins move between the two programs (spec: flp/events/plugins.md §4, "FL 26's own VST2 wrapper").
+//! What a VST 2 instance saves: the state record the original's plugin wrapper keeps for a VST 2 plugin, so a project's
+//! VST 2 plugins move between the two programs (spec: project/events/plugins.md §4, "FL 26's own VST2 wrapper").
 //!
 //! A 21-byte header: the 32-bit value -9, a kind byte, -2, the size of what follows, then two 32-bit values whose
-//! meaning is not known (written 0). Kind 12 or 13: the plugin's own chunk (`op::GET_CHUNK`) follows. FL Studio 2026
+//! meaning is not known (written 0). Kind 12 or 13: the plugin's own chunk (`op::GET_CHUNK`) follows. the original
 //! writes both: 12 for Magical 8bit Plug 2, Krush and Dimension Expander, 13 for TruePianos and Kickstart 2 (in a
-//! project FL Studio 26.1.3 saved). What tells the two apart is not known, so both are read as a chunk; Lemon Studio
-//! writes 12, which FL Studio reads back. Kind 4, for plugins that keep no chunk: the size is 0, and the parameter count
-//! and each value (`f32`) follow. FL Studio puts a part about programs after the values; its meaning is not known, so
-//! it is not written, and it is skipped when read (FL Studio reads the values without it). FL Studio 26.1 writes kind 5
+//! project the original saved). What tells the two apart is not known, so both are read as a chunk; Lemon Studio
+//! writes 12, which the original reads back. Kind 4, for plugins that keep no chunk: the size is 0, and the parameter count
+//! and each value (`f32`) follow. the original puts a part about programs after the values; its meaning is not known, so
+//! it is not written, and it is skipped when read (the original reads the values without it). the original writes kind 5
 //! instead, laid out as kind 4 (spec: "Third-party plugins in producers' projects"); it is read as kind 4.
 //!
 //! Lemon Studio's first saves wrote kind 13, with the chunk, or for plugins without one their program and values in a
-//! list of its own ([`LIST_TAG`]). Both are still read; FL Studio reads the chunk but not the list.
+//! list of its own ([`LIST_TAG`]). Both are still read; the original reads the chunk but not the list.
 
 /// The header fields around the kind byte.
 const HEAD: i32 = -9;
 const HEAD_2: i32 = -2;
-/// Kind bytes: a chunk (what Lemon Studio writes), a chunk too (FL Studio writes both; Lemon Studio's first saves wrote
+/// Kind bytes: a chunk (what Lemon Studio writes), a chunk too (the original writes both; Lemon Studio's first saves wrote
 /// 13), a parameter list.
 const KIND_CHUNK: u8 = 12;
 const KIND_CHUNK_13: u8 = 13;
@@ -44,7 +44,7 @@ pub enum Saved {
 }
 
 impl Saved {
-    /// The bytes FL Studio writes for this state. A parameter list's program is not written.
+    /// The bytes the original writes for this state. A parameter list's program is not written.
     pub fn to_bytes(&self) -> Vec<u8> {
         let (kind, size, body) = match self {
             Saved::Chunk(c) => (KIND_CHUNK, c.len() as u32, c.clone()),
@@ -106,7 +106,7 @@ mod tests {
         assert_eq!(Saved::parse(&b, true), Some(s.clone()));
         // A plugin without chunks does not take another plugin's chunk as its parameters.
         assert_eq!(Saved::parse(&b, false), None);
-        // Kind 13, as FL Studio also writes it (and Lemon Studio's first saves did); and FL Studio's other header values
+        // Kind 13, as the original also writes it (and Lemon Studio's first saves did); and the original's other header values
         // (-1 seen in the last one).
         let mut first = b.clone();
         first[4] = 13;
@@ -125,12 +125,12 @@ mod tests {
         let back = Saved::Params { program: None, values: vec![1.0, 0.8, 0.3] };
         assert_eq!(Saved::parse(&b, false), Some(back.clone()));
         assert_eq!(Saved::parse(&b, true), Some(back.clone()));
-        // FL Studio's part about programs after the values is skipped.
+        // the original's part about programs after the values is skipped.
         let mut fl = b.clone();
         fl.extend(1u32.to_le_bytes());
         fl.extend(b"Init\0\xe0\x68\x5f\x10\0\0\0\0\x10\x4c\xbc\0\0\0\0\0\x01\0\0\0");
         assert_eq!(Saved::parse(&fl, false), Some(back.clone()));
-        // Kind 5, as FL Studio 26.1 writes it, is the same list.
+        // Kind 5, as the original writes it, is the same list.
         fl[4] = 5;
         assert_eq!(Saved::parse(&fl, false), Some(back));
     }

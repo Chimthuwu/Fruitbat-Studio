@@ -414,7 +414,7 @@ impl Lane {
     pub fn is_channel(self) -> bool {
         matches!(self, Lane::ChanPan | Lane::ChanVolume | Lane::ChanPitch)
     }
-    /// Parameter id of a channel lane in event 223 (spec: flp/events/patterns.md).
+    /// Parameter id of a channel lane in event 223 (spec: project/events/patterns.md).
     pub fn param(self) -> Option<u16> {
         match self {
             Lane::ChanVolume => Some(ControlPoint::VOLUME),
@@ -539,7 +539,7 @@ pub fn controls(s: &State) -> &[ControlPoint] {
 }
 
 /// Set (or replace) the control point of `channel`/`param` at `tick`, keeping the list ordered by
-/// position (spec: flp/events/patterns.md, "Control points").
+/// position (spec: project/events/patterns.md, "Control points").
 pub fn set_control(s: &mut State, channel: u16, param: u16, tick: u32, value: i32) {
     let point = ControlPoint::new(tick, channel, param, value);
     let p = pattern_mut(s);

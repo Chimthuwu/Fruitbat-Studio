@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Stereo Shaper: Lemon Studio's stereo shaper (a recreation of FL's Fruity Stereo Shaper) as a plugin. The sound
+//! Lemon Stereo Shaper: Lemon Studio's stereo shaper (a recreation of the original's Fruity Stereo Shaper) as a plugin. The sound
 //! is `os_engine::effects::stereo_shaper`, started with its gains at the settings; the editor has the four levels in
 //! two cards (what goes to the left output, what goes to the right) and the delay, the phase and their position.
 //!
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn the_plugin_starts_at_its_settings_and_leaves_the_difference_output_alone() {
-        // FL's "LR to MS": the matrix at its settings from the first sample.
+        // the original's "LR to MS": the matrix at its settings from the first sample.
         let v = [8076, 8076, -8076, 8076, 0, 0, 1];
         let mut s = sound(44100, &v);
         let (mut l, mut r) = (vec![0.5f32; 4], vec![0.25f32; 4]);

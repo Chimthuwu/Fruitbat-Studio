@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! The settings the editor's knobs and sliders show, by FL's automation index: names, ranges, defaults and value
+//! The settings the editor's knobs and sliders show, by the original's automation index: names, ranges, defaults and value
 //! texts.
 //!
 // spec: plugins/lemon-pulp-filter.md §3, plugins/fruity-love-philter.md ("The settings")
@@ -55,7 +55,7 @@ pub fn bipolar(k: usize) -> bool {
     }
 }
 
-/// The hint's name of setting `k` (FL's hint names, measured; the low / gain / drive control is named for the filter's
+/// The hint's name of setting `k` (the original's hint names, measured; the low / gain / drive control is named for the filter's
 /// type, a Lemon Studio choice).
 pub fn name(st: &State, k: usize) -> String {
     match k {

@@ -21,7 +21,7 @@ pub const ROW: f32 = 18.0;
 /// Highest key shown (B10); the lowest is 0 (C0) (§3).
 pub const TOP_KEY: i32 = 131;
 
-/// Key name in FL's naming (key 60 = C5) (§3), as the settings choose it (`crate::note_names`).
+/// Key name in the original's naming (key 60 = C5) (§3), as the settings choose it (`crate::note_names`).
 pub fn key_name(key: i32) -> String {
     crate::note_names::note_name(key)
 }
@@ -60,7 +60,7 @@ pub struct Layout {
 /// ui/event-panel-splitter.md; the default puts the splitter at bottom − 185, §1).
 ///
 /// The overview (the horizontal scroll bar) is 22 px tall and the vertical scroll bar's column 22 px wide; with
-/// "Small scrollbars in editors" 11 and 12 px (about half, as FL's playlist measured; spec: ui/settings-choices.md
+/// "Small scrollbars in editors" 11 and 12 px (about half, as the original's playlist measured; spec: ui/settings-choices.md
 /// "Miscellaneous"), the room going to the ruler and the grid.
 pub fn layout(r: Rect, split: crate::piano_split::Split) -> Layout {
     use crate::piano_split::BAND;

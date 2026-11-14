@@ -2,10 +2,10 @@
 //!
 //! The [`State::identity`] registry maps a stable [`PersistentObjectId`] to each device/owner's
 //! *current* [`OwnerLocator`]. The id is persisted in the `.lemon` extension and survives save/load
-//! and device moves; the locator is what gets updated when a device moves. The FLP `Target` encoding
+//! and device moves; the locator is what gets updated when a device moves. The legacy project `Target` encoding
 //! is never consulted or modified here (K.1).
 //!
-//! [`target_for`] is a pure mapping from an [`OwnerLocator`] + [`ParameterKey`] to a concrete FLP
+//! [`target_for`] is a pure mapping from an [`OwnerLocator`] + [`ParameterKey`] to a concrete legacy project
 //! `Target` (and a [`ParamResolution`]); [`resolve_path`] is the live wrapper that supplies the
 //! plugin's current native-id list from [`Plugins`].
 
@@ -107,7 +107,7 @@ fn hosted_native_ids(plugins: &Plugins, owner: OwnerLocator) -> Option<Vec<u32>>
     plugins.hosted.get(&key).and_then(|h| h.param_ids())
 }
 
-/// Pure mapping from an owner locator + parameter key to a concrete FLP `Target`, plus how the native id
+/// Pure mapping from an owner locator + parameter key to a concrete legacy project `Target`, plus how the native id
 /// resolved. `native_ids` is the hosted plugin's native ids in positional order (from [`hosted_native_ids`]
 /// or a test fixture). For a `PluginNativeId` with no plugin metadata, the path is unresolved (`None`).
 ///
@@ -162,7 +162,7 @@ pub fn resolve_path(s: &State, plugins: &Plugins, path: ParameterPath) -> Option
     target_for(owner, path.parameter, native_ids.as_deref())
 }
 
-/// The owner and parameter a FLP `Target` names, read back from its encoding ([`target_for`] is the other way). This is
+/// The owner and parameter a legacy project `Target` names, read back from its encoding ([`target_for`] is the other way). This is
 /// how the interface turns the control under the cursor into a graph assignment. The owner is a locator, not an id:
 /// [`path_in`] asks the registry, [`target_path`] mints one when the owner is new.
 pub fn path_of(target: u32) -> Option<(OwnerLocator, ParameterKey)> {
@@ -1583,7 +1583,7 @@ pub fn act(app: &mut crate::app::App, a: ModAct) {
 }
 
 /// The modulation graph as the engine runs it (`os_engine::Engine::set_modulation`): each modulator's source and its
-/// targets resolved to the concrete FLP [`os_model::target::Target`] the engine addresses. An assignment that does
+/// targets resolved to the concrete legacy project [`os_model::target::Target`] the engine addresses. An assignment that does
 /// not resolve is left out here (it stays in the graph, and [`unresolved`] reports it), so a plugin that comes back
 /// brings its modulation back with it.
 ///

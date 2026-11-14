@@ -52,12 +52,12 @@ thread_local! {
     pub static TEST_DIR: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
 }
 
-/// FL's time stamp in backup names: `M-D-YYYY at HhMM`, 24-hour clock, no leading zeros but the minutes'.
+/// the original's time stamp in backup names: `M-D-YYYY at HhMM`, 24-hour clock, no leading zeros but the minutes'.
 pub fn stamp(t: NaiveDateTime) -> String {
     format!("{}-{}-{} at {}h{:02}", t.month(), t.day(), t.year(), t.hour(), t.minute())
 }
 
-/// A backup's file name: `<name> (<what> on <stamp>).lemon`; `what` is "autosaved" or "overwritten" (FL's names,
+/// A backup's file name: `<name> (<what> on <stamp>).lemon`; `what` is "autosaved" or "overwritten" (the original's names,
 /// Lemon Studio's file: spec flp/lemon-format.md "Backups").
 pub fn file_name(name: &str, what: &str, t: NaiveDateTime) -> String {
     format!("{name} ({what} on {}).{}", stamp(t), crate::project_files::EXT)
@@ -76,7 +76,7 @@ fn autosaved_at(file: &str, name: &str) -> Option<(u32, u32, u32, u32, u32)> {
 /// When backup `file` of `name` was written, if it is one of kind `what` ("autosaved" or "overwritten"): (year,
 /// month, day, hour, minute).
 pub(crate) fn saved_at(file: &str, name: &str, what: &str) -> Option<(u32, u32, u32, u32, u32)> {
-    // Older backups are FLPs.
+    // Older backups are legacy projects.
     let rest = file.strip_prefix(name)?.strip_prefix(" (")?.strip_prefix(what)?.strip_prefix(" on ")?;
     let rest = rest.strip_suffix(").lemon").or_else(|| rest.strip_suffix(").flp"))?;
     let (date, time) = rest.split_once(" at ")?;

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Filter: Lemon Studio's filter (a recreation of FL's Fruity Filter) as a plugin. The sound is
+//! Lemon Filter: Lemon Studio's filter (a recreation of the original's Fruity Filter) as a plugin. The sound is
 //! `os_engine::effects::filter`, started with its coefficients at the settings; the editor has the cutoff and the
 //! resonance, the three output levels, the X 2 and Center switches, and the response in a well.
 //!
@@ -219,7 +219,7 @@ mod tests {
         let b = default_state(SPEC);
         assert_eq!(b, Settings::default().to_state());
         assert_eq!(values_of(SPEC, &b), [1024, 205, 1024, 0, 512, 0, 1]);
-        // FL's "Tiny speakers", Center byte with other bits set: kept.
+        // the original's "Tiny speakers", Center byte with other bits set: kept.
         let mut fl = Settings { v: [544, 0, 0, 1024, 464, 1], center: true }.to_state();
         fl[28] = 0x81;
         let mut vals = values_of(SPEC, &fl);

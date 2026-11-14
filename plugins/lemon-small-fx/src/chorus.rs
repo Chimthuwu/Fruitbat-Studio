@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Chorus: Lemon Studio's chorus (a recreation of FL's Fruity Chorus) as a plugin. The sound is
+//! Lemon Chorus: Lemon Studio's chorus (a recreation of the original's Fruity Chorus) as a plugin. The sound is
 //! `os_engine::effects::chorus`, started as a loaded project's slot (lines empty, LFO phases from the fixed seed); the
 //! editor has two rows: the chorus and the crossover, then the three LFOs.
 //!
@@ -189,7 +189,7 @@ impl Sound for ChorusSound {
     fn set_sample_rate(&mut self, rate: u32) {
         self.0.set_sample_rate(rate);
     }
-    /// The lines and the crossover empty; the LFOs start on the generator's next three phases (as FL's plugin when it
+    /// The lines and the crossover empty; the LFOs start on the generator's next three phases (as the original's plugin when it
     /// is enabled again).
     fn reset(&mut self) {
         self.0.start();
@@ -258,7 +258,7 @@ mod tests {
     /// The plugin plays the engine's sound: the same samples as a slot started on the same phases.
     #[test]
     fn the_plugin_plays_the_slots_sound() {
-        // FL's "Light HF" preset.
+        // the original's "Light HF" preset.
         let v = [128, 1534, 480, 2695, 0, 1914, 0, 0, 949, 0, 4479, 0];
         let mut s = sound(48000, &v);
         let mut c = Chorus::with_settings(48000, &settings(&v));

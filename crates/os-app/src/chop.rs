@@ -15,7 +15,7 @@ use os_model::Note;
 use crate::arpeggiate::{Pattern, Row, TIME_MUL, TIME_MUL_NAMES};
 use crate::playlist::{Cmd, PItem};
 
-/// Wheel notches on the knobs' 0..1 positions (Lemon Studio's; FL's knobs take no wheel, §1): Time mul one step, the
+/// Wheel notches on the knobs' 0..1 positions (Lemon Studio's; the original's knobs take no wheel, §1): Time mul one step, the
 /// Levels 1/32.
 pub const TIME_MUL_NOTCH: f32 = 1.0 / 6.0;
 pub const LEVEL_NOTCH: f32 = 1.0 / 32.0;
@@ -61,14 +61,14 @@ impl Settings {
 pub struct ChopPattern(pub Pattern);
 
 impl Default for ChopPattern {
-    /// FL's Default chopping pattern: four one-step C5 notes, a beat.
+    /// the original's Default chopping pattern: four one-step C5 notes, a beat.
     fn default() -> Self {
         let rows = (0..4).map(|i| Row { pos: 24 * i, len: 24, key: 60, colour: 0, slide: false, fine: 120, rel: 64, pan: 64, vel: 100, mod_x: 128, mod_y: 128 }).collect();
         ChopPattern(Pattern { name: "Default".into(), path: None, ppq: 96, rows })
     }
 }
 
-/// FL's Chopping folder (read in place when FL Studio is installed).
+/// the original's Chopping folder (read in place when the original is installed).
 pub fn folder() -> PathBuf {
     os_native::default_fl_dir().join("Data").join("Patches").join("Scores").join("Chopping")
 }
@@ -209,7 +209,7 @@ mod tests {
         chop(ns, p, &set, 96, &[]).iter().map(|n| (n.position, n.length, n.key)).collect()
     }
 
-    /// The notes FL's batches start from (spec §7).
+    /// The notes the original's batches start from (spec §7).
     const CN: [(u32, u32, u16); 6] = [(0, 96, 60), (96, 48, 62), (192, 96, 64), (288, 24, 65), (384, 192, 67), (600, 30, 69)];
     const ODD: [(u32, u32, u16); 5] = [(10, 100, 60), (130, 50, 62), (250, 7, 64), (300, 60, 65), (400, 200, 67)];
 
@@ -265,7 +265,7 @@ mod tests {
         assert_eq!(got, fl);
     }
 
-    /// §2, §4: yellow rows only set the length; a tied row's first piece lasts to the note's end. FL's batches.
+    /// §2, §4: yellow rows only set the length; a tied row's first piece lasts to the note's end. the original's batches.
     #[test]
     fn markers_and_tied_rows_match_fl() {
         let part = pat(&[(0, 96, 0, MARKER, false), (0, 48, 0, TIED, false), (48, 24, 4, 0, false)]);
@@ -328,7 +328,7 @@ mod tests {
         assert_eq!(run(notes(&[(0, 6, 60)]), &p, quarter), [(0, 2, 60), (2, 2, 60), (3, 2, 60), (4, 2, 60)]);
     }
 
-    /// §5: the Levels knobs move each level their share toward the row's, the move truncated; FL's knobs dragged down
+    /// §5: the Levels knobs move each level their share toward the row's, the move truncated; the original's knobs dragged down
     /// 0, 16, 48 and 100 px (3/512 a pixel).
     #[test]
     fn levels_match_fl() {
@@ -350,7 +350,7 @@ mod tests {
     }
 
     /// §6: a grouped note's pieces keep its group; Group notes gives each other note a new one in the targets' order,
-    /// past the numbers in use, and a note that gives no piece still takes its number. FL's batches (their groups as
+    /// past the numbers in use, and a note that gives no piece still takes its number. the original's batches (their groups as
     /// FL renumbers them on loading).
     #[test]
     fn groups_match_fl() {

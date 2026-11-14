@@ -3,7 +3,7 @@
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! Pulp Filter editor: painting and hit regions (platform independent). Love Philter's layout, every knob, slider and
-//! switch in FL's arrangement and at FL's size on a 6 px grid, in the Lemon "Pith" plugin look: outlined grey cards,
+//! switch in the original's arrangement and at the original's size on a 6 px grid, in the Lemon "Pith" plugin look: outlined grey cards,
 //! dark wells, lemon for what is on. The filter row, the filter's IN / FILTER / WS / OUT panels, the target and part tabs with the curve
 //! view, the modulation card, the master sliders, the envelope follower card and the description. Controls that do
 //! nothing yet are greyed out.
@@ -20,7 +20,7 @@ use os_ui::{Canvas, Color, Font, Rect};
 use crate::ctl;
 use crate::edit;
 
-/// Editor size in logical pixels (FL's editor without its title bar).
+/// Editor size in logical pixels (the original's editor without its title bar).
 pub const W: u32 = 684;
 pub const H: u32 = 409;
 

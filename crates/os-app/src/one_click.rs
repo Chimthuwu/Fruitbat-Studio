@@ -11,7 +11,7 @@ use crate::app::{Action, App, State};
 use crate::capture::{self, capture, Input, InputStream, Recorder};
 use crate::playlist::{Cmd, Mark, PItem, Popup};
 
-/// The undo step a take is placed with (as FL's History names it).
+/// The undo step a take is placed with (as the original's History names it).
 pub const RECORDED: &str = "Recorded items";
 
 /// A recording under way, or its file being made.

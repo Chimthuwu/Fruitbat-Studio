@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Tesla: Lemon Studio's audio editor and recorder (the counterpart of FL's Edison) as a VST3 / CLAP plugin
+//! Tesla: Lemon Studio's audio editor and recorder (the counterpart of the original's Edison) as a VST3 / CLAP plugin
 //! (nih-plug). Put on a mixer track it passes audio through, records what reaches it, holds one sample and edits it
 //! destructively, and plays it back into the track. The sample is saved in the plugin state as a plain WAV with
 //! Edison's chunks.

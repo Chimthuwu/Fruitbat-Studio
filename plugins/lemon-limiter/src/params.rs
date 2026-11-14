@@ -267,7 +267,7 @@ pub fn set_spare(b: &mut [u8], v: &[i32; PARAMS]) {
     }
 }
 
-/// A fresh instance's saved state: FL's Default preset, the spare bank the same, no sidechain, flags 0 (spec §6).
+/// A fresh instance's saved state: the original's Default preset, the spare bank the same, no sidechain, flags 0 (spec §6).
 pub fn default_state() -> Vec<u8> {
     let mut b = vec![0u8; STATE_LEN];
     set_field(&mut b, 0, STATE_VERSION);
@@ -381,7 +381,7 @@ mod tests {
         assert_eq!(values_of(&b), DEFAULTS.to_vec());
         assert_eq!(spare(&b), DEFAULTS);
         assert_eq!((byte(&b, SIDECHAIN_BYTE), byte(&b, FLAGS_BYTE)), (0, 0));
-        // Host-facing parameters: FL's order, ranges and defaults.
+        // Host-facing parameters: the original's order, ranges and defaults.
         let p = LimiterParams::default();
         assert_eq!(p.p.len(), PARAMS);
         assert_eq!(p.p[17].name(), "Noise release time");

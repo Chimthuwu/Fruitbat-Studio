@@ -995,7 +995,7 @@ mod tests {
         let (ox, oy) = centre(&l, &Target::Knob("offset".into()));
         l.moved(ox, oy, Mods::default());
         assert_eq!(l.hint, "Delay time R/L pan: 0.0%");
-        // FL's Default preset starts synced at 4:0; unsynced, the same setting reads in ms.
+        // the original's Default preset starts synced at 4:0; unsynced, the same setting reads in ms.
         let (tx, ty) = centre(&l, &Target::Knob("time".into()));
         l.moved(tx, ty, Mods::default());
         assert_eq!(l.hint, "Time: 4:0");

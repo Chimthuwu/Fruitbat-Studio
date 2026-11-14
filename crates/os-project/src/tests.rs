@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-// spec: flp/container.md — unit tests over hand-built byte streams.
+// spec: project/container.md — unit tests over hand-built byte streams.
 
 use crate::event::{VarintError, encode_varint, read_varint};
 use crate::*;

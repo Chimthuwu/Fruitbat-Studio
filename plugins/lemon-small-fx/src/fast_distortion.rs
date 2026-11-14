@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Fast Distortion: Lemon Studio's fast distortion (a recreation of FL's Fruity Fast Dist) as a plugin. The sound
+//! Lemon Fast Distortion: Lemon Studio's fast distortion (a recreation of the original's Fruity Fast Dist) as a plugin. The sound
 //! is `os_engine::effects::fast_dist`; the editor has the input, the curve's threshold and type, the curve in a well
 //! and the output's mix and post gain.
 //!
@@ -161,7 +161,7 @@ mod tests {
 
     #[test]
     fn the_plugin_plays_the_engines_fast_distortion() {
-        // FL's compressor preset and a stored threshold of 0 with type B (the curve of A at 10).
+        // the original's compressor preset and a stored threshold of 0 with type B (the curve of A at 10).
         for v in [[192, 1, 0, 104, 93], [128, 0, 1, 128, 128]] {
             let mut s = sound(44100, &v);
             let mut l = vec![0.087571196f32, -0.3, 0.9];

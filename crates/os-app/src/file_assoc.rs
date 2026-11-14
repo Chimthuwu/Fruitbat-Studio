@@ -17,7 +17,7 @@ use crate::app::App;
 pub const PROG_ID: &str = "LemonStudio.Project";
 /// The extension it registers.
 pub const EXT: &str = ".flp";
-/// Lemon Studio's own project files (spec: flp/lemon-format.md): no other program has them, so they are simply ours
+/// Lemon Studio's own project files (spec: project/lemon-format.md): no other program has them, so they are simply ours
 /// while the box is ticked.
 pub const LEMON_EXT: &str = ".lemon";
 /// The type's description and the open verb's name (spec).

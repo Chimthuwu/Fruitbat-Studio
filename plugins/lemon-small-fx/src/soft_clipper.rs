@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Soft Clipper: Lemon Studio's soft clipper (a recreation of FL's Fruity Soft Clipper) as a plugin. The sound is
+//! Lemon Soft Clipper: Lemon Studio's soft clipper (a recreation of the original's Fruity Soft Clipper) as a plugin. The sound is
 //! `os_engine::effects::soft_clipper`; the editor has the two knobs on one card and the transfer curve in a well.
 //!
 // spec: plugins/lemon-soft-clipper.md, plugins/fruity-soft-clipper.md
@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn value_texts_and_typed_values() {
-        // FL's Default preset: threshold 100 (-2.1 dB), post gain at unity.
+        // the original's Default preset: threshold 100 (-2.1 dB), post gain at unity.
         assert_eq!(text(dsp::THRESHOLD, 100), "-2.1dB");
         assert_eq!(text(dsp::THRESHOLD, 64), "-6.0dB");
         assert_eq!(text(dsp::THRESHOLD, 1), "-42.1dB");

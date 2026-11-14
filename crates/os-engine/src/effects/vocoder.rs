@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Studio's vocoder (Lemon Vocoder, a recreation of FL's Vocodex mixer effect).
+//! Lemon Studio's vocoder (Lemon Vocoder, a recreation of the original's Vocodex mixer effect).
 //!
 //! A band-split channel vocoder: the modulator (its left and right summed) and the carrier are split by the same bank
 //! of band-pass filters; each modulator band is followed by an envelope (peak with hold, or RMS over the hold time,

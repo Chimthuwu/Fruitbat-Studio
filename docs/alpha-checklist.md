@@ -1,6 +1,6 @@
 # Alpha checklist
 
-What stands between Lemon Studio and its first alpha: a fully functional DAW at FL Studio parity. Third-party plugins
+What stands between Lemon Studio and its first alpha: a fully functional DAW at the original parity. Third-party plugins
 (CLAP, VST3, VST2) are not part of the alpha bar; hosting them already works, and the rest of that work comes later.
 
 The list started from an assessment of `main` at `a637e72` on 2026-10-24 and was checked again against `fb4382e` on
@@ -25,9 +25,9 @@ Systems a fully functional DAW can't ship without.
 - [x] **Automation clip LFO and min / range.** The clip channel's MIN / MAX knobs set its range and its LFO
   (switch, mode, amount, speed, tension, skew, pulse width, its own envelope) plays as the original's, in the clip's
   channel window; files keep every LFO field
-- [x] **Projects saved before FL Studio 24.2.** Projects from FL Studio 10 to 24.1 (and the 24.2 betas) open: they
+- [x] **Projects saved before the original 24.2.** Projects from the original 10 to 24.1 (and the 24.2 betas) open: they
   are converted to the current layout as they open, as the original does, and save in that layout. Not yet: wrapped
-  Fruity effects stay wrapped instead of becoming the native plugins, and a 3x Osc saved before FL Studio 21 has
+  Fruity effects stay wrapped instead of becoming the native plugins, and a 3x Osc saved before the original 21 has
   its envelope and filter settings at their defaults
 - [x] **Multi-core mixing.** The engine renders on one audio thread, which limits dense projects
 - [x] **Engine rework (sampler voice, automation).** The README's roadmap names it as the next big step; land it
@@ -43,7 +43,7 @@ Systems a fully functional DAW can't ship without.
 ## Built-in instruments and effects
 
 Without third-party plugins, the built-in ones are the whole sound palette. Lemon Studio has three instruments,
-sixteen effects and the Tesla audio editor; these are the gaps a project made in FL Studio runs into most.
+sixteen effects and the Tesla audio editor; these are the gaps a project made in the original runs into most.
 
 - [x] **Drum sampler (FPC).** A pad-based drum instrument. Lemon Drum Sampler plays projects' FPC channels with their
   pads and samples (layers by velocity, the original's level, pan and tune laws, cut groups) and saves them back
@@ -84,7 +84,7 @@ sixteen effects and the Tesla audio editor; these are the gaps a project made in
   plain serial chain of effects open as containers, members in chain order; other patches (parallel paths, link
   levels, controllers, sidechains, instruments) and Patcher channels stay as they were and the hint names each with
   its reason. The browser's Lemon Container entry dropped with Shift wraps a slot's effect or a channel's instrument
-- [x] **Transient Processor, Chorus and Stereo Shaper compared with FL Studio 2026's exports.** Six of the seven
+- [x] **Transient Processor, Chorus and Stereo Shaper compared with the original's exports.** Six of the seven
   small effects match sample for sample in the tests (98 cases for these three: `os-engine/tests/integration/fx_null.rs`); the
   Chorus uses the true pi where the original's is a hair off, so 10 of its 21 cases match and the rest are at least
   37 dB below the test signal
@@ -98,7 +98,7 @@ Greyed-out controls and partial features. These can land alongside the blockers.
 - [x] **Undo for a plugin editor's own changes.** Parameters moved in a plugin's window and presets loaded from its
   title bar or dropped on it are one step each; a preset's undo brings back the state, the preset and the name
 - [x] **Undo for mixer track commands.** Routing, names, colours, resets, effect slots, audio input / output and
-  latency settings, adding, moving, deleting and trimming tracks. Mute and solo make no step, as in FL Studio
+  latency settings, adding, moving, deleting and trimming tracks. Mute and solo make no step, as in the original
 - [x] **Undo for the remaining edits.** A generator inserted higher up the rack, Replace, project info and the
   timebase are each one step
 - [x] **Mixer right-click menus.** None greyed out but Compensate for master latency, greyed in the original too
@@ -145,9 +145,9 @@ Greyed-out controls and partial features. These can land alongside the blockers.
   Control builder (no control builder yet); VIEW > Script output (no scripting)
   ([menus.rs](../crates/os-app/src/views/menus.rs)). Both stay greyed for the alpha (decided 2026-11-02), listed
   under "After the alpha"
-- [x] **TOOLS ▸ Audio logger and Dump to audio editor.** Enabled (on by default, as in FL Studio) keeps the last 1 to
+- [x] **TOOLS ▸ Audio logger and Dump to audio editor.** Enabled (on by default, as in the original) keeps the last 1 to
   10 minutes of what the device plays, the header showing the memory used; Dump puts them into the master track's
-  Tesla. At its time limit Tesla now keeps the last minutes, as Edison does. What FL Studio's logger records and how
+  Tesla. At its time limit Tesla now keeps the last minutes, as Edison does. What the original's logger records and how
   long was not measured: Lemon Studio's design
 - [x] **Tesla's later tools** (group 5 of Tesla's roadmap in the specs). Time stretch / pitch shift with formant
   preservation (2026-10-29); the envelope modes with Mixdown amp envelopes, heard while playing, the envelope tools

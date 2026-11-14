@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Studio's flanger (a recreation of FL's Fruity Flanger mixer effect), configured from its saved state.
+//! Lemon Studio's flanger (a recreation of the original's Fruity Flanger mixer effect), configured from its saved state.
 //!
 //! Per side a short delay line whose read position an LFO sweeps (sine, triangle or a blend of the two, from integer
 //! tables), read with a straight line between two samples, smoothed by a one-pole low pass ("damp"), fed back into the

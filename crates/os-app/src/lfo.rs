@@ -83,7 +83,7 @@ impl Knobs {
         format!("{}%", pct(self.range))
     }
 
-    /// The period as steps:ticks, FL's hint; the ticks are the whole part of `P + 1/4` (§1, §7).
+    /// The period as steps:ticks, the original's hint; the ticks are the whole part of `P + 1/4` (§1, §7).
     pub fn speed_text(&self, ppq: u32) -> String {
         let step = (ppq.max(4) / 4).max(1);
         let t = (self.period(ppq) + 0.25).floor() as u32;
@@ -91,7 +91,7 @@ impl Knobs {
     }
 }
 
-/// Percent with halves to even, as FL's hints show them.
+/// Percent with halves to even, as the original's hints show them.
 fn pct(v: f32) -> i64 {
     (f64::from(v) * 100.0).round_ties_even() as i64
 }
@@ -125,7 +125,7 @@ impl Settings {
         }
     }
 
-    /// Degrees (a Lemon Studio choice: FL's hint bar shows nothing, §7).
+    /// Degrees (a Lemon Studio choice: the original's hint bar shows nothing, §7).
     pub fn phase_text(&self) -> String {
         format!("{}°", (f64::from(self.phase) * 360.0).round() as i64)
     }
@@ -148,7 +148,7 @@ pub fn range_of(pos: f32) -> f32 {
     pos * 2.0 - 1.0
 }
 
-/// Speed in octaves, in 1/64ths of a wheel notch: whole notches land on exact eighths of an octave, as FL's do (the
+/// Speed in octaves, in 1/64ths of a wheel notch: whole notches land on exact eighths of an octave, as the original's do (the
 /// phase sum shows the difference on a square's edges, §3).
 pub fn speed_of(pos: f32) -> f32 {
     let notches = (f64::from(pos) * 2.0 * OCTAVES * 8.0 * 64.0).round() / 64.0;
@@ -160,7 +160,7 @@ pub fn phase_of(pos: f32) -> f32 {
 }
 
 /// The wave before the lane's scale, `v + r × w(φ)`, tick by tick from the time origin; End's values are reached `len`
-/// ticks in (§3). The phase is a running sum of `1 / P` in double precision, as FL's.
+/// ticks in (§3). The phase is a running sum of `1 / P` in double precision, as the original's.
 fn wave(set: &Settings, ppq: u32, len: u32) -> impl Iterator<Item = f64> {
     let set = *set;
     let len = f64::from(len.max(1));

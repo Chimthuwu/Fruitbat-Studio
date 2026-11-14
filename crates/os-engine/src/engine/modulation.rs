@@ -6,7 +6,7 @@
 //!
 //! Each [`Modulator`] carries one source from [`os_model::modulation`] and the parameters it drives, already resolved
 //! to the engine's [`Target`] by the app ([`crate::Engine::set_modulation`]); the graph itself never reaches the
-//! engine, and no FLP `Target` encoding changes (audit K.1). Values are sent through the same parameter-event path
+//! engine, and no legacy project `Target` encoding changes (audit K.1). Values are sent through the same parameter-event path
 //! automation uses, sampled every [`PARAM_STEP`] frames, so a hosted plugin's own smoothing does the rest.
 //!
 //! **Where a value moves from.** A modulation does not own a parameter's value: it moves the value the parameter

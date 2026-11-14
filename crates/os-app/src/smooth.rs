@@ -26,7 +26,7 @@ pub fn smoothing() -> f32 {
 }
 
 /// How much of the way one stage moves in a frame of `dt_ms` at Smoothing `value`: `1 - 2^(-dt / (value x 0.25 ms))`.
-/// That is FL's `1 - 2^(-n / value)` with `n` = 40 for a nominal 10 ms frame (its Ultrasmooth), counted in time so
+/// That is the original's `1 - 2^(-n / value)` with `n` = 40 for a nominal 10 ms frame (its Ultrasmooth), counted in time so
 /// that the ease takes as long at any frame rate. All of it at 0.
 pub fn share(dt_ms: f64, value: f64) -> f64 {
     if value <= 0.0 { 1.0 } else { 1.0 - (-dt_ms / (value * 0.25)).exp2() }
@@ -288,7 +288,7 @@ mod tests {
         panic!("the ease ends");
     }
 
-    /// The 48 px notch at 128 in 10 ms frames (FL's `n` = 40) shows the spec's sequence, in the stages alone and as
+    /// The 48 px notch at 128 in 10 ms frames (the original's `n` = 40) shows the spec's sequence, in the stages alone and as
     /// the playlist's scroll; it settles in about the same time at any frame rate.
     #[test]
     fn a_notch_eases_as_measured() {

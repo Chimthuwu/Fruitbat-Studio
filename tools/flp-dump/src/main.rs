@@ -2,19 +2,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! flp-dump: print an FLP file's chunks and event stream, then verify the lossless
+//! flp-dump: print a legacy project file's chunks and event stream, then verify the lossless
 //! round-trip and the alignment checks.
 //!
 //! Usage: flp-dump [--summary] <file.flp>
 //!   --summary  print the typed project (channels, patterns, mixer, playlist) instead
 //! Exit status: 0 = ok, 1 = malformed file or a failed check, 2 = usage / I/O error.
 
-// spec: flp/container.md (event kinds labelled per flp/coverage.md)
+// spec: project/container.md (event kinds labelled per flp/coverage.md)
 
 use std::io::{self, BufWriter, Write};
 use std::process::ExitCode;
 
-use os_flp::{ChunkBody, Event, FlpFile, Value, check_alignment};
+use os_project::{ChunkBody, Event, FlpFile, Value, check_alignment};
 
 /// Payload bytes shown per variable-length event.
 const PREVIEW: usize = 16;
@@ -46,7 +46,7 @@ fn main() -> ExitCode {
 
     let mut out = BufWriter::new(io::stdout().lock());
     if summary {
-        return match os_flp::project::load(&file) {
+        return match os_project::project::load(&file) {
             Ok(p) => match print_summary(&mut out, &p).and_then(|()| out.flush()) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) if e.kind() == io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,

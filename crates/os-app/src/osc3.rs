@@ -257,8 +257,8 @@ mod tests {
         a.save_to(path.clone());
         assert!(a.state.message.as_deref().is_some_and(|m| m.starts_with("Saved") && !m.contains("not stored")), "{:?}", a.state.message);
 
-        let file = os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap();
-        let saved = os_flp::project::load(&file).unwrap();
+        let file = os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap();
+        let saved = os_project::project::load(&file).unwrap();
         let ch = &saved.channels[row];
         assert_eq!((ch.kind, ch.plugin.as_deref()), (ChannelKind::Plugin, Some(FILE_NAME)));
         assert_eq!(ch.plugin_state.as_deref(), Some(fl.as_slice()));
@@ -273,7 +273,7 @@ mod tests {
         assert_eq!(b.plugins.osc3_file_state(row), Some(fl.clone()));
         // Saved again unedited: the channel's state bytes are unchanged.
         b.save_to(path.clone());
-        let again = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let again = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(again.channels[row], saved.channels[row]);
     }
@@ -364,7 +364,7 @@ mod tests {
         let path = dir.join("custom.flp");
         a.save_to(path.clone());
         assert!(a.state.message.as_deref().is_some_and(|m| m.starts_with("Saved")), "{:?}", a.state.message);
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let ch = &saved.channels[row];
         assert_eq!((ch.plugin.as_deref(), ch.sample_path.as_deref()), (Some(FILE_NAME), Some(saw.as_str())));
         assert_eq!(ch.plugin_state.as_ref().map(Vec::len), Some(op::STATE_LEN));
@@ -434,7 +434,7 @@ mod tests {
         assert!(!a.state.hosted_rows.contains(&2), "the old instance is gone");
     }
 
-    /// Corpus check (OPENSTUDIO_FLP_CORPUS): every 3x Osc channel of every file is hosted by Lemon Trio from its
+    /// Corpus check (OPENSTUDIO_legacy project_CORPUS): every 3x Osc channel of every file is hosted by Lemon Trio from its
     /// saved state, gives the same bytes back, and an unedited save leaves the whole project as it was.
     #[test]
     fn corpus_osc3_channels_survive_hosting_and_saving() {
@@ -443,7 +443,7 @@ mod tests {
         let (mut files, mut channels, mut older) = (0, 0, 0);
         let out = std::env::temp_dir().join(format!("openstudio-osc3-corpus-{}.flp", std::process::id()));
         for path in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
-            let Some(project) = std::fs::read(path).ok().and_then(|b| os_flp::FlpFile::parse(&b).ok()).and_then(|f| os_flp::project::load(&f).ok())
+            let Some(project) = std::fs::read(path).ok().and_then(|b| os_project::FlpFile::parse(&b).ok()).and_then(|f| os_project::project::load(&f).ok())
             else {
                 continue;
             };
@@ -474,7 +474,7 @@ mod tests {
             let before = a.state.project.clone();
             a.save_to(out.clone());
             assert!(a.state.message.as_deref().is_some_and(|m| m.starts_with("Saved")), "{path}: {:?}", a.state.message);
-            let back = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&out).unwrap()).unwrap()).unwrap();
+            let back = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&out).unwrap()).unwrap()).unwrap();
             for &r in &rows {
                 let (mut x, mut y) = (back.channels[r].clone(), before.channels[r].clone());
                 if y.plugin_state.as_ref().is_some_and(|s| s.len() < op::STATE_LEN) {

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Studio's stereo delay (a recreation of FL's Fruity Delay 3 mixer effect), configured from its saved state.
+//! Lemon Studio's stereo delay (a recreation of the original's Fruity Delay 3 mixer effect), configured from its saved state.
 //!
 //! A delay line with feedback in four types (mono, true stereo, ping pong, off). The feedback path runs through a 10 Hz
 //! high pass, a state-variable filter, a shaper (sample-rate and bit reduction, then a saturator or a limiter) and a
@@ -110,7 +110,7 @@ pub const HP: [f32; 5] = [20.0, 90.0, 400.0, 1300.0, 4200.0];
 /// The LFO's periods (s) over its speed.
 pub const LFO_PERIODS: [f32; 8] = [8.872, 3.808, 1.833, 0.878, 0.398, 0.15, 0.05, 0.0];
 
-/// Silence FL runs through a slot before the song (device buffers of 2048 frames; FL's count varies from 4 to 7).
+/// Silence FL runs through a slot before the song (device buffers of 2048 frames; the original's count varies from 4 to 7).
 pub const PREROLL: usize = 4 * 2048;
 
 /// Everything the saved state says.
@@ -518,7 +518,7 @@ pub struct Delay {
     shaper: [Shaper; 2],
     attack: f32,
     release: f32,
-    /// The mixer slot has run FL's start (pre-roll and two resets).
+    /// The mixer slot has run the original's start (pre-roll and two resets).
     started: bool,
 }
 
@@ -617,7 +617,7 @@ impl Delay {
         d
     }
 
-    /// FL's start of a render: created with the defaults, the sample rate set (a reset), the state applied, the tempo.
+    /// the original's start of a render: created with the defaults, the sample rate set (a reset), the state applied, the tempo.
     pub fn with_settings(sample_rate: u32, s: &Settings, bpm: f64) -> Delay {
         let mut d = Delay::new(sample_rate);
         d.set(s);
@@ -1031,7 +1031,7 @@ impl Delay {
         let old = self.phase;
         let p = old + self.lfo_step;
         self.phase = p - p.trunc();
-        // FL's single-precision sine: on Windows `f32::sin` is the C runtime's `sinf`, which gives FL's values.
+        // the original's single-precision sine: on Windows `f32::sin` is the C runtime's `sinf`, which gives the original's values.
         self.lfo = ((old * 6.283_185_5).sin() + 1.0) * 0.5;
         if self.kind != OFF {
             let half = 0.5 * self.rate as f32;
@@ -1185,7 +1185,7 @@ mod tests {
         s
     }
 
-    /// A delay at 44.1 kHz past FL's start sequence.
+    /// A delay at 44.1 kHz past the original's start sequence.
     fn started(s: &Settings, bpm: f64) -> Delay {
         let mut d = Delay::with_settings(44100, s, bpm);
         d.start();

@@ -139,7 +139,7 @@ fn utf16(s: &str) -> Vec<u8> {
 /// One layer as the voices play it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Layer {
-    /// The sample as stored (FL's placeholders kept); "" = no sample.
+    /// The sample as stored (the original's placeholders kept); "" = no sample.
     pub path: String,
     pub volume: i32,
     pub pan: i32,
@@ -483,7 +483,7 @@ pub(crate) mod tests {
         assert!(State::parse(&b).is_none());
     }
 
-    /// The FL 26 demo projects' FPC states read and write back byte for byte (`OS_FPC_STATES` = a folder of states
+    /// The version 26 demo projects' FPC states read and write back byte for byte (`OS_FPC_STATES` = a folder of states
     /// saved from them, read locally).
     #[test]
     fn corpus_states_round_trip() {

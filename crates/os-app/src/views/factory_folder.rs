@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Settings ▸ File ▸ FL Studio factory content folder, drawn as the User data folder group is laid out (Reset, the
+//! Settings ▸ File ▸ factory content folder, drawn as the User data folder group is laid out (Reset, the
 //! folder button and the path, spec: ui/settings.md "File"). What it does: `crate::factory_folder`.
-// spec: flp/sample-paths.md "For Lemon Studio"
+// spec: project/sample-paths.md "For Lemon Studio"
 
 use os_ui::{Font, Rect};
 

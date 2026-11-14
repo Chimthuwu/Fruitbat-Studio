@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Null test of Lemon Studio's mixer-slot effects against FL Studio's own exports. Skipped unless `OS_FX_NULL` names a
+//! Null test of Lemon Studio's mixer-slot effects against the original's own exports. Skipped unless `OS_FX_NULL` names a
 //! directory of cases; nothing in it is needed to build or to run the other tests.
 //!
 //! A case is a `*.case` text file of `key = value` lines (`#` starts a comment):
@@ -11,9 +11,9 @@
 //! |---|---|
 //! | `plugin` | The slot's plugin name as a project stores it (`Fruity Chorus`, `Fruity Stereo Shaper`, ...) |
 //! | `state` | The slot's saved state, in hex |
-//! | `dry` | A WAV of what the slot is fed: FL's export of the same project with the slot switched off |
-//! | `fl` | FL's export with the slot on |
-//! | `bpm`, `ppq` | The project's tempo and timebase: the effect runs on FL's ticks, as in a render (default 140, 96) |
+//! | `dry` | A WAV of what the slot is fed: the original's export of the same project with the slot switched off |
+//! | `fl` | the original's export with the slot on |
+//! | `bpm`, `ppq` | The project's tempo and timebase: the effect runs on the original's ticks, as in a render (default 140, 96) |
 //! | `preroll` | Frames of silence FL ran through the effect before the song, in blocks of 512 (default 0) |
 //! | `phases` | Fruity Chorus only: the three LFO start phases of that export, `a,b,c` (FL draws them from the clock; a case without them is run with Lemon Studio's fixed seed and only reported) |
 //! | `extra` | `self`: the slot is on a track routed nowhere (the master), where the effect's extra output (Fruity Stereo Shaper's difference output) joins the audio right behind the effect; default `none` |
@@ -22,7 +22,7 @@
 //! Paths are relative to the case file. The test prints every case's peak difference and fails when one is over its
 //! limit. Lemon Studio's slot is the recreation run here (`effects::from_slot`); the engine's own handling of the slot
 //! (switches, mix level, the difference output other than `extra = self`) is not part of this comparison. The cases
-//! (FL's exports) are not part of the repository.
+//! (the original's exports) are not part of the repository.
 //!
 // spec: plugins/transient-processor.md, plugins/fruity-chorus.md and plugins/fruity-stereo-shaper.md "FL 2026 null test"
 

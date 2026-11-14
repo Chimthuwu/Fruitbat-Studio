@@ -53,7 +53,7 @@ impl Slice {
 #[derive(Clone, Debug, PartialEq)]
 pub struct State {
     pub header: [u8; HEADER],
-    /// The sample's path as stored (bytes; FL's placeholders such as `%FLStudioFactoryData%` kept).
+    /// The sample's path as stored (bytes; the original's placeholders such as `%FLStudioFactoryData%` kept).
     pub path: Vec<u8>,
     pub slices: Vec<Slice>,
     /// Everything after the slices: settings, then the channel's five envelope records (kept as read).

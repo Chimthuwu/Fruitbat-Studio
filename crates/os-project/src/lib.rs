@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! FLP project file support.
+//! legacy project project file support.
 //!
 //! Implemented from the specs' `flp/` pages only (clean-room rules).
 //! Requirement: read → write must reproduce the input byte-for-byte; unknown events are
@@ -12,7 +12,7 @@
 //! - [`check_alignment`]: the stream-alignment checks every test over real files should run,
 //!   because a wrong event size can still round-trip byte-identically.
 
-// spec: flp/container.md
+// spec: project/container.md
 
 mod check;
 mod container;

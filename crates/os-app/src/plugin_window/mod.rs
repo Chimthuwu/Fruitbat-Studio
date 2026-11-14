@@ -485,7 +485,7 @@ fn track_name(t: u16) -> String {
     if t == 0 { "Master".into() } else { format!("Bus {t}") }
 }
 
-/// The RANGE box's live part and the TRACK box (window coordinates). Classic: FL's measured places, the PITCH knob
+/// The RANGE box's live part and the TRACK box (window coordinates). Classic: the original's measured places, the PITCH knob
 /// covering the RANGE box's left end. Lemon: RANGE gets its own place right of the knob, both boxes centred over their
 /// captions (spec: ui/plugin-window.md "OpenStudio").
 fn range_rect(dx: f32) -> Rect {
@@ -784,7 +784,7 @@ fn value_box(c: &mut Canvas, r: Rect, s: &str) {
         c.fill_rrect(r, 4.0, Color::rgb(0x631d25));
         c.fill_rect_gradient(r.inset(1.0), Color::rgb(0x8d434b), Color::rgb(0x833941), 3.0);
     }
-    // Classic: FL's large digits, right-aligned; Lemon: smaller digits centred in the box.
+    // Classic: the original's large digits, right-aligned; Lemon: smaller digits centred in the box.
     let f = if lemon { Font::light(18, 0) } else { Font::light(22, 0) };
     let w = c.text_width(f, s);
     let lh = c.line_height(f);

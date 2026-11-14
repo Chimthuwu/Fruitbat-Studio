@@ -90,7 +90,7 @@ pub const PAN_NAME: &str = "Delay time R/L pan";
 pub const TYPE_NAMES: [&str; 4] = ["Fake Stereo", "True Stereo", "Ping Pong", "OFF"];
 pub const FILTER_NAMES: [&str; 4] = ["LP", "HP", "BP", "OFF"];
 
-/// What a new Lemon Delay starts on: FL's "Default" preset, the one FL loads when the effect is added (True stereo,
+/// What a new Lemon Delay starts on: the original's "Default" preset, the one FL loads when the effect is added (True stereo,
 /// tempo sync on at 4:0, Saturate, the low pass open, no resonance or diffusion spread). It is not the fresh instance's
 /// settings (`dsp::DEFAULTS`), which are where the sound stands before a state arrives (spec §5).
 pub const START: [i32; PARAMS] =
@@ -584,7 +584,7 @@ mod tests {
         assert_eq!(b.len(), STATE_LEN);
         assert_eq!(field(&b, 0), VERSION);
         assert_eq!(values_of(&b), START.to_vec());
-        // FL's "Default" preset (spec plugins/fruity-delay-3.md, "Presets"), as FL shows it.
+        // the original's "Default" preset (spec plugins/fruity-delay-3.md, "Presets"), as FL shows it.
         let shown = |k: usize| value_text(k, START[k], true, START[dsp::FILTER]);
         assert_eq!(shown(dsp::TYPE), "True Stereo");
         assert_eq!(shown(dsp::SYNC), "On");

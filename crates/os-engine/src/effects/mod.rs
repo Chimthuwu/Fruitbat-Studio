@@ -72,7 +72,7 @@ pub trait Effect: Send {
 }
 
 /// Creates a Lemon Studio effect for a slot plugin, if one exists for that plugin.
-/// The FLP plugin name only identifies the saved-state format.
+/// The legacy project plugin name only identifies the saved-state format.
 pub fn from_slot(name: &str, state: &[u8], sample_rate: u32) -> Option<Box<dyn Effect>> {
     match name {
         "Fruity Parametric EQ 2" => eq::ParametricEq::from_state(state, sample_rate).map(|e| Box::new(e) as Box<dyn Effect>),

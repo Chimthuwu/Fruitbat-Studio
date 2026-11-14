@@ -16,7 +16,7 @@ use crate::plugins::{Plugins, FX_KEY};
 
 /// The built-in plugin's name (picker, window title).
 pub const LEMON_SLICER: &str = "Lemon Slicer";
-/// The plugin id project files store for it (event 201); FL's own demos also store "Fruity slicer".
+/// The plugin id project files store for it (event 201); the original's own demos also store "Fruity slicer".
 pub const FILE_NAME: &str = "Fruity Slicer";
 
 /// Whether file id `id` names the original's slicer (any case).
@@ -71,7 +71,7 @@ pub fn store(proj: &mut Project, plugins: &Plugins) {
 }
 
 /// The plugin state for a channel's Fruity Slicer state: its loop's stored path resolved for the plugin to open
-/// (FL's placeholders made real), the stored path kept in the state.
+/// (the original's placeholders made real), the stored path kept in the state.
 pub fn plugin_state(fl: &[u8]) -> Vec<u8> {
     let st = lemon_slicer::params::plugin_state_from_fl(fl);
     let stored = lemon_slicer::state::State::parse(fl).map(|s| s.path()).unwrap_or_default();
@@ -246,14 +246,14 @@ mod tests {
         a.sync_slicer();
         assert!(a.state.hosted_rows.contains(&row));
         a.save_to(file.clone());
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&file).unwrap()).unwrap()).unwrap();
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&file).unwrap()).unwrap()).unwrap();
         assert_eq!(saved.channels[row].plugin_state.as_deref(), Some(lemon_slicer::params::default_state().as_slice()));
 
         let fl = state_for(&wav);
         assert!(a.plugins.set_state(row, &plugin_state(&fl)));
         a.state.project.channels[row].plugin = Some("Fruity slicer".into());
         a.save_to(file.clone());
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&file).unwrap()).unwrap()).unwrap();
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&file).unwrap()).unwrap()).unwrap();
         assert_eq!(saved.channels[row].plugin.as_deref(), Some("Fruity slicer"));
         assert_eq!(saved.channels[row].plugin_state.as_deref(), Some(fl.as_slice()));
         let mut b = App::new(None);
@@ -370,7 +370,7 @@ mod tests {
         assert_eq!(got, want);
     }
 
-    /// `OS_SLICER_FLP=<a.flp>;<b.flp> cargo test -p os-app corpus_slicer -- --ignored`: every Fruity Slicer channel of
+    /// `OS_SLICER_legacy project=<a.flp>;<b.flp> cargo test -p os-app corpus_slicer -- --ignored`: every Fruity Slicer channel of
     /// the projects comes back byte for byte through Lemon Slicer, and its loop is found.
     #[test]
     #[ignore]
@@ -378,7 +378,7 @@ mod tests {
         let Ok(list) = std::env::var("OS_SLICER_FLP") else { return };
         let mut seen = 0;
         for f in list.split(';').filter(|f| !f.is_empty()) {
-            let Ok(p) = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(f).unwrap()).unwrap()) else { eprintln!("{f}: not read"); continue };
+            let Ok(p) = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(f).unwrap()).unwrap()) else { eprintln!("{f}: not read"); continue };
             for ch in p.channels.iter().filter(|c| is_slicer(c)) {
                 let fl = ch.plugin_state.clone().unwrap_or_default();
                 let st = State::parse(&fl).unwrap_or_else(|| panic!("{f}: {:?} does not parse", ch.name));

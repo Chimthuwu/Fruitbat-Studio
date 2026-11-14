@@ -4,7 +4,7 @@
 
 //! A plain radix-2 complex FFT in doubles, unscaled both ways, for LIN's kernels and convolution. The page leaves the
 //! transform open ("any other FFT gives the same result up to single-precision rounding"); doubles rounded to single
-//! where LIN holds singles is the variant it measured closest to FL's.
+//! where LIN holds singles is the variant it measured closest to the original's.
 //!
 // spec: plugins/fruity-parametric-eq-2.md ("LIN": "The transforms")
 

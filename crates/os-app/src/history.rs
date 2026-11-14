@@ -32,11 +32,11 @@ use crate::prefs;
 
 /// The history's first entry: the project as opened or reset.
 pub const LAST_RESET: &str = "Last reset";
-/// A step-sequencer step click (FL's name).
+/// A step-sequencer step click (the original's name).
 pub const STEP_SEQ_EDIT: &str = "Step seq edit";
-/// A sample loaded into a channel (FL's name; spec: ui/settings-choices.md "Undo history: the four checks").
+/// A sample loaded into a channel (the original's name; spec: ui/settings-choices.md "Undo history: the four checks").
 pub const LOAD_SAMPLE: &str = "Load channel sample(s)";
-/// "Create automation clip" (FL's name), with the control's initial value while "Set start values automatically" is
+/// "Create automation clip" (the original's name), with the control's initial value while "Set start values automatically" is
 /// on (spec: ui/settings-choices.md "Advanced: Initialize controls automatically").
 pub const CREATE_AUTOMATION: &str = "Create automation clip";
 /// A chord written by step edit (spec: ui/step-edit.md).

@@ -160,7 +160,7 @@ pub fn all_smooth(c: &mut Curve) {
     c.prepare();
 }
 
-/// Scale levels (FL's `Level scaling`): about centre `center`, the tension `tension` (-1 .. 1) bends the levels away
+/// Scale levels (the original's `Level scaling`): about centre `center`, the tension `tension` (-1 .. 1) bends the levels away
 /// from it (or towards it), then `mul` stretches them about it and `offset` moves them; clamped to 0 .. 1.
 pub fn scale_levels(c: &mut Curve, center: f32, mul: f32, offset: f32, tension: f32) {
     let k = 1000f64.ln() * f64::from(tension);
@@ -463,7 +463,7 @@ pub fn reset_phases(op: &mut OpBlock) {
     op.phases.iter_mut().for_each(|p| *p = 0.0);
 }
 
-/// Random phases from `seed` (a small LCG: the editor's own, not FL's).
+/// Random phases from `seed` (a small LCG: the editor's own, not the original's).
 pub fn randomize_phases(op: &mut OpBlock, seed: u32) {
     let mut s = seed | 1;
     for p in op.phases.iter_mut() {
@@ -484,7 +484,7 @@ pub fn reset_waveform(op: &mut OpBlock) {
 }
 
 /// Randomize waveform settings: a few harmonics at random levels and phases, a random shape and skew, sometimes a
-/// sine shaper and a pre-filter. Lemon Studio's generator (FL's was not studied), from `seed`.
+/// sine shaper and a pre-filter. Lemon Studio's generator (the original's was not studied), from `seed`.
 pub fn randomize_waveform(op: &mut OpBlock, seed: u32) {
     let mut s = seed | 1;
     let mut next = |n: u32| {
@@ -608,7 +608,7 @@ mod tests {
         a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 2e-5)
     }
 
-    /// Scale levels against FL's saves (scaleG to scaleH: every control off its default, both sides of the centre).
+    /// Scale levels against the original's saves (scaleG to scaleH: every control off its default, both sides of the centre).
     #[test]
     fn levels_scale_as_fl() {
         let mut c = env();
@@ -644,7 +644,7 @@ mod tests {
         assert_eq!(times(&c), before);
     }
 
-    /// Type in value: the level's text and what typing gives (FL's examples).
+    /// Type in value: the level's text and what typing gives (the original's examples).
     #[test]
     fn levels_typed_as_fl() {
         assert_eq!(level_text(0.576_388_9), "0.576388895511627");
@@ -656,7 +656,7 @@ mod tests {
         }
     }
 
-    /// The selection operations (FL's saves sel*): times kept or closed up, markers along, the first point kept.
+    /// The selection operations (the original's saves sel*): times kept or closed up, markers along, the first point kept.
     #[test]
     fn selection_operations() {
         let sel = |v: &[usize], n: usize| (0..n).map(|i| v.contains(&i)).collect::<Vec<_>>();

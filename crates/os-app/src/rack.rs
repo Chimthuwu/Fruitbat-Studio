@@ -19,7 +19,7 @@ use crate::playlist::{Cmd, Mark, PItem, Popup};
 /// Name button width at 100 % (§17): wide enough for a new project's "Lemon Sampler" at every UI scale with every text
 /// engine; Linux's Barlow is the widest (Lemon Studio).
 pub const NAME_W: f32 = 94.0;
-/// FL's name button width at 100 % (§17): the measured columns right of the name button assume it.
+/// the original's name button width at 100 % (§17): the measured columns right of the name button assume it.
 pub const FL_NAME_W: f32 = 82.0;
 /// Width of the mixer-box column (§17: Alt+M moves everything right of it ≈ 41 px).
 pub const MIX_W: f32 = 41.0;
@@ -508,7 +508,7 @@ pub fn set_len(s: &mut State, steps: Option<u32>) {
     let ps = per_step(s);
     let n = s.pattern.max(1);
     let max = max_steps(s);
-    // No undo step, as in FL (measured 2026-10-28).
+    // No undo step, as in the original (measured 2026-10-28).
     crate::patterns::pat_mut(s, n).length = steps.filter(|&v| v > 0).map(|v| v.min(max) * ps);
     s.piano.dirty = true;
 }
@@ -935,7 +935,7 @@ pub fn random_color(s: &mut State, r: usize, salt: u64) {
 }
 
 /// Color selected > Gradient: from the first selected channel's colour to the last one's (a hue sweep when they
-/// match or have none; Lemon Studio's version of FL's gradient dialog).
+/// match or have none; Lemon Studio's version of the original's gradient dialog).
 pub fn gradient(s: &mut State) {
     let rows: Vec<usize> = s.rack.sel.iter().copied().filter(|&r| r < s.project.channels.len()).collect();
     if rows.len() < 2 {
@@ -973,7 +973,7 @@ pub fn solo(s: &mut State, r: usize) {
     crate::control::knob_edit(s, MUTE_SOLO, crate::control::command::Region::Mutes, |s| solo_now(s, r));
 }
 
-/// The undo step of a channel muted, soloed or switched on or off: a knob tweak's, as in FL (none with "Undo knob
+/// The undo step of a channel muted, soloed or switched on or off: a knob tweak's, as in the original (none with "Undo knob
 /// tweaks" off).
 pub const MUTE_SOLO: &str = "Channel mute / solo";
 
@@ -1173,7 +1173,7 @@ pub fn remap_project(p: &mut Project, map: &[Option<usize>]) {
     p.automations.retain_mut(|a| {
         let Some(&m) = idx.get(&a.channel) else { return false };
         a.channel = m;
-        // Channel targets keep the channel in the high half (spec: flp/events/automation.md "Targets").
+        // Channel targets keep the channel in the high half (spec: project/events/automation.md "Targets").
         a.targets.retain_mut(|t| {
             let hi = (*t >> 16) as u16;
             if *t == target::TEMPO || hi >= 0x4000 {
@@ -1191,7 +1191,7 @@ pub fn remap_project(p: &mut Project, map: &[Option<usize>]) {
     }
     // Instrument tracks follow their channel; one whose channel goes is unassigned (spec: ui/playlist.md §6c).
     p.remap_link_channels(|c| idx.get(&c).copied());
-    // Initial values: a place below 0x2000 is a channel's index (spec: flp/layouts.md "Mixer places").
+    // Initial values: a place below 0x2000 is a channel's index (spec: project/layouts.md "Mixer places").
     p.init_controls.retain_mut(|c| {
         let hi = (c.target >> 16) as u16;
         hi >= 0x2000 || idx.get(&hi).map(|&n| c.target = u32::from(n) << 16 | (c.target & 0xFFFF)).is_some()
@@ -3023,7 +3023,7 @@ pub fn to_model(s: &mut State) {
         if advanced(s) { s.rack.loop_unit.keys().filter_map(|&r| unit_len(s, r).map(|l| (r, l))).collect() } else { s.rack.loop_len.clone() };
     let rack = &s.rack;
     let p = &mut s.project;
-    // Groups in file order: the user groups, with "Unsorted" where the file had it (else last, like FL's Alt+G).
+    // Groups in file order: the user groups, with "Unsorted" where the file had it (else last, like the original's Alt+G).
     let mut names: Vec<String> = rack.groups.iter().map(|g| g.name.clone()).collect();
     let unsorted = rack.unsorted_at.unwrap_or(names.len()).min(names.len());
     names.insert(unsorted, os_model::UNSORTED_GROUP.to_string());

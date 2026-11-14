@@ -5,7 +5,7 @@
 
 //! Sample loading: decode an audio file to stereo `f32` frames.
 //!
-// spec: flp/sample-paths.md (placeholders, formats), audio/sample-formats.md (Vorbis in WAV, MP3, AIFF)
+// spec: project/sample-paths.md (placeholders, formats), audio/sample-formats.md (Vorbis in WAV, MP3, AIFF)
 
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Seek, SeekFrom};
@@ -473,7 +473,7 @@ fn decode(bytes: Vec<u8>, ext: Option<&str>) -> Result<Sample, String> {
     Ok(Sample { rate, left, right })
 }
 
-/// The placeholders of sample paths: the FL Studio install folder and its `Data` folder (spec: flp/sample-paths.md).
+/// The placeholders of sample paths: the original's install folder and its `Data` folder (spec: project/sample-paths.md).
 const FACTORY: &str = "%FLStudioFactoryData%";
 const DATA: &str = "%FLStudioData%";
 
@@ -513,7 +513,7 @@ fn match_case(path: &Path) -> Option<PathBuf> {
     Some(out)
 }
 
-/// The folders a missing sample is looked for in by its file name (spec: flp/sample-paths.md "Missing samples"): the
+/// The folders a missing sample is looked for in by its file name (spec: project/sample-paths.md "Missing samples"): the
 /// opened project's folder and data folder, then the folders the user picked for this project.
 fn search() -> &'static std::sync::RwLock<Vec<PathBuf>> {
     static SEARCH: OnceLock<std::sync::RwLock<Vec<PathBuf>>> = OnceLock::new();
@@ -581,7 +581,7 @@ fn root_of(path: &Path) -> Option<PathBuf> {
     (!root.as_os_str().is_empty()).then_some(root)
 }
 
-/// Whether the drive or share `path` is on answers (spec: flp/sample-paths.md "Missing samples"). A sample path names
+/// Whether the drive or share `path` is on answers (spec: project/sample-paths.md "Missing samples"). A sample path names
 /// a drive or share of the machine the project was made on, which here can be a network location that is gone or a
 /// drive that blocks every look at it for many seconds. Each root is looked at once, on a thread of its own, for at
 /// most `REACH_TIMEOUT`; one that did not answer counts as missing for `UNREACHABLE_FOR`, without waiting again.
@@ -622,7 +622,7 @@ pub fn reachable(path: &Path) -> bool {
 /// placeholders) and caches decoded samples.
 #[derive(Debug, Default)]
 pub struct SampleLibrary {
-    /// The user's FL Studio install folder; `None` = placeholder paths can't be resolved.
+    /// The user's original install folder; `None` = placeholder paths can't be resolved.
     pub factory_dir: Option<PathBuf>,
     cache: HashMap<String, Option<Arc<Sample>>>,
     /// Built-in tones by output rate (the engine's empty-sampler fallback), built once.
@@ -655,10 +655,10 @@ impl SampleLibrary {
         SampleLibrary { factory_dir, ..Default::default() }
     }
 
-    /// The FL Studio install folder on this machine, if one is found: the folder named by the environment
+    /// The original's install folder on this machine, if one is found: the folder named by the environment
     /// variable `OPENSTUDIO_FACTORY`, else the default install location (on macOS the newest
     /// `/Applications/FL Studio ....app`, whose install folder is `Contents/Resources/FL`), else (off Windows)
-    /// the newest "FL Studio ..." folder in the Wine prefix (`WINEPREFIX`, or `~/.wine`).
+    /// the newest folder named after the original in the Wine prefix (`WINEPREFIX`, or `~/.wine`).
     pub fn default_factory_dir() -> Option<PathBuf> {
         if let Some(p) = std::env::var_os("OPENSTUDIO_FACTORY").map(PathBuf::from) {
             return p.is_dir().then_some(p);
@@ -707,7 +707,7 @@ impl SampleLibrary {
 
     /// The file a project's sample path names: a placeholder resolved against the install folder (`None` while it is
     /// not set), else the path itself. Paths are matched without regard to case and take either slash as a separator
-    /// (spec: flp/layouts.md "Older files", flp/sample-paths.md): where the path as written does not exist, each part
+    /// (spec: project/layouts.md "Older files", flp/sample-paths.md): where the path as written does not exist, each part
     /// is looked for ignoring case.
     pub fn resolve(&self, project_path: &str) -> Option<PathBuf> {
         let rel = |rest: &str| rest.trim_start_matches(['\\', '/']).replace(['\\', '/'], std::path::MAIN_SEPARATOR_STR);

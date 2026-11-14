@@ -110,7 +110,7 @@ const SNAP_L: f32 = 16.0;
 /// Harmonics the wheel scrolls per notch.
 const HARM_WHEEL: i32 = 8;
 
-/// The point menu's modes in FL's order, with their codes (plugins/image-line-curves.md).
+/// The point menu's modes in the original's order, with their codes (plugins/image-line-curves.md).
 const POINT_MODES: [(&str, u8); 13] = [
     ("Hold", 2),
     ("Smooth", 10),
@@ -502,7 +502,7 @@ impl Logic {
 
     /// `Point 5/7:2:517`, the level in its target's form as the right part (plugins/sytrus-editor.md §3.1). Times
     /// are half seconds (`s:ms`, the milliseconds truncated), `bar:beat:tick` when tempo-based; a map's positions
-    /// are shown as percent (KEY M too: FL's note names were not measured).
+    /// are shown as percent (KEY M too: the original's note names were not measured).
     fn point_hint(&self, i: usize) -> String {
         let Some(id) = self.curve_id() else { return String::new() };
         let c = self.curve(id);
@@ -514,7 +514,7 @@ impl Logic {
             let ticks = (t * 96.0).round() as i64;
             format!("{:03}:{:02}:{:03}", ticks / 384 + 1, ticks / 96 % 4 + 1, ticks % 96)
         } else {
-            // FL's sum is single precision.
+            // the original's sum is single precision.
             let ms = (t as f32 * 500.0).floor() as i64;
             format!("{}:{:03}", ms / 1000, ms % 1000)
         };
@@ -1414,7 +1414,7 @@ impl Logic {
             Cmd::Curve(id, k) => self.curve_cmd(id, k),
             Cmd::Harm(m, k) => self.harm_cmd(m, k),
             Cmd::Osc(k) => self.osc_cmd(k),
-            // FL's measured Default: unison order 4, the other unison settings as they were in its test.
+            // the original's measured Default: unison order 4, the other unison settings as they were in its test.
             Cmd::UnisonDefault => {
                 let before = self.st.s;
                 self.st.s[8..=14].copy_from_slice(&[4, 128, 100, 128, 0, 16, 0]);

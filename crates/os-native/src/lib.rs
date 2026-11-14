@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Hosting plugins written against the FL Studio native plugin SDK, loaded from the user's own installation.
+//! Hosting plugins written against the original native plugin SDK, loaded from the user's own installation.
 //!
 //! Implemented from the spec `plugins/fruity-abi.md` (public SDK interface).
 //! Windows x64 only for now.
@@ -32,7 +32,7 @@ use abi::{flags, IntPtr, PluginObject, VoiceParams};
 use host::HostObject;
 use stream::MemStream;
 
-/// Default FL Studio install folder (data path): `OPENSTUDIO_FACTORY` if set, else the usual path.
+/// Default original install folder (data path): `OPENSTUDIO_FACTORY` if set, else the usual path.
 pub fn default_fl_dir() -> PathBuf {
     std::env::var_os("OPENSTUDIO_FACTORY")
         .map(PathBuf::from)

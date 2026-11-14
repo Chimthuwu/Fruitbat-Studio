@@ -1477,7 +1477,7 @@ fn screenshot(args: &[String]) {
             "--rack-width" => rack_w = it.next().and_then(|v| v.parse().ok()),
             "--pattern" => pattern = it.next().and_then(|v| v.parse().ok()),
             "--channel" => channel = it.next().and_then(|v| v.parse().ok()),
-            // Physical canvas size "WxH" (default 1920x1080 times the scale), e.g. FL's window on a 150 % display:
+            // Physical canvas size "WxH" (default 1920x1080 times the scale), e.g. the original's window on a 150 % display:
             // `--size 2560x1540 --scale 1.5`.
             "--size" => {
                 if let Some((w, h)) = it.next().and_then(|v| v.split_once('x')) {

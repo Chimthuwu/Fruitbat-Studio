@@ -322,7 +322,7 @@ impl Logic {
         format!("{}: {}", ctl::name(k), ctl::text(k, ctl::shown(&self.st, k)))
     }
 
-    /// The hint of a target: FL's measured hints (`Name: value`), the Lemon Studio choices where FL's were not read
+    /// The hint of a target: the original's measured hints (`Name: value`), the Lemon Studio choices where the original's were not read
     /// (plugins/lemon-press.md §3).
     fn hint_for(&self, t: Option<&Target>) -> String {
         let b = self.b();
@@ -1371,7 +1371,7 @@ mod tests {
         save(&mut l, "press_info", 1.0);
     }
 
-    /// The state in a preset file: the data of its event 213 (a test helper; presets are FLP-like event files).
+    /// The state in a preset file: the data of its event 213 (a test helper; presets are legacy project-like event files).
     fn fst_state(b: &[u8]) -> Option<Vec<u8>> {
         let mut i = 22;
         while i < b.len() {

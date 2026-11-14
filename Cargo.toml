@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "crates/os-model",
-    "crates/os-flp",
+    "crates/os-project",
     "crates/os-engine",
     "crates/os-dsp",
     "tools/flp-dump",
@@ -78,7 +78,7 @@ license = "GPL-3.0-or-later"
 
 [workspace.dependencies]
 os-model = { path = "crates/os-model" }
-os-flp = { path = "crates/os-flp" }
+os-project = { path = "crates/os-project" }
 os-engine = { path = "crates/os-engine" }
 os-dsp = { path = "crates/os-dsp" }
 os-hostlink = { path = "crates/os-hostlink" }

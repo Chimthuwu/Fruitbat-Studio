@@ -228,7 +228,7 @@ pub struct Pattern {
 }
 
 impl Default for Pattern {
-    /// FL's Default pattern (§9): C5, C#5, D5, a 1/16 note each, one after another.
+    /// the original's Default pattern (§9): C5, C#5, D5, a 1/16 note each, one after another.
     fn default() -> Self {
         Pattern { name: "Default".into(), path: None, ppq: 96, rows: vec![Row::plain(0, 24, 60), Row::plain(24, 24, 61), Row::plain(48, 24, 62)] }
     }
@@ -237,13 +237,13 @@ impl Default for Pattern {
 /// The rows and PPQ of a pattern file: 20-byte records for a version string starting with `3.` or `4.`, else 24-byte
 /// ones.
 pub fn parse(bytes: &[u8]) -> Option<(u32, Vec<Row>)> {
-    let f = os_flp::FlpFile::parse(bytes).ok()?;
+    let f = os_project::FlpFile::parse(bytes).ok()?;
     let mut ppq = 96;
     let (mut old, mut data) = (false, None);
     for c in &f.chunks {
         match &c.body {
-            os_flp::ChunkBody::Header(h) => ppq = u32::from(h.ppq().unwrap_or(96).max(1)),
-            os_flp::ChunkBody::Events(evs) => {
+            os_project::ChunkBody::Header(h) => ppq = u32::from(h.ppq().unwrap_or(96).max(1)),
+            os_project::ChunkBody::Events(evs) => {
                 for e in evs {
                     match (e.id, e.data()) {
                         (199, Some(d)) => old = d.starts_with(b"3.") || d.starts_with(b"4."),
@@ -252,7 +252,7 @@ pub fn parse(bytes: &[u8]) -> Option<(u32, Vec<Row>)> {
                     }
                 }
             }
-            os_flp::ChunkBody::Raw(_) => {}
+            os_project::ChunkBody::Raw(_) => {}
         }
     }
     let d = data?;
@@ -301,7 +301,7 @@ pub fn load(path: &Path) -> Result<Pattern, String> {
     Ok(Pattern { name, path: Some(path.to_path_buf()), ppq, rows })
 }
 
-/// FL's Arpeggiator folder (read in place when FL Studio is installed; §9).
+/// the original's Arpeggiator folder (read in place when the original is installed; §9).
 pub fn folder() -> PathBuf {
     let fl = crate::factory_folder::dir().unwrap_or_else(os_native::default_fl_dir);
     fl.join("Data").join("Patches").join("Scores").join("Arpeggiator")
@@ -359,7 +359,7 @@ pub(crate) fn listing(dir: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
     (files, dirs)
 }
 
-/// The ▸ menu (§1, §9): the built-in Default, then FL's Arpeggiator folder when installed, its sub-folders as submenus;
+/// The ▸ menu (§1, §9): the built-in Default, then the original's Arpeggiator folder when installed, its sub-folders as submenus;
 /// the current pattern ticked.
 pub fn pattern_menu(cur: &Pattern, root: &Path) -> Vec<PItem> {
     let item = |name: String, path: Option<PathBuf>| {

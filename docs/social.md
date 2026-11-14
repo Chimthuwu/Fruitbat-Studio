@@ -22,7 +22,7 @@ LemonWig Studio — Bitwig/Ableton-style workflow meets Lemon Studio: launch cli
 If you want a little more room (the GitHub About box allows 350 characters), use this instead:
 
 ```
-LemonWig Studio — a performance-first take on Lemon Studio. Clips and scenes you launch, a mixer that behaves like a hardware console, FL Studio projects still open. Free and open source, written in Rust.
+LemonWig Studio — a performance-first take on Lemon Studio. Clips and scenes you launch, a mixer that behaves like a hardware console, the original projects still open. Free and open source, written in Rust.
 ```
 
 **Website** (shown on the card as a link):
@@ -49,7 +49,7 @@ docs/assets/social-preview.png
 While you are there, put the same words in the image's **alt text** so shares are described for screen readers:
 
 ```
-LemonWig Studio: Bitwig/Ableton-style workflow meets Lemon Studio. Clips you launch, a mixer that feels like hardware, FL Studio projects.
+LemonWig Studio: Bitwig/Ableton-style workflow meets Lemon Studio. Clips you launch, a mixer that feels like hardware, the original projects.
 ```
 
 ---

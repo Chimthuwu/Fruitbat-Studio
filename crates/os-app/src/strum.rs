@@ -390,7 +390,7 @@ mod tests {
         s
     }
 
-    /// Knob positions as FL's wheel notches (1/32 of a strength's side, 1/16 of a tension's).
+    /// Knob positions as the original's wheel notches (1/32 of a strength's side, 1/16 of a tension's).
     fn st(n: i32) -> f32 {
         n as f32 / 32.0
     }

@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Typed view of an FLP event stream: [`load`] maps events to an [`os_model::Project`],
+//! Typed view of a legacy project event stream: [`load`] maps events to an [`os_model::Project`],
 //! [`apply`] writes model values back into the original stream in place, so everything the
 //! model doesn't cover (unknown events, plugin states, …) is preserved and an unedited
 //! project re-serializes byte-for-byte.
 //!
-// spec: flp/events/project-info.md, flp/events/channels.md, flp/events/patterns.md,
+// spec: project/events/project-info.md, flp/events/channels.md, flp/events/patterns.md,
 //       flp/events/mixer.md, flp/events/playlist.md
 
 use std::collections::BTreeMap;
@@ -35,19 +35,19 @@ mod id {
     pub const GENRE: u8 = 206;
     pub const AUTHOR: u8 = 207;
     /// Events FL writes between the author and the comments (167, 202), and 237 (the project's start date and the
-    /// time spent), which ends the project information (spec: flp/engine-events.md "Order in the file").
+    /// time spent), which ends the project information (spec: project/engine-events.md "Order in the file").
     pub const INFO_167: u8 = 167;
     pub const INFO_202: u8 = 202;
     pub const WORK_TIME: u8 = 237;
-    /// Show info on opening, 1 = on (spec: flp/events/project-info.md).
+    /// Show info on opening, 1 = on (spec: project/events/project-info.md).
     pub const SHOW_INFO: u8 = 10;
-    /// The project events that stand before the project information and are not read (spec: flp/engine-events.md
+    /// The project events that stand before the project information and are not read (spec: project/engine-events.md
     /// "Order in the file": 156, 67, 9, 11, 80, 17, 18, 35, 23, 44, 30, 10).
     pub const OTHER_PROJECT: [u8; 5] = [9, 35, 23, 44, 10];
     pub const CURRENT_PATTERN: u8 = 67;
-    /// Current arrangement number (spec: flp/events/playlist.md).
+    /// Current arrangement number (spec: project/events/playlist.md).
     pub const CURRENT_ARRANGEMENT: u8 = 100;
-    /// Playlist view: scroll, time zoom, track height (spec: flp/events/playlist.md "Playlist view").
+    /// Playlist view: scroll, time zoom, track height (spec: project/events/playlist.md "Playlist view").
     pub const PLAYLIST_VIEW: u8 = 242;
 
     pub const CH_START: u8 = 64;
@@ -66,33 +66,33 @@ mod id {
     pub const DISPLAY_NAME: u8 = 203;
     pub const COLOR: u8 = 128;
     pub const SAMPLE_PATH: u8 = 196;
-    /// Channel rack state (spec: flp/events/channels.md): zipped row, lock, filter group.
+    /// Channel rack state (spec: project/events/channels.md): zipped row, lock, filter group.
     pub const CH_ZIPPED: u8 = 15;
     pub const CH_LOCKED: u8 = 32;
     pub const CH_GROUP: u8 = 145;
-    /// Project-level rack settings (spec: flp/events/project-info.md).
+    /// Project-level rack settings (spec: project/events/project-info.md).
     pub const SWING: u8 = 11;
     /// The bar: beats per bar (17) and steps per beat (18, not the denominator), how the Project page shows them (35:
-    /// 1 = time signature, 0 = time division) and "play truncated notes" (30, present = on) (spec: flp/engine-events.md
+    /// 1 = time signature, 0 = time division) and "play truncated notes" (30, present = on) (spec: project/engine-events.md
     /// "Project").
     pub const TIME_NUM: u8 = 17;
     pub const TIME_DEN: u8 = 18;
     pub const TIME_MODE: u8 = 35;
-    /// Song or pattern mode (9: 1 = song, 0 = pattern), one byte right after 67 (spec: flp/engine-events.md "Project").
+    /// Song or pattern mode (9: 1 = song, 0 = pattern), one byte right after 67 (spec: project/engine-events.md "Project").
     pub const SONG_MODE: u8 = 9;
     pub const PLAY_TRUNCATED: u8 = 30;
     /// Settings shown but not played yet: panning law (23), automatic crossfades (44), fast declick for cut groups (40,
-    /// after event 100) (spec: flp/engine-events.md "Project").
+    /// after event 100) (spec: project/engine-events.md "Project").
     pub const PANNING_LAW: u8 = 23;
     pub const AUTO_CROSSFADES: u8 = 44;
     pub const FAST_DECLICK: u8 = 40;
     /// Performance mode, after event 40 (spec: ui/performance-mode.md §5).
     pub const PERFORMANCE: u8 = 31;
-    /// The project's main pitch, cents as a signed 16-bit value (spec: flp/engine-events.md "Project").
+    /// The project's main pitch, cents as a signed 16-bit value (spec: project/engine-events.md "Project").
     pub const MAIN_PITCH: u8 = 80;
     /// Channel fine tune, cents (spec: audio/voice-levels.md).
     pub const CH_FINE: u8 = 142;
-    /// Channel settings the engine reads (spec: flp/engine-events.md "A channel").
+    /// Channel settings the engine reads (spec: project/engine-events.md "A channel").
     pub const CH_SWING_SHARE: u8 = 97;
     /// Truncate swing notes, 0 or 1 (spec: audio/swing.md).
     pub const CH_TRUNCATE_SWING: u8 = 48;
@@ -107,7 +107,7 @@ mod id {
     pub const CH_ECHO_MOD: u8 = 138;
     pub const CH_TRACKING: u8 = 228;
     pub const CH_ADJUST: u8 = 229;
-    /// A sample's loop start and end in frames (spec: flp/events/channels.md "Loop points").
+    /// A sample's loop start and end in frames (spec: project/events/channels.md "Loop points").
     pub const CH_LOOP_POINTS: u8 = 251;
     /// Cut groups (word 0 cuts, word 1 cut by) and the voice settings: maximum voices, slide time, mono / portamento
     /// (spec: audio/note-rules.md "Settings").
@@ -129,7 +129,7 @@ mod id {
     pub const SMP_REVERB: u8 = 139;
     pub const GROUP_NAME: u8 = 231;
     pub const CURRENT_GROUP: u8 = 146;
-    /// The project's initial values, 12-byte records, in the prelude after 146 (spec: flp/engine-events.md "Event 216",
+    /// The project's initial values, 12-byte records, in the prelude after 146 (spec: project/engine-events.md "Event 216",
     /// flp/events/project-info.md, ui/settings-choices.md "Advanced: Initialize controls automatically").
     pub const INIT_CONTROLS: u8 = 216;
 
@@ -140,7 +140,7 @@ mod id {
     pub const PAT_NAME: u8 = 193;
     pub const PAT_COLOR: u8 = 150;
     /// Pattern length in ticks (metadata) and per-channel loop lengths (after the notes), loop-mode-off flag and
-    /// loop type (metadata) (spec: flp/events/patterns.md).
+    /// loop type (metadata) (spec: project/events/patterns.md).
     pub const PAT_LENGTH: u8 = 164;
     pub const LOOP_CHANNEL: u8 = 160;
     pub const LOOP_STEPS: u8 = 161;
@@ -154,12 +154,12 @@ mod id {
     pub const PL_COLOR_FLAG: u8 = 43;
     pub const PL_NAME: u8 = 239;
     pub const ARR_UNKNOWN: u8 = 36;
-    /// Time marker group (spec: flp/events/playlist.md "Time markers").
+    /// Time marker group (spec: project/events/playlist.md "Time markers").
     pub const MARKER_POS: u8 = 148;
     pub const MARKER_NUM: u8 = 33;
     pub const MARKER_DEN: u8 = 34;
     pub const MARKER_NAME: u8 = 205;
-    /// A key marker's scale (spec: flp/events/playlist.md "Time markers").
+    /// A key marker's scale (spec: project/events/playlist.md "Time markers").
     pub const MARKER_SCALE: u8 = 101;
     /// A key marker's root note, flag (1 on Default) and scale list index (−1 Default, −2 Black notes).
     pub const MARKER_ROOT: u8 = 46;
@@ -167,15 +167,15 @@ mod id {
     pub const MARKER_SCALE_INDEX: u8 = 168;
     pub const MARKER_IDS: [u8; 8] = [148, 33, 34, 46, 45, 168, 101, 205];
     /// Automation clip points (in the channel block) and links (before the first channel)
-    /// (spec: flp/events/automation.md).
+    /// (spec: project/events/automation.md).
     pub const AUTO_DATA: u8 = 234;
     pub const AUTO_LINK: u8 = 227;
-    /// A link's mapping formula, right after its event 227 (spec: flp/events/automation.md "Controller links").
+    /// A link's mapping formula, right after its event 227 (spec: project/events/automation.md "Controller links").
     pub const LINK_FORMULA: u8 = 230;
 
     pub const MX_COLOR: u8 = 149;
     pub const MX_COLOR_FLAG: u8 = 42;
-    /// The track's icon, after the colour flag and before the name (spec: flp/events/mixer.md "Track blocks").
+    /// The track's icon, after the colour flag and before the name (spec: project/events/mixer.md "Track blocks").
     pub const MX_ICON: u8 = 95;
     pub const MX_NAME: u8 = 204;
     pub const MX_FLAGS: u8 = 236;
@@ -188,13 +188,13 @@ mod id {
     pub const MX_MONITOR: u8 = 166;
     pub const MX_INPUT: u8 = 154;
     pub const MX_OUTPUT: u8 = 147;
-    /// Number of stored mixer tracks, just before the first track (spec: flp/events/mixer.md).
+    /// Number of stored mixer tracks, just before the first track (spec: project/events/mixer.md).
     pub const MX_COUNT: u8 = 103;
 }
 
 const NOTE_LEN: usize = 24;
 /// Clip record lengths: 88 bytes in files of FL 26, 80 bytes in files of FL 24.2 to 25, 60 bytes in files of FL 21
-/// to 24.1 (20.99 betas included), 32 bytes up to FL 20 (spec: flp/layouts.md, "Playlist clip records").
+/// to 24.1 (20.99 betas included), 32 bytes up to FL 20 (spec: project/layouts.md, "Playlist clip records").
 const CLIP_LEN: usize = 88;
 const CLIP_LEN_25: usize = 80;
 const CLIP_LEN_21: usize = 60;
@@ -213,7 +213,7 @@ pub enum ProjectError {
     #[error("{0}")]
     Structure(String),
     /// A stream in an older generation's layout (channel blocks without event 51) that [`upgrade`] has not converted,
-    /// or could not (spec: flp/layouts.md).
+    /// or could not (spec: project/layouts.md).
     #[error("project in an older file layout (saved by {0}) that could not be converted")]
     LegacyLayout(String),
     #[error("model does not match the file layout: {0}")]
@@ -270,7 +270,7 @@ fn comments_to_file(s: &str) -> String {
     s.replace("\r\n", "\r").replace('\n', "\r")
 }
 
-/// Event 237: the start and the time spent, two little-endian doubles in days (spec: flp/events/project-info.md).
+/// Event 237: the start and the time spent, two little-endian doubles in days (spec: project/events/project-info.md).
 /// `None` unless it holds 16 bytes.
 fn work_time_from(d: &[u8]) -> Option<WorkTime> {
     let d: &[u8; 16] = d.try_into().ok()?;
@@ -314,9 +314,9 @@ struct ChannelLoc {
     end: usize,
     name: Option<usize>,
     plugin_rec: Option<usize>,
-    /// Event 21, the channel type (spec: flp/events/channels.md).
+    /// Event 21, the channel type (spec: project/events/channels.md).
     kind: Option<usize>,
-    /// Events 201 (plugin name) and 213 (plugin state) (spec: flp/events/plugins.md).
+    /// Events 201 (plugin name) and 213 (plugin state) (spec: project/events/plugins.md).
     plugin_name: Option<usize>,
     state: Option<usize>,
     color: Option<usize>,
@@ -325,7 +325,7 @@ struct ChannelLoc {
     levels: Option<usize>,
     target: Option<usize>,
     auto: Option<usize>,
-    /// Event 196 (sample path) and event 20, which it follows (spec: flp/events/channels.md, row 40).
+    /// Event 196 (sample path) and event 20, which it follows (spec: project/events/channels.md, row 40).
     sample: Option<usize>,
     ev20: Option<usize>,
     zipped: Option<usize>,
@@ -421,12 +421,12 @@ struct Layout {
     /// (230) right after it.
     ctl_links: Vec<(usize, Option<usize>)>,
     swing: Option<usize>,
-    /// Time signature and "play truncated notes" (spec: flp/engine-events.md "Project").
+    /// Time signature and "play truncated notes" (spec: project/engine-events.md "Project").
     time_num: Option<usize>,
     time_den: Option<usize>,
     truncated: Option<usize>,
     main_pitch: Option<usize>,
-    /// The project settings among `id::OTHER_PROJECT` whose place FL's order fixes (9, 35, 23, 44; spec:
+    /// The project settings among `id::OTHER_PROJECT` whose place the original's order fixes (9, 35, 23, 44; spec:
     /// flp/engine-events.md "Project", "Order in the file"): the id and where it first stands, to place 17, 18 and 30
     /// (35, 23 and 44 are also read: [`Layout::setting`]).
     unread_settings: Vec<(u8, usize)>,
@@ -447,7 +447,7 @@ impl Layout {
     }
 }
 
-/// Marker kind of a pattern's "Length" marker and its name (spec: flp/events/patterns.md, metadata block).
+/// Marker kind of a pattern's "Length" marker and its name (spec: project/events/patterns.md, metadata block).
 const LENGTH_MARKER_KIND: u32 = 6;
 const LENGTH_MARKER_NAME: &str = "Length";
 /// Loop type "Loop step channels" (event 162).
@@ -496,9 +496,9 @@ fn scan(events: &[Event]) -> Result<Layout, ProjectError> {
         match (region, e.id) {
             (Region::Prelude | Region::Channels, id::CH_START) => {
                 region = Region::Channels;
-                // spec: flp/events/channels.md "Version scope": blocks end with 51 only in
+                // spec: project/events/channels.md "Version scope": blocks end with 51 only in
                 // files saved by FL 24.2+; a block reaching the next 64 without one is in an older layout,
-                // which [`upgrade`] converts first (spec: flp/layouts.md).
+                // which [`upgrade`] converts first (spec: project/layouts.md).
                 let end = (i + 1..events.len())
                     .take_while(|&k| events[k].id != id::CH_START && events[k].id != id::ARR_START)
                     .find(|&k| events[k].id == id::CH_END)
@@ -519,7 +519,7 @@ fn scan(events: &[Event]) -> Result<Layout, ProjectError> {
                 let loc = l.patterns.entry(number).or_default();
                 let mut k = i + 1;
                 let mut is_meta = false;
-                // spec: flp/events/patterns.md "Control points": `65, 223, 224` (either may be absent).
+                // spec: project/events/patterns.md "Control points": `65, 223, 224` (either may be absent).
                 let has_controls = events.get(k).is_some_and(|n| n.id == id::PAT_CONTROLS);
                 if has_controls {
                     loc.start = Some(i);
@@ -633,7 +633,7 @@ fn scan(events: &[Event]) -> Result<Layout, ProjectError> {
                 }
             }
             (Region::Arrangements | Region::Mixer, id::CURRENT_ARRANGEMENT) => l.current_arrangement = Some(i),
-            // Event 40 stands after event 100, among 29, 39, 31, 38, 103 (spec: flp/engine-events.md "Project").
+            // Event 40 stands after event 100, among 29, 39, 31, 38, 103 (spec: project/engine-events.md "Project").
             (Region::Arrangements, id::FAST_DECLICK) if l.current_arrangement.is_some() && l.fast_declick.is_none() => {
                 l.fast_declick = Some(i)
             }
@@ -661,7 +661,7 @@ fn scan(events: &[Event]) -> Result<Layout, ProjectError> {
                     m.color_flag = Some(i);
                 }
             }
-            // The icon belongs to the header, before the track's flags (spec: flp/events/mixer.md "Track blocks").
+            // The icon belongs to the header, before the track's flags (spec: project/events/mixer.md "Track blocks").
             (Region::Mixer, id::MX_ICON) => {
                 if let Some(m) = l.mixer.last_mut().filter(|m| m.flags.is_none()) {
                     m.icon = Some(i);
@@ -752,7 +752,7 @@ fn text_enc(events: &[Event], version: Option<usize>) -> TextEnc {
 }
 
 /// The record length a clip list fits: a whole number of records, each with `00 50` at byte 4, trying 88, 80, 60
-/// and 32 bytes (spec: flp/layouts.md, "How to tell the generation").
+/// and 32 bytes (spec: project/layouts.md, "How to tell the generation").
 fn list_clip_len(data: &[u8]) -> Option<usize> {
     [CLIP_LEN, CLIP_LEN_25, CLIP_LEN_21, CLIP_LEN_20]
         .into_iter()
@@ -775,7 +775,7 @@ fn clip_len(events: &[Event], version: Option<usize>) -> usize {
 /// Reads the typed project from a parsed file.
 pub fn load(file: &FlpFile) -> Result<Project, ProjectError> {
     let events = events_of(file)?;
-    // A file of an older generation is read as its conversion to the current layout (spec: flp/layouts.md); [`apply`]
+    // A file of an older generation is read as its conversion to the current layout (spec: project/layouts.md); [`apply`]
     // needs the converted file itself ([`upgrade`]).
     if is_legacy(events) {
         let mut current = file.clone();
@@ -787,7 +787,7 @@ pub fn load(file: &FlpFile) -> Result<Project, ProjectError> {
     let enc = text_enc(events, l.version);
     l.enc = Some(enc);
     let clen = clip_len(events, l.version);
-    // FL writes 194, 206, 207 and 195 empty when they are empty (spec: flp/events/project-info.md "Writer notes"): an
+    // FL writes 194, 206, 207 and 195 empty when they are empty (spec: project/events/project-info.md "Writer notes"): an
     // empty text reads as no value.
     let text = |i: Option<usize>| i.and_then(|i| events[i].data()).map(|d| decode_text(d, enc)).filter(|t| !t.is_empty());
     let init_controls = decode_init_controls(l.init_controls.and_then(|i| events[i].data()).unwrap_or(&[]));
@@ -800,7 +800,7 @@ pub fn load(file: &FlpFile) -> Result<Project, ProjectError> {
             .unwrap_or_default(),
         ppq: header.ppq().unwrap_or(96),
         // The stored tempo. The initial values' tempo record is not read into it: the app sets the initial values on
-        // opening in song mode, as FL does (spec: flp/engine-events.md "Event 216").
+        // opening in song mode, as FL does (spec: project/engine-events.md "Event 216").
         tempo: l.tempo.map(|i| f64::from(int(&events[i])) / 1000.0),
         info: ProjectInfo {
             title: text(l.title),
@@ -859,7 +859,7 @@ pub fn load(file: &FlpFile) -> Result<Project, ProjectError> {
         let d = events[i].data().unwrap_or(&[]);
         let ch = u16::from_le_bytes([d[2], d[3]]);
         let target = u32::from_le_bytes(d[8..12].try_into().unwrap());
-        // A clip drives every target it has a link for, in file order (spec: flp/events/automation.md "Event 227").
+        // A clip drives every target it has a link for, in file order (spec: project/events/automation.md "Event 227").
         if let Some(a) = p.automations.iter_mut().find(|a| a.channel == ch) {
             a.targets.push(target);
         }
@@ -972,7 +972,7 @@ fn load_channel(events: &[Event], loc: &ChannelLoc, enc: TextEnc) -> Channel {
 /// volume multiplier, -, mod X offset, mod Y offset), swing share (97, 0..=128), time shift (89, 0..=1024), root note
 /// (135), fine tune (142), the main pitch and add-to-key switches, the gate time and the key zone (215 bytes 11 and 63,
 /// ints at 64, 68 and 72), the arpeggiator (215 ints at 40..56 and 92, byte 60), the echo delay (209, 138, 215 byte 10),
-/// tracking (228 twice), cut groups (132) and the voice settings (221) (spec: flp/engine-events.md "A channel",
+/// tracking (228 twice), cut groups (132) and the voice settings (221) (spec: project/engine-events.md "A channel",
 /// audio/voice-levels.md, audio/swing.md, audio/sampler.md, audio/channel-misc.md, audio/note-rules.md,
 /// flp/events/channels.md). `write_misc` is the inverse. Full portamento is not read (its storage is OpenStudio-specs
 /// REQUESTS.md #5).
@@ -1166,7 +1166,7 @@ fn misc_215_fields(m: &ChannelMisc) -> [(usize, Vec<u8>); 14] {
     ]
 }
 
-/// A new event 215 for a channel that has none: FL's record of a new channel (`audio_clip_215`) holding the channel's
+/// A new event 215 for a channel that has none: the original's record of a new channel (`audio_clip_215`) holding the channel's
 /// own values in every field the reader takes from it, so adding it changes nothing else.
 fn new_sample_settings(ch: &Channel) -> Vec<u8> {
     let mut d = audio_clip_215(ch.sound.stretch);
@@ -1304,8 +1304,8 @@ fn write_misc(block: &mut [Event], ch: &Channel, old: &ChannelMisc) -> Vec<Event
     add
 }
 
-/// Event 215 of a new audio clip channel as FL 26 writes it (declick mode 1, not stretched), its stretch ints
-/// (bytes 96..112) replaced by the channel's (spec: flp/engine-events.md "A channel", audio/audio-clips.md).
+/// Event 215 of a new audio clip channel as version 26 writes it (declick mode 1, not stretched), its stretch ints
+/// (bytes 96..112) replaced by the channel's (spec: project/engine-events.md "A channel", audio/audio-clips.md).
 const AUDIO_CLIP_215: &str = "8c0000000000000001000000ffffffff3c0000000000803f0000803f0000803f0000803f0000803f000000000300000000000000000400003000000000000100a7050000000000000001000000000000000000010000000000000000010000000000000000000000000000000000000002000000feffffffffffffff000000000000000000000000000000000000f03f0000000000000000ffffffff01010000000000000000e03f";
 
 fn audio_clip_215(stretch: [u32; 4]) -> Vec<u8> {
@@ -1343,8 +1343,8 @@ fn load_sound(block: &[Event], levels: &dyn Fn(usize) -> Option<i32>) -> Channel
     s
 }
 
-/// Event 251 as FL 26 writes it for a sample whose loop points stand at its ends (frames -1 and `i64::MAX`), the
-/// frames replaced by `points` (spec: flp/events/channels.md "Loop points").
+/// Event 251 as version 26 writes it for a sample whose loop points stand at its ends (frames -1 and `i64::MAX`), the
+/// frames replaced by `points` (spec: project/events/channels.md "Loop points").
 fn loop_points_251(points: [i64; 2]) -> Vec<u8> {
     let mut d = 2u32.to_le_bytes().to_vec();
     for v in points {
@@ -1502,7 +1502,7 @@ fn encode_note(n: &Note) -> [u8; NOTE_LEN] {
     r
 }
 
-/// Bit of record byte 19 for a muted clip (spec: flp/events/playlist.md).
+/// Bit of record byte 19 for a muted clip (spec: project/events/playlist.md).
 const CLIP_MUTED: u8 = 0x20;
 
 fn decode_clip(r: &[u8]) -> Clip {
@@ -1577,7 +1577,7 @@ fn encode_clip(c: &Clip) -> [u8; CLIP_LEN] {
 }
 
 /// Clip records of `len` bytes sorted by position. A clip without an id, or with one already used (a copy), gets
-/// the next free id (spec: playlist.md, byte 32). 80-byte records hold 0 at bytes 76..79 (spec: flp/layouts.md).
+/// the next free id (spec: playlist.md, byte 32). 80-byte records hold 0 at bytes 76..79 (spec: project/layouts.md).
 fn encode_clips(clips: &[Clip], len: usize) -> Vec<u8> {
     let mut sorted = clips.to_vec();
     sorted.sort_by_key(|c| c.position);
@@ -1647,7 +1647,7 @@ const LFO_ENV_POINTS: usize = 48;
 /// pulse width and phase offset.
 const LFO_VALUES_LEN: usize = 40;
 
-/// A new automation clip's event-234 header and tail (spec: flp/layouts.md "An automation clip's record"), with the
+/// A new automation clip's event-234 header and tail (spec: project/layouts.md "An automation clip's record"), with the
 /// fields written from the points and the LFO left at 0: the curve's head (kind 4, version 3), the curve's flags byte 1
 /// and its four ints at -1, the four ints 128, 128, 0, 128, the LFO envelope's head (kind 5, version 3), the LFO's
 /// three ints at -1.
@@ -1795,7 +1795,7 @@ fn encode_automation(a: &Automation) -> Vec<u8> {
     d
 }
 
-/// Event 227 linking automation channel `channel` to `target` (spec: flp/events/automation.md).
+/// Event 227 linking automation channel `channel` to `target` (spec: project/events/automation.md).
 fn link_event(channel: u16, target: u32) -> Event {
     let mut d = vec![0u8; 20];
     d[2..4].copy_from_slice(&channel.to_le_bytes());
@@ -1869,7 +1869,7 @@ fn perf_bytes(p: &PerfSettings) -> [u8; 24] {
 }
 
 /// The slot a slot marker (98) closes: its low byte. Files hold the slot's number there; a few (an FL 20.8 file and its
-/// resaves) have 0x106 and 0x107 for slots 6 and 7 (spec: flp/layouts.md "Older files").
+/// resaves) have 0x106 and 0x107 for slots 6 and 7 (spec: project/layouts.md "Older files").
 fn slot_number(e: &Event) -> usize {
     (int(e) & 0xFF) as usize
 }
@@ -1895,7 +1895,7 @@ const MX_EQ_GAIN: u8 = 0xD0;
 const MX_EQ_FREQ: u8 = 0xD8;
 const MX_EQ_WIDTH: u8 = 0xE0;
 
-/// Per mixer track, the plugin-state event (213) of each slot 0-9 that holds a plugin (spec: flp/events/mixer.md
+/// Per mixer track, the plugin-state event (213) of each slot 0-9 that holds a plugin (spec: project/events/mixer.md
 /// "Slot sub-block": a slot's plugin events come before its 98 marker). Track ranges as in `load_mixer`.
 fn slot_state_events(events: &[Event], l: &Layout) -> Vec<[Option<usize>; 10]> {
     slot_events(events, l, id::PLUGIN_STATE)
@@ -1935,7 +1935,7 @@ fn mixer_location(track: u16, slot: u16) -> u16 {
 }
 
 /// The track number a stored track's slot plugins (event 212) and parameter records (event 225) use: the last stored
-/// track is the mixer's "current" track, numbered 501 there (spec: flp/events/mixer.md "The last track").
+/// track is the mixer's "current" track, numbered 501 there (spec: project/events/mixer.md "The last track").
 fn record_track(index: u16, len: usize) -> u16 {
     if index > 0 && usize::from(index) + 1 == len {
         MX_SPECIAL_TRACK
@@ -1990,7 +1990,7 @@ fn main_volume(params: &[u8]) -> Option<u16> {
 }
 
 /// Send records of files up to FL 24.1: kind 0x1F, id 64 + destination (destinations 0..=126) at the source's place
-/// (spec: flp/layouts.md "Parameter ids"); later files use kind 0x20 with the destination as the id.
+/// (spec: project/layouts.md "Parameter ids"); later files use kind 0x20 with the destination as the id.
 const MX_SEND_OLD: std::ops::RangeInclusive<u8> = 64..=190;
 
 fn is_send(kind: u8, pid: u8) -> bool {
@@ -2002,7 +2002,7 @@ fn send_dest(kind: u8, pid: u8) -> u16 {
     if kind == MX_KIND_ROUTE { u16::from(pid) } else { u16::from(pid - 64) }
 }
 
-/// Event 236 flags (spec: flp/layouts.md "A mixer track's record (event 236)"): reverse polarity, swap left / right,
+/// Event 236 flags (spec: project/layouts.md "A mixer track's record (event 236)"): reverse polarity, swap left / right,
 /// effect slots enabled, track on, threaded processing not allowed, docking (two bits: 0 left, 1 middle, 2 right) and,
 /// in the next byte, the separator. A 5-byte record (FL 10 and 11) holds no flags: all at their defaults.
 const MX_FLAG_POLARITY: u8 = 0x01;
@@ -2026,7 +2026,7 @@ fn track_flags5(d: Option<&[u8]>) -> Option<u8> {
 /// Flag 0x20 of a record written before FL 12.8: its one latency value is the output setting.
 const MX_FLAG_LATE_OUT: u8 = 0x20;
 
-/// A track record's output and input latency settings in milliseconds (spec: flp/layouts.md "A mixer track's record
+/// A track record's output and input latency settings in milliseconds (spec: project/layouts.md "A mixer track's record
 /// (event 236)"): at bytes 0..3 and 8..11 of a 12-byte record, the output setting alone at 0..3 of an 8-byte one. A
 /// record written before FL 12.8 (5 or 8 bytes) holds one value, with the other sign: the output setting when flag
 /// 0x20 is set (in a 5-byte record: its fifth byte is not 0), else the input setting.
@@ -2096,7 +2096,7 @@ fn with_flags5(b: u8, m: &MixerTrack) -> u8 {
     if m.separator { b | MX_FLAG5_SEPARATOR } else { b & !MX_FLAG5_SEPARATOR }
 }
 
-/// A mixer track's slot area (spec: flp/events/mixer.md "Slot sub-block"): the events between its flags (236) and its
+/// A mixer track's slot area (spec: project/events/mixer.md "Slot sub-block"): the events between its flags (236) and its
 /// routing (235), and each filled slot's plugin events (its 201 up to, not including, its 98 marker).
 struct SlotArea {
     from: usize,
@@ -2139,7 +2139,7 @@ struct SlotRun {
     used: bool,
 }
 
-/// Every filled slot of the file with its plugin and events, by track position (spec: flp/events/mixer.md "Slot
+/// Every filled slot of the file with its plugin and events, by track position (spec: project/events/mixer.md "Slot
 /// sub-block"), and the number of stored tracks.
 fn file_slot_runs(file: &FlpFile) -> Result<(Vec<SlotRun>, usize), ProjectError> {
     let events = events_of(file)?;
@@ -2186,7 +2186,7 @@ fn take_runs(pool: &mut [SlotRun], wanted: &[(usize, Option<usize>, &SlotPlugin)
     out
 }
 
-/// A slot plugin's events (spec: flp/events/plugins.md §2): the file's own events when it had the plugin (window
+/// A slot plugin's events (spec: project/events/plugins.md §2): the file's own events when it had the plugin (window
 /// record moved to the new place, state replaced), else new ones.
 fn slot_plugin_events(p: &SlotPlugin, cpu: os_model::PluginCpu, track: u16, slot: u8, run: Option<Vec<Event>>, enc: TextEnc) -> Vec<Event> {
     let Some(mut ev) = run else {
@@ -2222,11 +2222,11 @@ fn slot_plugin_events(p: &SlotPlugin, cpu: os_model::PluginCpu, track: u16, slot
 
 /// Length of a plugin window record (event 212).
 const PLUGIN_REC_LEN: usize = 52;
-/// Colour FL stores for most slot plugins (spec: flp/events/plugins.md §1, corpus).
+/// Colour FL stores for most slot plugins (spec: project/events/plugins.md §1, corpus).
 const SLOT_COLOR_DEFAULT: u32 = 0x0056_5148;
 
 /// A plugin window record's CPU switches (event 212, flags at byte 16: 0x40 threaded processing allowed, 0x20 smart
-/// disable; spec: flp/events/plugins.md §3, checked in FL 26 by save and diff on a channel and a slot).
+/// disable; spec: project/events/plugins.md §3, checked in version 26 by save and diff on a channel and a slot).
 const PLUGIN_THREADED: u8 = 0x40;
 const PLUGIN_SMART_DISABLE: u8 = 0x20;
 
@@ -2248,7 +2248,7 @@ fn patch_cpu(e: &mut Event, c: os_model::PluginCpu) {
     patch_bytes(e, 16, &[b]);
 }
 
-/// A new plugin window record (event 212, spec: flp/events/plugins.md §3): `+8 = 2`; channels flags 0x50
+/// A new plugin window record (event 212, spec: project/events/plugins.md §3): `+8 = 2`; channels flags 0x50
 /// (generator, threaded); mixer slots carry their track and slot, flags 0x140.
 fn plugin_record(slot: Option<(u16, u8)>) -> Vec<u8> {
     let mut r = vec![0u8; PLUGIN_REC_LEN];
@@ -2310,7 +2310,7 @@ fn load_mixer(events: &[Event], l: &Layout, enc: TextEnc) -> Vec<MixerTrack> {
                     pending_cpu = None;
                 }
                 id::PLUGIN_REC => pending_cpu = plugin_cpu(e.data()),
-                // spec: flp/events/mixer.md (slot sub-block: 213 = plugin state)
+                // spec: project/events/mixer.md (slot sub-block: 213 = plugin state)
                 id::PLUGIN_STATE => {
                     if let (Some(p), Some(d)) = (pending_plugin.as_mut(), e.data()) {
                         p.state = d.to_vec();
@@ -2339,13 +2339,13 @@ fn load_mixer(events: &[Event], l: &Layout, enc: TextEnc) -> Vec<MixerTrack> {
             }
         }
         let custom = m.color_flag.is_some_and(|i| int(&events[i]) != 0);
-        // Slot LED and mix (spec: flp/events/plugins.md §5).
+        // Slot LED and mix (spec: project/events/plugins.md §5).
         let mut slot_on = [true; 10];
         let mut slot_mix = [1.0; 10];
         let rt = record_track(index, l.mixer.len());
         let base = mixer_location(rt, 0);
         // The stored switch and mix level; the initial values' records for them are set by the app on opening in song
-        // mode (spec: flp/engine-events.md "Event 216").
+        // mode (spec: project/engine-events.md "Event 216").
         for (_, pid, kind, loc, v) in mixer_param_records(params) {
             if kind == MX_KIND_PARAM && (base..base + 10).contains(&loc) {
                 let s = usize::from(loc - base);
@@ -2361,7 +2361,7 @@ fn load_mixer(events: &[Event], l: &Layout, enc: TextEnc) -> Vec<MixerTrack> {
                 .find(|&(_, p, k, loc, _)| k == MX_KIND_PARAM && p == pid && loc == base)
                 .map(|r| r.4)
         };
-        // The equaliser: gain 0xD0 + band, frequency 0xD8 + band, width 0xE0 + band (spec: flp/events/mixer.md).
+        // The equaliser: gain 0xD0 + band, frequency 0xD8 + band, width 0xE0 + band (spec: project/events/mixer.md).
         let mut eq = os_model::EQ_DEFAULT;
         for (b, band) in eq.iter_mut().enumerate() {
             for (k, first) in [MX_EQ_GAIN, MX_EQ_FREQ, MX_EQ_WIDTH].into_iter().enumerate() {
@@ -2442,12 +2442,12 @@ fn patch_bytes(e: &mut Event, offset: usize, bytes: &[u8]) {
     }
 }
 
-/// Beats per bar or steps per beat as their one-byte event holds them (17, 18; spec: flp/engine-events.md).
+/// Beats per bar or steps per beat as their one-byte event holds them (17, 18; spec: project/engine-events.md).
 fn signature_byte(v: u16) -> u8 {
     v.clamp(1, 255) as u8
 }
 
-/// An integer event of `id` holding `v`, sized by its id range (spec: flp/container.md).
+/// An integer event of `id` holding `v`, sized by its id range (spec: project/container.md).
 fn int_event(id: u8, v: u32) -> Event {
     Event::new(
         id,
@@ -2538,7 +2538,7 @@ fn write_sampler(
     }
     if s.loop_points != o.loop_points {
         // Without loop points the record holds the sample's ends; removing the sample (the Sampler window's file box
-        // X) removes it, as in FL (spec: flp/events/channels.md "Loop points (event 251)").
+        // X) removes it, as in the original (spec: project/events/channels.md "Loop points (event 251)").
         let points = s.loop_points.unwrap_or([-1, i64::MAX]);
         let removed = s.loop_points.is_none() && ch.sample_path.is_none() && old.sample_path.is_some();
         match find(events, id::CH_LOOP_POINTS) {
@@ -2631,10 +2631,10 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
     if let (Some(i), Some(t)) = (l.tempo, project.tempo.filter(|&t| Some(t) != current.tempo)) {
         set_int(&mut events[i], (t * 1000.0).round() as u32);
     }
-    // Title, genre, author, comments, URL (spec: flp/events/project-info.md). A changed text is patched in place. A
-    // cleared one keeps its event, written empty, as FL 26 writes 194, 206, 207 and 195 when they are empty; a cleared
+    // Title, genre, author, comments, URL (spec: project/events/project-info.md). A changed text is patched in place. A
+    // cleared one keeps its event, written empty, as version 26 writes 194, 206, 207 and 195 when they are empty; a cleared
     // URL loses its event, as FL writes 197 only when there is a URL (Writer notes). An empty field the file lacks gets
-    // no event, a filled one gets its event in FL's order; so do the start and time spent (237) and "show info on
+    // no event, a filled one gets its event in the original's order; so do the start and time spent (237) and "show info on
     // opening" (10) when the model has them.
     let info = &project.info;
     let old_info = &current.info;
@@ -2645,7 +2645,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
         (id::COMMENTS, &info.comments, &old_info.comments),
         (id::URL, &info.url, &old_info.url),
     ];
-    // spec: flp/engine-events.md "Order in the file": 194, 206, 207, 167, 202, 195, [197], 237. The five texts take
+    // spec: project/engine-events.md "Order in the file": 194, 206, 207, 167, 202, 195, [197], 237. The five texts take
     // places 0, 1, 2, 5 and 6 of it.
     let order = [l.title, l.genre, l.author, l.info_167, l.info_202, l.comments, l.url, l.work_time];
     const PLACE: [usize; 5] = [0, 1, 2, 5, 6];
@@ -2733,7 +2733,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
         }
     }
 
-    // Project settings the file lacks (11, 80, 17, 18, 30) go where FL 26 writes them (spec: flp/engine-events.md
+    // Project settings the file lacks (11, 80, 17, 18, 30) go where version 26 writes them (spec: project/engine-events.md
     // "Project", "Order in the file": 156, 67, 9, 11, 80, 17, 18, 35, 23, 44, 30, 10): behind the last of the settings
     // before them that the file has. `settings` holds them in that order; see below.
     let mut settings: Vec<(usize, Event)> = Vec::new();
@@ -2750,7 +2750,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
             }
         }
     }
-    // Channel rack settings: main swing, filter groups, current filter (spec: flp/events/project-info.md).
+    // Channel rack settings: main swing, filter groups, current filter (spec: project/events/project-info.md).
     if let Some(v) = project.swing.filter(|&v| Some(v) != current.swing) {
         match l.swing {
             Some(i) => set_int(&mut events[i], v.into()),
@@ -2775,7 +2775,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
         }
     }
     // The bar (events 17, 18: beats per bar, steps per beat), its mode (35) and "play truncated notes" (30): patched
-    // where the file has them, else added where FL 26 writes them (above). The model's `None` is (4, 4) and a time
+    // where the file has them, else added where version 26 writes them (above). The model's `None` is (4, 4) and a time
     // signature.
     if project.bar != current.bar {
         let (n, d) = project.bar();
@@ -2816,7 +2816,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
             }
         }
     }
-    // The panning law (event 23: 0 Circular, 2 Triangular; spec: flp/engine-events.md "Project").
+    // The panning law (event 23: 0 Circular, 2 Triangular; spec: project/engine-events.md "Project").
     if let Some(v) = project.panning_law.filter(|&v| Some(v) != current.panning_law) {
         match unread(id::PANNING_LAW) {
             Some(i) => set_int(&mut events[i], v.into()),
@@ -2831,7 +2831,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
             }
         }
     }
-    // Automatic crossfades (event 44: 1 on, 0 off; spec: flp/engine-events.md "The project settings, measured").
+    // Automatic crossfades (event 44: 1 on, 0 off; spec: project/engine-events.md "The project settings, measured").
     if let Some(on) = project.auto_crossfades.filter(|&v| Some(v) != current.auto_crossfades) {
         match unread(id::AUTO_CROSSFADES) {
             Some(i) => set_int(&mut events[i], u32::from(on)),
@@ -2846,7 +2846,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
             }
         }
     }
-    // Event 30 is there with 1 when on; off removes it, as FL does (it never writes 0; spec: flp/engine-events.md
+    // Event 30 is there with 1 when on; off removes it, as FL does (it never writes 0; spec: project/engine-events.md
     // "Event 30").
     if project.play_truncated != current.play_truncated {
         match l.truncated {
@@ -2864,7 +2864,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
             }
         }
     }
-    // Inserts at one place end up in reverse order of pushing: settings added at one place keep FL's order, ahead of
+    // Inserts at one place end up in reverse order of pushing: settings added at one place keep the original's order, ahead of
     // project information added there.
     inserts.extend(settings.into_iter().rev());
     let groups_at = l
@@ -2877,7 +2877,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
         .unwrap_or(0);
     // The initial values (event 216; spec: ui/settings-choices.md "Advanced: Initialize controls automatically"): the
     // records written as the model has them, the ones Lemon Studio doesn't understand included, which the model keeps
-    // as read. A file without the event gets it once there is a value, after 146 (or the group names) as FL's prelude
+    // as read. A file without the event gets it once there is a value, after 146 (or the group names) as the original's prelude
     // has it (flp/events/project-info.md); pushed first, so it stays behind a 146 added at the same place.
     if project.init_controls != current.init_controls {
         match l.init_controls {
@@ -2976,7 +2976,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
                 set_int(&mut events[i], ch.mixer_track.into());
             }
         }
-        // Rack state (spec: flp/events/channels.md, events 15 / 32 / 145).
+        // Rack state (spec: project/events/channels.md, events 15 / 32 / 145).
         if ch.rack.locked != old.rack.locked {
             match loc.locked {
                 Some(i) => set_int(&mut events[i], u32::from(ch.rack.locked)),
@@ -3001,7 +3001,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
             }
         }
         // A sampler's sample (Lemon Sampler loads one): event 196 replaced, or added right after event 20 where FL
-        // writes it; a sample taken out takes its event with it (spec: flp/events/channels.md, block layout and "Loop
+        // writes it; a sample taken out takes its event with it (spec: project/events/channels.md, block layout and "Loop
         // points (event 251)").
         if ch.sample_path != old.sample_path {
             match (&ch.sample_path, loc.sample, loc.ev20) {
@@ -3012,7 +3012,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
                 (None, None, _) => {}
             }
         }
-        // A plugin channel's plugin (201) and state (213) (spec: flp/events/plugins.md §1-2). A state for a channel
+        // A plugin channel's plugin (201) and state (213) (spec: project/events/plugins.md §1-2). A state for a channel
         // that had none goes after the colour flag (41), where FL keeps it.
         // A channel that changed type (a sampler turned into a plugin channel: Set up for MIDI export, Replace) has its
         // type event rewritten; a plugin name the block lacks goes right after it, where FL writes it.
@@ -3042,7 +3042,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
         }
     }
 
-    // New channels go after the last channel block (spec: flp/events/channels.md; automation.md for type 5).
+    // New channels go after the last channel block (spec: project/events/channels.md; automation.md for type 5).
     if project.channels.len() > current.channels.len() {
         let at = l.channels.last().map(|c| c.end + 1).ok_or_else(|| ProjectError::Structure("no channels".into()))?;
         let mut block = Vec::new();
@@ -3052,7 +3052,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
         inserts.extend(block.into_iter().rev().map(|e| (at, e)));
     }
 
-    // Controller links (spec: flp/events/automation.md "Controller links"): the k-th link event takes the model's k-th
+    // Controller links (spec: project/events/automation.md "Controller links"): the k-th link event takes the model's k-th
     // link and its formula (event 230 right after it), links beyond the file's go after its last one (before the first
     // channel block when it has none), events beyond the model's go. Unchanged, the events stay as they are.
     if project.controller_links != current.controller_links {
@@ -3089,7 +3089,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
                 }
             }
         }
-        // One link per target (spec: flp/events/automation.md "Event 227"): the clip's k-th link takes its k-th
+        // One link per target (spec: project/events/automation.md "Event 227"): the clip's k-th link takes its k-th
         // target, targets beyond its links get new links after its last one (before the first channel block when it
         // has none), links beyond its targets go. Controller links are not among `l.links` and stay as they are.
         let links: Vec<usize> =
@@ -3102,7 +3102,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
         removals.extend(links.iter().skip(a.targets.len()));
     }
 
-    // Patterns: notes, name, color. Patterns without blocks get new ones (spec: flp/events/patterns.md,
+    // Patterns: notes, name, color. Patterns without blocks get new ones (spec: project/events/patterns.md,
     // "Where blocks go"): note blocks in number order before the first channel, metadata blocks in number order
     // after the first channel's block.
     let mut new_note_blocks: Vec<(u16, Vec<Event>)> = Vec::new();
@@ -3157,7 +3157,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
                 }
             }
         }
-        // Loop lengths follow the notes (spec: flp/events/patterns.md "Loop lengths").
+        // Loop lengths follow the notes (spec: project/events/patterns.md "Loop lengths").
         if !new_block && old.map(|o| &o.loops) != Some(&pat.loops) {
             removals.extend(loc.map(|l| l.loops.clone()).unwrap_or_default());
             if !pat.loops.is_empty() {
@@ -3234,7 +3234,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
     }
 
     // Arrangements, matched by number: removed ones lose their whole block, added ones are written after the last
-    // (spec: flp/events/playlist.md "Arrangement block"); kept ones are patched below.
+    // (spec: project/events/playlist.md "Arrangement block"); kept ones are patched below.
     let mut arr_end: Option<usize> = None;
     for (old_arr, loc) in current.arrangements.iter().zip(&l.arrangements) {
         let end = loc
@@ -3300,7 +3300,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
             if t.enabled != old.enabled {
                 patch_bytes(&mut events[tl.record], 12, &[u8::from(t.enabled)]);
             }
-            // Groups (spec: flp/events/playlist.md, bytes 46 / 47 / 61).
+            // Groups (spec: project/events/playlist.md, bytes 46 / 47 / 61).
             if t.grouped != old.grouped {
                 patch_bytes(&mut events[tl.record], 46, &[u8::from(t.grouped)]);
             }
@@ -3352,7 +3352,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
     };
     // Tracks whose slots gained, lost or swapped plugins get their whole slot area rewritten (spec:
     // flp/events/plugins.md §2-3), and so do tracks holding plugins that came from another block (moved, deleted or
-    // trimmed tracks: their slots follow them, spec: flp/events/mixer.md "Removing tracks"). A plugin that stays (or
+    // trimmed tracks: their slots follow them, spec: project/events/mixer.md "Removing tracks"). A plugin that stays (or
     // moves) keeps its own events.
     let slot_names = |t: &MixerTrack| t.slots.iter().map(|s| s.as_ref().map(|s| s.name.clone())).collect::<Vec<_>>();
     let rewrite: Vec<bool> = project
@@ -3409,7 +3409,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
                 patch_cpu(&mut events[i], m.slot_cpu[k]);
             }
         }
-        // spec: flp/events/mixer.md "Slot sub-block": a plugin kept in its slot gets its new state (213).
+        // spec: project/events/mixer.md "Slot sub-block": a plugin kept in its slot gets its new state (213).
         for ((new, prev), &at) in m.slots.iter().zip(&old.slots).zip(states).filter(|_| !rewritten) {
             if let (Some(new), Some(prev), Some(i)) = (new, prev, at) {
                 if new.name == prev.name && new.state != prev.state {
@@ -3417,7 +3417,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
                 }
             }
         }
-        // Slot LED and mix level (spec: flp/events/plugins.md §5): kind 0x1F records ID 0 / 1 at the slot's location.
+        // Slot LED and mix level (spec: project/events/plugins.md §5): kind 0x1F records ID 0 / 1 at the slot's location.
         if let Some(data) = params.as_mut() {
             for k in 0..10u16 {
                 let loc = mixer_location(record_track(m.index, project.mixer.len()), k);
@@ -3444,7 +3444,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
                         set_data(&mut events[i], r);
                     }
                     // A 5-byte record (FL 10 / 11) has no flags: it becomes the 8-byte record of FL 12, its latency kept in
-                    // the form the file's version reads (spec: flp/layouts.md "A mixer track's record (event 236)").
+                    // the form the file's version reads (spec: project/layouts.md "A mixer track's record (event 236)").
                     (None, _) => {
                         let d = events[i].data().unwrap_or(&[]);
                         let late = old_file && d.get(4).is_some_and(|&b| b != 0);
@@ -3471,7 +3471,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
                 (None, None) => {}
             }
         }
-        // The icon (event 95) stands right after the colour flag (spec: flp/events/mixer.md "Track blocks"). This comes
+        // The icon (event 95) stands right after the colour flag (spec: project/events/mixer.md "Track blocks"). This comes
         // after the name: inserted at the same place as a new name (a header of 42 and 236 alone), it lands before it.
         if m.icon != old.icon {
             match (ml.icon, m.icon) {
@@ -3497,7 +3497,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
                 set_int(&mut events[fi], u32::from(m.color.is_some()));
             }
         }
-        // spec: flp/events/mixer.md "Routing (event 235)": one byte per destination from track 0, trailing zeros omitted.
+        // spec: project/events/mixer.md "Routing (event 235)": one byte per destination from track 0, trailing zeros omitted.
         if m.routes != old.routes {
             let mut bytes = vec![0u8; m.routes.iter().map(|&r| usize::from(r) + 1).max().unwrap_or(0)];
             for &r in &m.routes {
@@ -3524,7 +3524,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
                 (None, None) => {}
             }
         }
-        // spec: flp/events/mixer.md "Kind 0x20, route level": records right after the source track's own records.
+        // spec: project/events/mixer.md "Kind 0x20, route level": records right after the source track's own records.
         if m.send_levels != old.send_levels {
             if let Some(data) = params.as_mut() {
                 let loc = mixer_location(record_track(m.index, project.mixer.len()), 0);
@@ -3598,7 +3598,7 @@ pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> 
             }
         }
     }
-    // And holds the timebase (Settings > Project ▸ Timebase; spec: flp/engine-events.md "The project settings,
+    // And holds the timebase (Settings > Project ▸ Timebase; spec: project/engine-events.md "The project settings,
     // measured"): the tick counts written above are the model's, already at this PPQ.
     if project.ppq != current.ppq {
         for c in &mut file.chunks {
@@ -3652,7 +3652,7 @@ fn grow_mixer(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError>
     Ok(())
 }
 
-/// Removes insert tracks when the model has fewer tracks than the file (spec: flp/events/mixer.md "Removing tracks"):
+/// Removes insert tracks when the model has fewer tracks than the file (spec: project/events/mixer.md "Removing tracks"):
 /// the inserts just before the last ("current") track lose their blocks and their parameter records, and the count
 /// (event 103) follows. The model's tracks are already renumbered; [`apply`] then patches the kept ones as usual.
 fn shrink_mixer(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> {
@@ -3688,7 +3688,7 @@ fn shrink_mixer(project: &Project, file: &mut FlpFile) -> Result<(), ProjectErro
 
 /// Rebuilds the channel region when the model's channels are not the file's blocks in order (deleted, cloned, moved
 /// or inserted channels): kept blocks are copied (a clone copies its source block), new ones are built, indices are
-/// renumbered, and every reference to a channel follows it or is dropped with it (spec: flp/events/channels.md
+/// renumbered, and every reference to a channel follows it or is dropped with it (spec: project/events/channels.md
 /// "Deleting, cloning and moving channels"). [`apply`] then patches the values as usual.
 fn restructure(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> {
     let events = events_of_mut(file)?;
@@ -3794,7 +3794,7 @@ fn restructure(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError
                 let d = events[i].data().unwrap_or(&[]);
                 let clip = map(u16::from_le_bytes([d[2], d[3]]));
                 let target = u32::from_le_bytes(d[8..12].try_into().unwrap());
-                // Channel targets are `channel << 16 | param` below 0x4000_0000 (spec: flp/events/automation.md).
+                // Channel targets are `channel << 16 | param` below 0x4000_0000 (spec: project/events/automation.md).
                 let new_target = if target >> 16 < 0x4000 {
                     map((target >> 16) as u16).map(|c| u32::from(c) << 16 | target & 0xFFFF)
                 } else {
@@ -3848,7 +3848,7 @@ fn encode_notes(notes: &[Note]) -> Vec<u8> {
     sorted.iter().flat_map(encode_note).collect()
 }
 
-/// A pattern's note block: `65 [223] [224]` (spec: flp/events/patterns.md).
+/// A pattern's note block: `65 [223] [224]` (spec: project/events/patterns.md).
 fn note_block_events(pat: &Pattern) -> Vec<Event> {
     let mut block = vec![Event::new(id::PAT_START, Value::U16(pat.number))];
     if !pat.controls.is_empty() {
@@ -3862,7 +3862,7 @@ fn note_block_events(pat: &Pattern) -> Vec<Event> {
     block
 }
 
-/// Loop length pairs `160 channel, 161 steps` (spec: flp/events/patterns.md "Loop lengths").
+/// Loop length pairs `160 channel, 161 steps` (spec: project/events/patterns.md "Loop lengths").
 fn loop_events(loops: &[(u16, u32)]) -> Vec<Event> {
     loops
         .iter()
@@ -3871,7 +3871,7 @@ fn loop_events(loops: &[(u16, u32)]) -> Vec<Event> {
 }
 
 /// The metadata events between 158 and 52: loop-off flag + loop type, the marker groups (the pattern's markers and
-/// the "Length" marker, sorted by position as FL saves them), the length (spec: flp/events/patterns.md, metadata block).
+/// the "Length" marker, sorted by position as FL saves them), the length (spec: project/events/patterns.md, metadata block).
 fn meta_length_events(pat: &Pattern, enc: TextEnc) -> Vec<Event> {
     let mut out = Vec::new();
     if let Some(t) = pat.loop_off {
@@ -3912,7 +3912,7 @@ fn meta_block_events(pat: &Pattern, enc: TextEnc) -> Vec<Event> {
     block
 }
 
-/// Version Lemon Studio writes as "saved by" (spec: flp/events/project-info.md; FL 26 opens it without a warning).
+/// Version Lemon Studio writes as "saved by" (spec: project/events/project-info.md; version 26 opens it without a warning).
 const COMPAT_VERSION: &str = "26.1.7.5653";
 const COMPAT_BUILD: u32 = 5653;
 /// A channel's color when none is set.
@@ -3929,8 +3929,8 @@ fn channel_type_code(kind: ChannelKind) -> u8 {
     }
 }
 
-/// One channel block in the minimal form FL 26 loads (spec: flp/events/channels.md; every record not written here
-/// takes FL's default).
+/// One channel block in the minimal form version 26 loads (spec: project/events/channels.md; every record not written here
+/// takes the original's default).
 fn channel_block_events(ch: &Channel, auto: Option<&Automation>, enc: TextEnc) -> Result<Vec<Event>, ProjectError> {
     let plugin = (ch.kind == ChannelKind::Plugin).then_some(ch.plugin.as_deref()).flatten().filter(|p| !p.is_empty());
     if matches!(ch.kind, ChannelKind::Other(_)) || (ch.kind == ChannelKind::Plugin && plugin.is_none()) {
@@ -3947,7 +3947,7 @@ fn channel_block_events(ch: &Channel, auto: Option<&Automation>, enc: TextEnc) -
         Event::new(id::CH_TYPE, Value::U8(channel_type_code(ch.kind))),
         Event::new(id::PLUGIN_NAME, Value::var(encode_text(plugin.unwrap_or(""), enc))),
     ];
-    // A plugin channel: its window record (spec: flp/events/plugins.md §3) and icon, then the state after the colour.
+    // A plugin channel: its window record (spec: project/events/plugins.md §3) and icon, then the state after the colour.
     if plugin.is_some() {
         b.push(Event::new(id::PLUGIN_REC, Value::var(plugin_record(None))));
     }
@@ -3998,22 +3998,22 @@ fn channel_block_events(ch: &Channel, auto: Option<&Automation>, enc: TextEnc) -
     Ok(b)
 }
 
-/// Builds a new FLP file from the model: project info, tempo, patterns (notes, control points, names, colors),
-/// channels, the arrangements and the mixer, in FL's order. The mixer is stored after the playlist (spec:
+/// Builds a new legacy project file from the model: project info, tempo, patterns (notes, control points, names, colors),
+/// channels, the arrangements and the mixer, in the original's order. The mixer is stored after the playlist (spec:
 /// flp/events/mixer.md "Where the mixer sits"), so a project without arrangements gets no mixer: a caller saving a
 /// whole project gives it [`default_arrangement`] first, as the app's save does; [`unsaved_parts`] names what is left
-/// out. Opens in FL 26 (checked 2026-10-09).
-// spec: flp/container.md, flp/events/{project-info,channels,patterns}.md
+/// out. Opens in version 26 (checked 2026-10-09).
+// spec: project/container.md, flp/events/{project-info,channels,patterns}.md
 pub fn create(project: &Project) -> Result<FlpFile, ProjectError> {
     let enc = TextEnc::Utf16;
     let mut ev = vec![
         Event::new(id::VERSION, Value::var(format!("{COMPAT_VERSION}\0").into_bytes())),
         Event::new(159, Value::U32(COMPAT_BUILD)),
-        // Without it FL 26 reads only the first playlist clip (spec: flp/events/project-info.md, event 169).
+        // Without it version 26 reads only the first playlist clip (spec: project/events/project-info.md, event 169).
         Event::new(169, Value::U32(15)),
         Event::new(id::TEMPO, Value::U32((project.tempo.unwrap_or(130.0) * 1000.0).round() as u32)),
     ];
-    // The project settings in FL 26's order (spec: flp/engine-events.md "Project", "Order in the file": 156, 67, 9, 11,
+    // The project settings in FL 26's order (spec: project/engine-events.md "Project", "Order in the file": 156, 67, 9, 11,
     // 80, 17, 18, 35, 23, 44, 30, 10), those the model has.
     if let Some(p) = project.current_pattern {
         ev.push(Event::new(id::CURRENT_PATTERN, Value::U16(p)));
@@ -4040,14 +4040,14 @@ pub fn create(project: &Project) -> Result<FlpFile, ProjectError> {
     if let Some(on) = project.auto_crossfades {
         ev.push(Event::new(id::AUTO_CROSSFADES, Value::U8(u8::from(on))));
     }
-    // Present only when on (spec: flp/engine-events.md "Event 30").
+    // Present only when on (spec: project/engine-events.md "Event 30").
     if project.play_truncated {
         ev.push(Event::new(id::PLAY_TRUNCATED, Value::U8(1)));
     }
     if let Some(on) = project.show_info {
         ev.push(Event::new(id::SHOW_INFO, Value::U8(u8::from(on))));
     }
-    // The project information as FL 26 writes it (spec: flp/events/project-info.md "Writer notes"): 194, 206, 207 and
+    // The project information as version 26 writes it (spec: project/events/project-info.md "Writer notes"): 194, 206, 207 and
     // 195 always, empty when empty; 197 only with a URL; then 237, the start (now for a project without one) and the
     // time spent.
     let info = &project.info;
@@ -4070,7 +4070,7 @@ pub fn create(project: &Project) -> Result<FlpFile, ProjectError> {
         }
     }
     ev.push(Event::new(id::WORK_TIME, Value::var(work_time_bytes(project.work_time.unwrap_or_else(work_time_now)))));
-    // Filter groups and the current filter (spec: flp/events/project-info.md), before the note blocks.
+    // Filter groups and the current filter (spec: project/events/project-info.md), before the note blocks.
     for name in &project.groups {
         ev.push(Event::new(id::GROUP_NAME, Value::var(encode_text(name, enc))));
     }
@@ -4108,13 +4108,13 @@ pub fn create(project: &Project) -> Result<FlpFile, ProjectError> {
         ev.extend(arrangement_events(arr, enc, CLIP_LEN));
     }
     // The playlist view and the arrangement shown, right after the last one's tracks as FL writes them
-    // (spec: flp/events/playlist.md, events 242 and 100).
+    // (spec: project/events/playlist.md, events 242 and 100).
     if let Some(v) = project.playlist_view.filter(|_| !project.arrangements.is_empty()) {
         ev.push(Event::new(id::PLAYLIST_VIEW, Value::var(v.raw.to_vec())));
     }
     if let Some(n) = project.current_arrangement.filter(|_| !project.arrangements.is_empty()) {
         ev.push(Event::new(id::CURRENT_ARRANGEMENT, Value::U16(n)));
-        // Fast declick for cut groups stands after event 100 (spec: flp/engine-events.md "Project").
+        // Fast declick for cut groups stands after event 100 (spec: project/engine-events.md "Project").
         if let Some(on) = project.fast_declick {
             ev.push(Event::new(id::FAST_DECLICK, Value::U8(u8::from(on))));
         }
@@ -4122,7 +4122,7 @@ pub fn create(project: &Project) -> Result<FlpFile, ProjectError> {
             ev.push(Event::new(id::PERFORMANCE, Value::U8(u8::from(on))));
         }
     }
-    // The mixer follows the arrangements (spec: flp/events/mixer.md "Where the mixer sits").
+    // The mixer follows the arrangements (spec: project/events/mixer.md "Where the mixer sits").
     if !project.arrangements.is_empty() && !project.mixer.is_empty() {
         ev.extend(mixer_events(&project.mixer, project.main_volume, enc));
     }
@@ -4142,10 +4142,10 @@ pub fn create(project: &Project) -> Result<FlpFile, ProjectError> {
     Ok(file)
 }
 
-/// Number of playlist tracks an arrangement stores (spec: flp/events/playlist.md).
+/// Number of playlist tracks an arrangement stores (spec: project/events/playlist.md).
 pub const PLAYLIST_TRACKS: u32 = 500;
 
-/// A track record (event 238) with the template's defaults (spec: flp/events/playlist.md "Event 238 layout").
+/// A track record (event 238) with the template's defaults (spec: project/events/playlist.md "Event 238 layout").
 fn track_record(t: &PlaylistTrack) -> Vec<u8> {
     let mut r = vec![0u8; 70];
     r[0..4].copy_from_slice(&t.number.to_le_bytes());
@@ -4162,7 +4162,7 @@ fn track_record(t: &PlaylistTrack) -> Vec<u8> {
     r
 }
 
-/// An arrangement block: number, name, 36, clips, markers, then the 500 track records (spec: flp/events/playlist.md).
+/// An arrangement block: number, name, 36, clips, markers, then the 500 track records (spec: project/events/playlist.md).
 fn arrangement_events(arr: &Arrangement, enc: TextEnc, clen: usize) -> Vec<Event> {
     let mut ev = vec![
         Event::new(id::ARR_START, Value::U16(arr.number)),
@@ -4184,7 +4184,7 @@ fn arrangement_events(arr: &Arrangement, enc: TextEnc, clen: usize) -> Vec<Event
     ev
 }
 
-/// Track parameter records of a default track, in file order (spec: flp/events/mixer.md "Event 225"; the EQ-like IDs
+/// Track parameter records of a default track, in file order (spec: project/events/mixer.md "Event 225"; the EQ-like IDs
 /// keep the values every untouched track has).
 const TRACK_PARAM_DEFAULTS: [(u8, i32); 12] = [
     (MX_VOLUME, 12800),
@@ -4203,7 +4203,7 @@ const TRACK_PARAM_DEFAULTS: [(u8, i32); 12] = [
 /// The record at location 0x4000 and the parameter block of "track 501" that every file has (spec: mixer.md).
 const MX_SPECIAL_LOC: u16 = 0x4000;
 const MX_SPECIAL_TRACK: u16 = 501;
-/// Track flags (event 236) byte 4 of the master and the last track, and of an insert (spec: flp/events/mixer.md).
+/// Track flags (event 236) byte 4 of the master and the last track, and of an insert (spec: project/events/mixer.md).
 const MX_FLAGS_MASTER: u8 = 0x0C;
 const MX_FLAGS_INSERT: u8 = 0x4C;
 
@@ -4217,7 +4217,7 @@ fn param_rec(pid: u8, kind: u8, loc: u16, v: i32) -> [u8; MIXER_REC_LEN] {
 }
 
 /// One track's parameter records in file order: each slot's LED and mix, the track parameters, the route levels
-/// (spec: flp/events/plugins.md §5, mixer.md "Event 225").
+/// (spec: project/events/plugins.md §5, mixer.md "Event 225").
 fn track_records(t: u16, m: Option<&MixerTrack>) -> Vec<u8> {
     let d = MixerTrack::new(t);
     let m = m.unwrap_or(&d);
@@ -4253,7 +4253,7 @@ fn route_bytes(routes: &[u16]) -> Vec<u8> {
     bytes
 }
 
-/// One mixer track block (spec: flp/events/mixer.md "Track blocks"): colour, icon, name, flags, the ten slots, routing
+/// One mixer track block (spec: project/events/mixer.md "Track blocks"): colour, icon, name, flags, the ten slots, routing
 /// and the trailing events with the values untouched tracks have.
 fn track_block_events(m: &MixerTrack, last: bool, enc: TextEnc) -> Vec<Event> {
     let mut ev = Vec::new();
@@ -4291,7 +4291,7 @@ fn track_block_events(m: &MixerTrack, last: bool, enc: TextEnc) -> Vec<Event> {
 }
 
 /// A whole mixer: the track count (event 103), the track blocks, and the parameter records (event 225) with the
-/// special records every file has (spec: flp/events/mixer.md).
+/// special records every file has (spec: project/events/mixer.md).
 fn mixer_events(mixer: &[MixerTrack], main_volume: Option<u16>, enc: TextEnc) -> Vec<Event> {
     let mut ev = vec![Event::new(id::MX_COUNT, Value::U16(mixer.len() as u16))];
     for (n, m) in mixer.iter().enumerate() {
@@ -4311,7 +4311,7 @@ fn mixer_events(mixer: &[MixerTrack], main_volume: Option<u16>, enc: TextEnc) ->
     ev
 }
 
-/// A fresh arrangement as FL's template has it: number 0, "Arrangement", 500 default tracks.
+/// A fresh arrangement as the original's template has it: number 0, "Arrangement", 500 default tracks.
 pub fn default_arrangement() -> Arrangement {
     Arrangement {
         number: 0,
@@ -4535,7 +4535,7 @@ pub fn unsaved_parts(project: &Project, file: &FlpFile) -> Vec<&'static str> {
 /// Tracks as a fresh project has them: unnamed, uncolored, unity volume (0.8), centered, routed to the master.
 fn mixer_is_default(mixer: &[MixerTrack]) -> bool {
     mixer.iter().enumerate().all(|(n, t)| {
-        // The last stored track is routed nowhere in FL's files.
+        // The last stored track is routed nowhere in the original's files.
         let hidden = n + 1 == mixer.len() && n > 0 && t.routes.is_empty();
         hidden ||
         t.name.is_none()
@@ -4602,7 +4602,7 @@ mod tests {
     }
 
     /// A project made from the model alone reads back the same, and `apply` can edit it afterwards
-    /// (spec: flp/container.md, flp/events/channels.md, patterns.md).
+    /// (spec: project/container.md, flp/events/channels.md, patterns.md).
     #[test]
     fn created_project_reads_back_and_takes_edits() {
         let p = new_project();
@@ -4723,7 +4723,7 @@ mod tests {
     }
 
     /// A sample taken out (the Sampler window's file box X) takes its path (event 196) and loop points (event 251) out
-    /// of the channel's block and turns Resample off; the other flags stay (spec: flp/events/channels.md "Loop points
+    /// of the channel's block and turns Resample off; the other flags stay (spec: project/events/channels.md "Loop points
     /// (event 251)", "Sampler flags (event 143)").
     #[test]
     fn cleared_sample_leaves_the_block() {
@@ -4754,7 +4754,7 @@ mod tests {
         assert_eq!(load(&again).unwrap().channels[1].sample_path.as_deref(), Some("C:/samples/bass3.wav"));
     }
 
-    /// The events the engine reads beyond the editable settings (spec: flp/engine-events.md): time signature,
+    /// The events the engine reads beyond the editable settings (spec: project/engine-events.md): time signature,
     /// "play truncated notes", the channel's swing share, root note, sampler flags, declick and stretch settings,
     /// add to key, key zone, start offset and loop points, level adjustments, filter, the envelope records' flags and LFO, cut groups and the voice settings.
     #[test]
@@ -4772,7 +4772,7 @@ mod tests {
             s215[63] = 1;
             s215[68..76].copy_from_slice(&[37i32.to_le_bytes(), 60i32.to_le_bytes()].concat());
             s215[144..152].copy_from_slice(&0.125f64.to_le_bytes());
-            // Event 251 as FL 26 saved it with loop start 694, end 695 (frames).
+            // Event 251 as version 26 saved it with loop start 694, end 695 (frames).
             let hex = "02000000b602000000000000b702000000000000000000000000f0bfffffffff00ffffff7fffffff7f0100";
             let r251: Vec<u8> = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect();
             let ints = |v: &[i32]| Value::var(v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>());
@@ -5149,7 +5149,7 @@ mod tests {
     }
 
     /// Track switches (event 236 flags), the main volume (record 0 at 0x4000) and the main pitch (event 80) are
-    /// written by `create` and `apply` and read back (spec: flp/layouts.md, audio/mixer.md, audio/voice-levels.md).
+    /// written by `create` and `apply` and read back (spec: project/layouts.md, audio/mixer.md, audio/voice-levels.md).
     #[test]
     fn mixer_switches_main_volume_and_pitch_round_trip() {
         use os_model::MixerTrack;
@@ -5191,7 +5191,7 @@ mod tests {
     }
 
     /// The track menu's Separator (flag 0x0400), Dock to (0x00C0) and Allow threaded processing (0x0010) are written by
-    /// `create` and `apply` and read back; the last ("current") track keeps the master's docking (spec: flp/layouts.md
+    /// `create` and `apply` and read back; the last ("current") track keeps the master's docking (spec: project/layouts.md
     /// "A mixer track's record (event 236)", ui/mixer.md §6.1).
     #[test]
     fn mixer_separator_docking_and_threading_round_trip() {
@@ -5239,7 +5239,7 @@ mod tests {
         ]);
     }
 
-    /// Song or pattern mode (event 9, one byte right after 67; spec: flp/engine-events.md "Project"): `create` writes it
+    /// Song or pattern mode (event 9, one byte right after 67; spec: project/engine-events.md "Project"): `create` writes it
     /// where the model has it, `load` reads it (`None` without it), `apply` patches it in place.
     #[test]
     fn song_mode_round_trip() {
@@ -5265,7 +5265,7 @@ mod tests {
         }
     }
 
-    /// Audio and instrument tracks (track record bytes 49..61; spec: flp/events/playlist.md): a new track is unlinked
+    /// Audio and instrument tracks (track record bytes 49..61; spec: project/events/playlist.md): a new track is unlinked
     /// (kind 0, two −1s), and links are written, read and patched in place as the original saved them (Assign to new
     /// Audio track on Insert 3: kind 1, mixer 3; Assign to new instrument track on the second channel: kind 3, channel 1).
     #[test]
@@ -5341,7 +5341,7 @@ mod tests {
         assert_eq!(load(&file).unwrap().performance, Some(true));
     }
 
-    /// A plugin's CPU switches (spec: flp/events/plugins.md §3, ui/plugin-window.md "CPU"): event 212's flags 0x40
+    /// A plugin's CPU switches (spec: project/events/plugins.md §3, ui/plugin-window.md "CPU"): event 212's flags 0x40
     /// (threaded processing allowed) and 0x20 (smart disable), for a channel plugin and a slot plugin alike, as FL 26
     /// saved them (slot 0x160 -> smart disable off 0x140 -> threaded off 0x100; channel 0x151 -> 0x171 -> 0x131). Only
     /// those two bits change; a slot's switches follow its plugin when it moves.
@@ -5373,7 +5373,7 @@ mod tests {
         apply(&back, &mut file).unwrap();
         assert_eq!(file.to_bytes().unwrap(), bytes, "untouched");
 
-        // Patched in place: FL's own bytes for a channel (0x151, window open) and a slot.
+        // Patched in place: the original's own bytes for a channel (0x151, window open) and a slot.
         let mut edited = back.clone();
         edited.channels[2].misc.cpu.smart_disable = true;
         edited.mixer[2].slot_cpu[3].smart_disable = true;
@@ -5477,7 +5477,7 @@ mod tests {
     }
 
     /// The bar (events 17, 18: beats per bar, steps per beat; 18 is not the denominator), its mode (35) and "play
-    /// truncated notes" (30, present only when on) are saved (spec: flp/engine-events.md "Project", "The project
+    /// truncated notes" (30, present only when on) are saved (spec: project/engine-events.md "Project", "The project
     /// settings, measured", "Event 30"): `create` writes them where the model has them; `apply` patches them in place in
     /// a file that has them (an opened project keeps every other event as it was) and removes 30 for off. Both write
     /// the project settings in FL 26's order ("Order in the file": 156, 67, 9, 11, 80, 17, 18, 35, 23, 44, 30, 10, then
@@ -5493,7 +5493,7 @@ mod tests {
         };
         let reparse = |f: &FlpFile| FlpFile::parse(&f.to_bytes().unwrap()).unwrap();
         let value_of = |f: &FlpFile, eid: u8| events_of(f).unwrap().iter().take_while(|e| e.id != id::CH_START).find(|e| e.id == eid).map(int);
-        // What Lemon Studio writes, in FL's order: the settings the model has, then the title.
+        // What Lemon Studio writes, in the original's order: the settings the model has, then the title.
         let lemon = [
             id::TEMPO,
             id::CURRENT_PATTERN,
@@ -5523,7 +5523,7 @@ mod tests {
         assert_eq!((back.bar, back.bar_as_signature, back.play_truncated), (Some((5, 3)), Some(false), false));
         assert_eq!((back.signature(), back.bar_ticks()), (None, 360), "five beats of three sixteenths");
 
-        // A file laid out as FL 26 writes one: its settings behind the tempo in FL's order, those the model does not
+        // A file laid out as version 26 writes one: its settings behind the tempo in the original's order, those the model does not
         // read among them, without the ids in `missing`. Triangular panning (23 = 2), automatic crossfades off (44 = 0).
         let fl_file = |missing: &[u8]| -> FlpFile {
             let mut f = create(&Project { current_pattern: None, ..new_project() }).unwrap();
@@ -5628,7 +5628,7 @@ mod tests {
         assert_eq!(prelude_ids(&file, &ORDER), [id::TEMPO, id::SWING, id::MAIN_PITCH, id::TIME_NUM, id::TIME_DEN, id::CURRENT_PATTERN]);
         assert_eq!((load(&file).unwrap().swing, load(&file).unwrap().main_pitch), (Some(32), Some(50)));
 
-        // Lemon Studio files without them: settings added in one save keep FL's order (11, 80, 17, 18, 35, 30) behind
+        // Lemon Studio files without them: settings added in one save keep the original's order (11, 80, 17, 18, 35, 30) behind
         // the current pattern, before the title, also when the title is added in the same save.
         let mut p = new_project();
         (p.swing, p.main_pitch) = (Some(64), Some(100));
@@ -5665,10 +5665,10 @@ mod tests {
         assert_eq!(load(&reparse(&file)).unwrap().fast_declick, Some(true));
     }
 
-    /// Settings > Project ▸ Advanced ▸ Panning law (event 23: 0 Circular, 2 Triangular; spec: flp/engine-events.md
-    /// "Project", "Order in the file"): `create` writes the model's value in FL's order; `apply` patches it where the
+    /// Settings > Project ▸ Advanced ▸ Panning law (event 23: 0 Circular, 2 Triangular; spec: project/engine-events.md
+    /// "Project", "Order in the file"): `create` writes the model's value in the original's order; `apply` patches it where the
     /// file has it, else adds it behind the last of 156, 67, 9, 11, 80, 17, 18 and 35 the file has (before 44, 30 and
-    /// 10). Circular is written as 0, as FL's default template holds it; a model without one leaves the file as it is.
+    /// 10). Circular is written as 0, as the original's default template holds it; a model without one leaves the file as it is.
     #[test]
     fn panning_law_round_trips() {
         const ORDER: [u8; 11] =
@@ -5732,7 +5732,7 @@ mod tests {
         assert_eq!(law_of(&reparse(&file)), None);
     }
 
-    /// Settings > Project ▸ Playlist ▸ Automatic crossfades (event 44: 1 on, 0 off; spec: flp/engine-events.md "The
+    /// Settings > Project ▸ Playlist ▸ Automatic crossfades (event 44: 1 on, 0 off; spec: project/engine-events.md "The
     /// project settings, measured"): `create` writes it behind 23, before 30; `apply` patches it where the file has it
     /// (off is 0, not a removal), else adds it behind the last of 156, 67, 9, 11, 80, 17, 18, 35 and 23 the file has; a
     /// model without one leaves the file as it is.
@@ -5786,7 +5786,7 @@ mod tests {
     }
 
     /// Settings > Project ▸ Timebase (PPQ): the header's PPQ and every tick count of the project change together;
-    /// automation clip data (beats) does not (spec: flp/engine-events.md "The project settings, measured",
+    /// automation clip data (beats) does not (spec: project/engine-events.md "The project settings, measured",
     /// ui/settings-choices.md "Project"). A ratio that is not whole rounds to the nearest tick.
     #[test]
     fn timebase_change_rescales_and_saves() {
@@ -5848,7 +5848,7 @@ mod tests {
     }
 
     /// A 5-byte track record (FL 10 / 11) holds no flags: the track reads as on, unswapped, slots enabled; an edit turns
-    /// it into the 8-byte record with the latency value and its 0x20 byte kept (spec: flp/layouts.md).
+    /// it into the 8-byte record with the latency value and its 0x20 byte kept (spec: project/layouts.md).
     #[test]
     fn five_byte_track_records() {
         use os_model::MixerTrack;
@@ -5883,7 +5883,7 @@ mod tests {
         assert_eq!(with_latency(&r, true, (0.0, 0.0))[4], 0x4C);
     }
 
-    /// The two latency settings (spec: flp/layouts.md "A mixer track's record (event 236)"): written with new tracks,
+    /// The two latency settings (spec: project/layouts.md "A mixer track's record (event 236)"): written with new tracks,
     /// read back, and written again where an edit changes them.
     #[test]
     fn track_latency_settings_round_trip() {
@@ -5932,7 +5932,7 @@ mod tests {
     }
 
     /// Sends stored the old way (FL 24.1 and before: kind 0x1F, id 64 + destination) are read, and edits keep that
-    /// form (spec: flp/layouts.md "Parameter ids").
+    /// form (spec: project/layouts.md "Parameter ids").
     #[test]
     fn old_form_sends_are_read_and_kept() {
         use os_model::MixerTrack;
@@ -5965,7 +5965,7 @@ mod tests {
         assert!(mixer_param_records(d).all(|(_, _, k, _, _)| k != MX_KIND_ROUTE), "still in the old form");
     }
 
-    /// A plugin channel made in Lemon Studio (spec: flp/events/plugins.md §2-3): its block holds the plugin name, a
+    /// A plugin channel made in Lemon Studio (spec: project/events/plugins.md §2-3): its block holds the plugin name, a
     /// generator window record and the state after the colour flag; it reads back, and a changed state is written.
     #[test]
     fn created_plugin_channel_reads_back() {
@@ -5995,7 +5995,7 @@ mod tests {
         assert!(events_of(&file).unwrap().iter().filter(|e| e.id == id::PLUGIN_REC).count() == 1);
     }
 
-    /// A created project with a playlist stores its mixer (spec: flp/events/mixer.md, plugins.md): track settings,
+    /// A created project with a playlist stores its mixer (spec: project/events/mixer.md, plugins.md): track settings,
     /// slot plugins, LEDs and mix levels read back, and later slot edits apply to the file.
     #[test]
     fn created_mixer_reads_back_and_takes_edits() {
@@ -6066,7 +6066,7 @@ mod tests {
     }
 
     /// The last stored track is the "current" track: its slot plugins and records use track 501. Added tracks go
-    /// before it (spec: flp/events/mixer.md "The last track", "Adding tracks").
+    /// before it (spec: project/events/mixer.md "The last track", "Adding tracks").
     #[test]
     fn added_mixer_tracks_go_before_the_current_track() {
         use os_model::MixerTrack;
@@ -6104,7 +6104,7 @@ mod tests {
         let tracks: Vec<u16> = mixer_param_records(params).filter(|r| r.3 >= 0x7000).map(|r| (r.3 - 0x7000) / 64).collect();
         assert!(tracks.windows(2).all(|w| w[0] <= w[1]), "records stay in track order");
         assert_eq!(tracks.iter().filter(|&&t| t == 19).count(), 32);
-        // Fewer tracks (spec: flp/events/mixer.md "Removing tracks"): inserts 18 and 19 go with their records, the
+        // Fewer tracks (spec: project/events/mixer.md "Removing tracks"): inserts 18 and 19 go with their records, the
         // current track comes back as 18 with everything it had.
         let mut fewer = back.clone();
         let mut current = fewer.mixer.pop().unwrap();
@@ -6163,7 +6163,7 @@ mod tests {
     }
 
     /// Moved tracks take their effect slots with them, events and all: two tracks holding the same plugin swap places,
-    /// and the window records follow with their new track numbers (spec: flp/events/mixer.md "Removing tracks", "Slot
+    /// and the window records follow with their new track numbers (spec: project/events/mixer.md "Removing tracks", "Slot
     /// sub-block").
     #[test]
     fn moved_mixer_tracks_take_their_effect_slots() {
@@ -6185,7 +6185,7 @@ mod tests {
     }
 
     /// A deleted track's effects go with it and the tracks after it take theirs to their new numbers; the current track
-    /// keeps its own as track 501 (spec: flp/events/mixer.md "Removing tracks", "The last track").
+    /// keeps its own as track 501 (spec: project/events/mixer.md "Removing tracks", "The last track").
     #[test]
     fn deleted_mixer_track_takes_its_effect_slots() {
         let (p, mut file) = marked_mixer();
@@ -6201,7 +6201,7 @@ mod tests {
     }
 
     /// Trimmed tracks (the inserts before the current track taken off the end) lose their effects; a track moved from
-    /// there to an earlier place first keeps its own (spec: flp/events/mixer.md "Removing tracks").
+    /// there to an earlier place first keeps its own (spec: project/events/mixer.md "Removing tracks").
     #[test]
     fn trimmed_mixer_tracks_take_their_effect_slots() {
         let (p, mut file) = marked_mixer();
@@ -6221,7 +6221,7 @@ mod tests {
     }
 
     /// A track's icon (event 95) is read, written after the colour flag, changed, taken off, and follows its track
-    /// when tracks move (spec: flp/events/mixer.md "Track blocks").
+    /// when tracks move (spec: project/events/mixer.md "Track blocks").
     #[test]
     fn mixer_track_icon_round_trips() {
         let (mut p, mut file) = marked_mixer();
@@ -6255,7 +6255,7 @@ mod tests {
     }
 
     /// A channel's icon number (event 155) is read into the rack settings; a new channel's block holds 0 (none), and a
-    /// save keeps the file's number (spec: flp/events/channels.md, flp/events/mixer.md "Icon numbers").
+    /// save keeps the file's number (spec: project/events/channels.md, flp/events/mixer.md "Icon numbers").
     #[test]
     fn channel_icon_is_read_and_kept() {
         let mut p = new_project();
@@ -6437,7 +6437,7 @@ mod tests {
     }
 
     /// Mute (byte 19 bit 0x20), colour group, slide flag and unknown bytes survive a note edit
-    /// (spec: flp/events/patterns.md, note flags).
+    /// (spec: project/events/patterns.md, note flags).
     #[test]
     fn note_record_keeps_mute_and_flags() {
         let mut n = Note { flags: 0x4008, group: 0x04, unk14: 3, repeat: 4, ..Note::step(2, 96) };
@@ -6447,7 +6447,7 @@ mod tests {
         assert_eq!(decode_note(&r), n);
     }
 
-    /// Byte 17 is the note repeat index (spec: flp/events/patterns.md).
+    /// Byte 17 is the note repeat index (spec: project/events/patterns.md).
     #[test]
     fn note_repeat_is_byte_17() {
         let n = Note { repeat: 14, ..Note::step(0, 0) };
@@ -6455,7 +6455,7 @@ mod tests {
     }
 
     /// Every corpus clip list re-encodes to the same bytes, and every automation record too
-    /// (spec: flp/events/playlist.md, automation.md).
+    /// (spec: project/events/playlist.md, automation.md).
     #[test]
     fn corpus_clips_and_automation_reencode_exactly() {
         let Some(list) = std::env::var_os("OPENSTUDIO_FLP_CORPUS") else { return };
@@ -6485,7 +6485,7 @@ mod tests {
     }
 
     /// The LFO's fields and the range come back from a record as stored, and an edited LFO is written where it was read
-    /// from, every other byte kept (spec: flp/layouts.md "An automation clip's record", audio/automation.md "The LFO").
+    /// from, every other byte kept (spec: project/layouts.md "An automation clip's record", audio/automation.md "The LFO").
     #[test]
     fn automation_lfo_fields_round_trip() {
         // A record as FL writes one: two curve points, the LFO on, adding, amount 38, two envelope points.
@@ -6535,7 +6535,7 @@ mod tests {
         assert_eq!(decode_automation(2, &e).unwrap().lfo, short.lfo);
     }
 
-    /// A new clip's record is FL's: amount 64, the LFO off with its flags 1, speed 45819, one envelope point at 1.
+    /// A new clip's record is the original's: amount 64, the LFO off with its flags 1, speed 45819, one envelope point at 1.
     #[test]
     fn a_new_clip_has_the_default_lfo() {
         let a = new_automation(2, os_model::target::channel(0, 0), 0.5, 4.0);
@@ -6552,7 +6552,7 @@ mod tests {
     }
 
     /// Files of FL 24.2 to 25 hold 80-byte clip records: read with their fields, written back at 80 bytes with 0
-    /// at bytes 76..79; 88-byte lists are still told apart (spec: flp/layouts.md, "Playlist clip records").
+    /// at bytes 76..79; 88-byte lists are still told apart (spec: project/layouts.md, "Playlist clip records").
     #[test]
     fn eighty_byte_clip_records_are_read_and_kept() {
         let a = Clip::new(384, 288, 2, ClipSource::Pattern(1));
@@ -6568,7 +6568,7 @@ mod tests {
     }
 
     /// Lists of older files, 60-byte (FL 21 to 24.1) and 32-byte (up to FL 20) records, are told apart and written
-    /// back at their length; 32-byte records have no id (spec: flp/layouts.md, "How to tell the generation").
+    /// back at their length; 32-byte records have no id (spec: project/layouts.md, "How to tell the generation").
     #[test]
     fn older_clip_records_are_read_at_their_length() {
         let a = Clip::new(384, 288, 2, ClipSource::Pattern(1));
@@ -6584,7 +6584,7 @@ mod tests {
     }
 
     /// A new project's playlist (clips with windows, mute, markers) and automation clips are written by `create`,
-    /// read back, and later edits go through `apply` (spec: flp/events/playlist.md, automation.md).
+    /// read back, and later edits go through `apply` (spec: project/events/playlist.md, automation.md).
     #[test]
     fn created_playlist_and_automation_round_trip() {
         let mut p = new_project();
@@ -6623,14 +6623,14 @@ mod tests {
         let a0 = &mut edited.arrangements[0];
         a0.clips[0].position = 0;
         a0.clips[0].muted = false;
-        // Audio clip fades and gain live in the record (spec: flp/events/playlist.md bytes 36-59).
+        // Audio clip fades and gain live in the record (spec: project/events/playlist.md bytes 36-59).
         a0.clips[1].set_fade_in(Some((250.0, 1.5)));
         a0.clips[1].set_fade_out(Some((80.0, -2.0)));
         a0.clips[1].set_gain(0.5);
         a0.markers.push(TimeMarker::new(0, "Intro"));
         a0.tracks[3].enabled = false;
         a0.tracks[3].name = Some("Drums".into());
-        // A collapsed group: track 3 leads, tracks 4 and 5 are its members (spec: flp/events/playlist.md).
+        // A collapsed group: track 3 leads, tracks 4 and 5 are its members (spec: project/events/playlist.md).
         a0.tracks[3].collapsed = true;
         a0.tracks[4].grouped = true;
         a0.tracks[5].grouped = true;
@@ -6705,7 +6705,7 @@ mod tests {
     }
 
     /// The playlist view (event 242: scroll, time zoom, track height) sits before event 100, reads back and takes
-    /// edits; a file without one gets it (spec: flp/events/playlist.md "Playlist view").
+    /// edits; a file without one gets it (spec: project/events/playlist.md "Playlist view").
     #[test]
     fn playlist_view_round_trips() {
         let mut p = new_project();
@@ -6749,7 +6749,7 @@ mod tests {
         assert_eq!(load(&file).unwrap().playlist_view, Some(v));
     }
 
-    /// Event 223 records: `position, channel << 16 | param, value` (spec: flp/events/patterns.md).
+    /// Event 223 records: `position, channel << 16 | param, value` (spec: project/events/patterns.md).
     #[test]
     fn control_points_round_trip_and_sort_by_position() {
         let pts = [
@@ -6777,7 +6777,7 @@ mod tests {
     }
 
     /// Swing, filter groups, the current filter, lock, zip, pattern length and loop lengths are written and read
-    /// back; writing the same model again changes nothing; clearing them works (spec: flp/events/project-info.md,
+    /// back; writing the same model again changes nothing; clearing them works (spec: project/events/project-info.md,
     /// channels.md, patterns.md).
     #[test]
     fn rack_settings_round_trip() {
@@ -6834,9 +6834,9 @@ mod tests {
     }
 
     /// Title, genre, author, comments and URL edited in a saved file: `create` writes the empty ones empty (the URL not
-    /// at all), a changed text is patched, a missing one is added in FL's order, comments keep single-CR line breaks, the
+    /// at all), a changed text is patched, a missing one is added in the original's order, comments keep single-CR line breaks, the
     /// text is UTF-16LE; the same model again writes nothing; a cleared field keeps its event, written empty, and reads
-    /// back as no value; an empty one the file lacks gets none (spec: flp/events/project-info.md, flp/container.md "Text
+    /// back as no value; an empty one the file lacks gets none (spec: project/events/project-info.md, flp/container.md "Text
     /// payloads").
     #[test]
     fn project_info_round_trips() {
@@ -6891,8 +6891,8 @@ mod tests {
         assert_eq!(load(&file3).unwrap().info.url.as_deref(), Some("https://example.org"));
     }
 
-    /// Files saved by FL 11 and older hold 8-bit text (spec: flp/container.md "Text payloads"); saved, they are in the
-    /// current layout, whose text is UTF-16 (spec: flp/layouts.md "Converting to the newer layout").
+    /// Files saved by FL 11 and older hold 8-bit text (spec: project/container.md "Text payloads"); saved, they are in the
+    /// current layout, whose text is UTF-16 (spec: project/layouts.md "Converting to the newer layout").
     #[test]
     fn project_info_is_8_bit_in_old_files() {
         let mut p = new_project();
@@ -6915,9 +6915,9 @@ mod tests {
         assert_eq!(load(&FlpFile::parse(&file.to_bytes().unwrap()).unwrap()).unwrap().info, m.info);
     }
 
-    /// FL 26 writes the project information as 194, 206, 207, 167, 202, 195, [197], 237, the four texts empty in a new
+    /// version 26 writes the project information as 194, 206, 207, 167, 202, 195, [197], 237, the four texts empty in a new
     /// project: an unchanged model keeps them byte for byte, an added comment or URL goes in that order (after 207,
-    /// 167 and 202, before 237), and a cleared URL loses its event (spec: flp/engine-events.md "Order in the file",
+    /// 167 and 202, before 237), and a cleared URL loses its event (spec: project/engine-events.md "Order in the file",
     /// flp/events/project-info.md "Writer notes").
     #[test]
     fn project_info_keeps_fl_order() {
@@ -7028,7 +7028,7 @@ mod tests {
         apply(&m3, &mut f3).unwrap();
         assert_eq!(event_data(&f3, id::INFO_202), Some(vec![0, 0]));
         assert_eq!(load(&reparse(&f3)).unwrap().data_folder, Some(DataFolder::default()));
-        // `create` with one: in FL's order, and read back.
+        // `create` with one: in the original's order, and read back.
         let mut p = new_project();
         p.data_folder = Some(DataFolder { choice: DataFolder::RELATIVE, folder: "C:\\Work\\".into() });
         let f4 = reparse(&create(&p).unwrap());
@@ -7038,7 +7038,7 @@ mod tests {
 
     /// Event 237 (start and time spent, two doubles in days) and event 10 (show info on opening): `create` writes the
     /// model's, or now and 0, and 10 behind 30; they read back; `apply` patches them in place, or adds them where FL
-    /// writes them: 10 behind the project events, 237 behind the texts (spec: flp/events/project-info.md,
+    /// writes them: 10 behind the project events, 237 behind the texts (spec: project/events/project-info.md,
     /// flp/engine-events.md "Order in the file").
     #[test]
     fn work_time_and_show_info_round_trip() {
@@ -7133,7 +7133,7 @@ mod tests {
     }
 
     /// A pattern's own time markers (piano-roll Alt+T) are marker groups in its metadata block, sorted by position
-    /// together with the "Length" marker, before 164 (spec: flp/events/patterns.md, metadata block).
+    /// together with the "Length" marker, before 164 (spec: project/events/patterns.md, metadata block).
     #[test]
     fn pattern_markers_round_trip() {
         let mut file = FlpFile::parse(&create(&new_project()).unwrap().to_bytes().unwrap()).unwrap();
@@ -7220,7 +7220,7 @@ mod tests {
         assert_eq!(again.automations[1].target().map(decode), Some(Target::SlotParam(1, 0, 8)));
     }
 
-    /// The channel rack's swing knob, mixer box and LED as targets (spec: flp/events/automation.md "Targets",
+    /// The channel rack's swing knob, mixer box and LED as targets (spec: project/events/automation.md "Targets",
     /// flp/engine-events.md "Event 216", "Channel rack records"; measured 2026-11-02): a clip on each is written as a 227
     /// link with target 0x4000_0001, `channel << 16 | 8` or `channel << 16 | 7` and read back as it was, and their
     /// initial values are 12-byte records in the controls' own units (swing 64 → 64, Insert 2 → 2, on → 1). Moving the
@@ -7378,7 +7378,7 @@ mod tests {
     }
 
     /// Deleting, cloning and moving channels rewrites the blocks in model order and renumbers notes, control
-    /// points, automation links and playlist clips (spec: flp/events/channels.md "Deleting, cloning and moving").
+    /// points, automation links and playlist clips (spec: project/events/channels.md "Deleting, cloning and moving").
     #[test]
     fn deleted_cloned_and_moved_channels_are_written() {
         let mut p = new_project();

@@ -371,7 +371,7 @@ mod tests {
         state(&nodes, &links)
     }
 
-    /// Every Patcher slot state in the corpus reads (spec §1: all 35 of the FL 26 re-saves walk), and those that are a
+    /// Every Patcher slot state in the corpus reads (spec §1: all 35 of the version 26 re-saves walk), and those that are a
     /// plain chain give every linked node once.
     #[test]
     fn corpus_patcher_states_read() {
@@ -393,7 +393,7 @@ mod tests {
         eprintln!("{states} Patcher slot states read, {chains} of them plain chains");
     }
 
-    // spec: plugins/patcher/state.md "1. Framing", "3. A node", "4. FL's own ports", "5. A link"
+    // spec: plugins/patcher/state.md "1. Framing", "3. A node", "4. the original's own ports", "5. A link"
     #[test]
     fn a_serial_patch_reads_in_chain_order() {
         let p = parse(&serial([1.0; 3], &[])).expect("a patch");

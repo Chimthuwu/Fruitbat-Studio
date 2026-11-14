@@ -5,12 +5,12 @@
 
 //! The project's initial values (`Project::init_controls`): controls that take a value when the song starts. The
 //! Automation group of a control's menu adds one, "Set as song start value" (one undo step, "Initialized
-//! control"), and takes it out, "Remove start value" (no undo step, as in FL). With "Initialize controls
+//! control"), and takes it out, "Remove start value" (no undo step, as in the original). With "Initialize controls
 //! automatically" on, "Create automation clip" adds the control too, in its own step (`playlist::create_automation`).
 //! In song mode, starting playback, moving the song position and playback looping back to the song's start set every
 //! control in the list to its value (`apply`; the engine sets them itself where it loops), then automation clips act as
 //! usual. The browser lists them under Current project ▸ Initialized controls (`views::browser`); the file holds them
-//! in event 216 (`os_flp::project`).
+//! in event 216 (`os_project::project`).
 // spec: ui/settings-choices.md "Advanced: Initialize controls automatically (2026-10-16)"
 
 use os_model::target::{self, Target};
@@ -20,7 +20,7 @@ use crate::app::State;
 use crate::history::{self, Snap};
 use crate::playlist::{Cmd, Mark, PItem};
 
-/// The undo step of "Set as song start value" (FL's name).
+/// The undo step of "Set as song start value" (the original's name).
 pub const INITIALIZED: &str = "Initialized control";
 pub const INIT_LABEL: &str = "Set as song start value";
 pub const DELETE_LABEL: &str = "Remove start value";
@@ -119,7 +119,7 @@ fn set_value(s: &mut State, c: InitControl) -> bool {
     let last = crate::mixer::max_insert(p);
     match target::decode(c.target) {
         Target::Tempo => set(&mut s.tempo, (f / 1000.0).clamp(10.0, 522.0)),
-        // The rack's mixer box (the track number, at most the last insert) and LED (1 = on) (spec: flp/engine-events.md
+        // The rack's mixer box (the track number, at most the last insert) and LED (1 = on) (spec: project/engine-events.md
         // "Channel rack records").
         Target::ChannelMixerTrack(ch) => p.channels.iter_mut().find(|x| x.index == ch).is_some_and(|x| set(&mut x.mixer_track, v.clamp(0, i32::from(last)) as u16)),
         Target::ChannelOn(ch) => p.channels.iter_mut().find(|x| x.index == ch).is_some_and(|x| set(&mut x.enabled, v != 0)),
@@ -266,7 +266,7 @@ mod tests {
             let (init, delete) = pair(&menu);
             assert_eq!((init.enabled, init.mark, delete.enabled), (true, Mark::Check(false), false), "{action:?}");
         }
-        // The rack's mixer box and LED: their track number and switch (spec: flp/engine-events.md "Channel rack
+        // The rack's mixer box and LED: their track number and switch (spec: project/engine-events.md "Channel rack
         // records").
         let mixer = a.automation_target(&Action::RackMixer(0));
         let (init, delete) = pair(&crate::rack::mixer_menu(&a.state, 0, mixer, 0.0, 0.0));
@@ -421,10 +421,10 @@ mod tests {
         assert_eq!(controls(&a), INIT);
     }
 
-    /// Opening a project in song mode sets the listed controls, as FL 26 does (spec: flp/engine-events.md "Event
+    /// Opening a project in song mode sets the listed controls, as version 26 does (spec: project/engine-events.md "Event
     /// 216"): the file keeps the stored values, the opened project has the initial ones and is not changed, and saving
     /// it stores them. Opened in pattern mode, the stored values stay. The mode is the one saved (event 9), clips or
-    /// not; a file without it opens in song mode, as in FL.
+    /// not; a file without it opens in song mode, as in the original.
     #[test]
     fn opening_a_song_sets_the_initial_values() {
         const INIT: (f64, f64) = (0.5, 140.0);
@@ -433,8 +433,8 @@ mod tests {
         let path = dir.join(format!("lemon-init-open-{}.flp", std::process::id()));
         let resaved = dir.join(format!("lemon-init-open-{}-resaved.flp", std::process::id()));
         let stored = |p: &std::path::Path| {
-            let f = os_flp::FlpFile::parse(&std::fs::read(p).unwrap()).unwrap();
-            let q = os_flp::project::load(&f).unwrap();
+            let f = os_project::FlpFile::parse(&std::fs::read(p).unwrap()).unwrap();
+            let q = os_project::project::load(&f).unwrap();
             (q.channels[0].volume, q.tempo.unwrap())
         };
         let mut a = song_app();
@@ -461,9 +461,9 @@ mod tests {
         // Without event 9 (a file from before Lemon Studio wrote it): song mode, even with no clips.
         pl::arr_mut(&mut a.state).clips.clear();
         a.save_to(path.clone());
-        let mut f = os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap();
+        let mut f = os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap();
         for c in &mut f.chunks {
-            if let os_flp::ChunkBody::Events(ev) = &mut c.body {
+            if let os_project::ChunkBody::Events(ev) = &mut c.body {
                 ev.retain(|e| e.id != 9);
             }
         }

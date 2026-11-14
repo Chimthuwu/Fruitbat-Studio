@@ -7,7 +7,7 @@
 //! their boxes. A box takes the keyboard when clicked and edits with the file dialog's text field (`dialog::Field`:
 //! caret, Backspace / Delete, Left / Right / Home / End, Ctrl+A); Comments has several lines. The project keeps the
 //! text (`Project::info`), so an edit is an unsaved change and is saved with the project; the window caption shows the
-//! title instead of the file name (`App::title`). The button at the Genre box's right end offers FL's genre list.
+//! title instead of the file name (`App::title`). The button at the Genre box's right end offers the original's genre list.
 //!
 //! The page's footer tells when the project was started, the time spent working on it (event 237, which counts on
 //! while the project is open: `WorkClock`) and what the project holds. "Show info on opening" (event 10) makes opening
@@ -27,7 +27,7 @@ use crate::dialog::Field;
 use crate::views::settings::{self, InfoEdit, InfoField};
 
 /// The time spent working on the project this session. The spec has the time spent count on while the project is open
-/// but does not say what FL counts (spec: flp/events/project-info.md, event 237 and "Open questions"); Lemon Studio's
+/// but does not say what FL counts (spec: project/events/project-info.md, event 237 and "Open questions"); Lemon Studio's
 /// rule: it counts while a project is open and Lemon Studio's main window is the foreground window. The project keeps
 /// the time spent it was opened with; saving writes that plus this clock (`stamp`), so the counting itself is no
 /// unsaved change.
@@ -90,15 +90,15 @@ pub fn spent_days(s: &State, now: Instant) -> f64 {
 /// The project as it is saved (`App::save_to`): its time spent includes the session's clock (spec:
 /// flp/events/project-info.md "Writer notes": "then adds the time spent").
 pub(crate) fn stamp(s: &State, p: &mut Project) {
-    let started = s.project.work_time.map_or_else(|| os_flp::project::work_time_now().started, |w| w.started);
+    let started = s.project.work_time.map_or_else(|| os_project::project::work_time_now().started, |w| w.started);
     p.work_time = Some(WorkTime { started, spent: spent_days(s, Instant::now()) });
 }
 
 /// A project was opened (`App::open`): one whose file has no start is started now, as a writer creating a project does
-/// (spec: flp/events/project-info.md "Writer notes"); the clock starts again; the Song info box shows when the project
+/// (spec: project/events/project-info.md "Writer notes"); the clock starts again; the Song info box shows when the project
 /// asks for it (event 10).
 pub(crate) fn opened(s: &mut State) {
-    s.project.work_time.get_or_insert_with(os_flp::project::work_time_now);
+    s.project.work_time.get_or_insert_with(os_project::project::work_time_now);
     s.credits.clock.restart(Instant::now());
     s.credits.song_box = s.project.show_info == Some(true);
     (s.credits.song_since, s.credits.song_alpha) = (None, 1.0);
@@ -106,7 +106,7 @@ pub(crate) fn opened(s: &mut State) {
 
 /// A new project: started now, nothing spent (spec: ui/settings-choices.md "Info": "A new project starts now").
 pub(crate) fn created(s: &mut State) {
-    s.project.work_time = Some(os_flp::project::work_time_now());
+    s.project.work_time = Some(os_project::project::work_time_now());
     s.credits.clock.restart(Instant::now());
     s.credits.song_box = false;
 }
@@ -124,7 +124,7 @@ pub fn date_text(days: f64) -> Option<String> {
 }
 
 /// The time spent as the Info page words it (spec: ui/settings-choices.md "Info", footer line 2). One hour and one
-/// minute are worded "1 hour", "1 minute": FL's wording of them was not seen.
+/// minute are worded "1 hour", "1 minute": the original's wording of them was not seen.
 pub fn spent_text(days: f64) -> String {
     let minutes = (days.max(0.0) * 1440.0 + 1e-6).floor() as u64;
     if minutes == 0 {
@@ -135,7 +135,7 @@ pub fn spent_text(days: f64) -> String {
     format!("Total time spent on it:  {h} {} {m} {}.", word(h, "hour", "hours"), word(m, "minute", "minutes"))
 }
 
-/// The footer's counts (spec: flp/events/project-info.md "Info counts").
+/// The footer's counts (spec: project/events/project-info.md "Info counts").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Counts {
     /// Channels that hold a plugin plus mixer effect slots that hold one.
@@ -168,7 +168,7 @@ pub fn counts(p: &Project) -> Counts {
     }
 }
 
-/// The footer's "Mixer Tracks" (spec: flp/events/project-info.md "Info counts"): the mixer tracks a channel is routed to
+/// The footer's "Mixer Tracks" (spec: project/events/project-info.md "Info counts"): the mixer tracks a channel is routed to
 /// (the master too, when a channel goes straight to it) together with the tracks that receive a route from another
 /// track, the master never counted as a receiver. A track's name, effects and own routes do not count.
 pub fn mixer_tracks(p: &Project) -> usize {
@@ -204,7 +204,7 @@ pub fn footer(s: &State, now: Instant) -> Vec<String> {
 const SONG_HOLD: f32 = 5.0;
 const SONG_FADE: f32 = 0.5;
 
-/// The Song info box's size and colours (spec: flp/events/project-info.md "The Song info box").
+/// The Song info box's size and colours (spec: project/events/project-info.md "The Song info box").
 const SONG_BOX: (f32, f32) = (502.0, 272.0);
 const SONG_BG: u32 = 0xCCD1D5;
 const SONG_BORDER: u32 = 0x8E9397;
@@ -215,7 +215,7 @@ pub fn song_box_rect(screen: (f32, f32)) -> Rect {
     Rect::new(((screen.0 - SONG_BOX.0) / 2.0).floor(), ((screen.1 - SONG_BOX.1) / 2.0).floor(), SONG_BOX.0, SONG_BOX.1)
 }
 
-/// Paints the Song info box while it is shown (spec: flp/events/project-info.md "The Song info box"): borderless, light
+/// Paints the Song info box while it is shown (spec: project/events/project-info.md "The Song info box"): borderless, light
 /// grey with a 1 px darker frame; "<author> - <title>" in large dark text at the top left, the genre at the top right,
 /// the comments with their line breaks, the web link at the bottom right. A click on it closes it (`Action::SongInfo`), as
 /// does a click anywhere else (`App::mouse_down`). It is painted see-through while it fades. The app's own fonts.
@@ -351,7 +351,7 @@ impl App {
     /// (the session's time is not in it, `WorkClock`): the saved copy then forgets its time so the two differ.
     pub(crate) fn reset_work_time(&mut self) {
         let s = &mut self.state;
-        s.project.work_time.get_or_insert_with(os_flp::project::work_time_now).spent = 0.0;
+        s.project.work_time.get_or_insert_with(os_project::project::work_time_now).spent = 0.0;
         s.credits.clock.restart(Instant::now());
         if self.saved.0.work_time == s.project.work_time {
             self.saved.0.work_time = None;
@@ -402,7 +402,7 @@ impl App {
     }
 }
 
-/// FL's genre menu after "(none)", in its order (spec: ui/settings-choices.md "Info").
+/// the original's genre menu after "(none)", in its order (spec: ui/settings-choices.md "Info").
 pub const GENRES: [&str; 56] = [
     "Acid House",
     "Afro House",
@@ -463,7 +463,7 @@ pub const GENRES: [&str; 56] = [
 ];
 
 /// Writes the Info box being edited into the project. One-line boxes drop leading and trailing blanks; an emptied box
-/// clears its field (a file that has the field keeps it, empty, apart from the web link; os-flp `apply`). Unchanged
+/// clears its field (a file that has the field keeps it, empty, apart from the web link; os-project `apply`). Unchanged
 /// text changes nothing.
 pub(crate) fn accept_info(s: &mut State) {
     let Some(e) = s.settings.info_edit.take() else { return };
@@ -627,7 +627,7 @@ mod tests {
     }
 
     /// Typed credits are saved in a new project's file, and edited again in the opened file; they read back after
-    /// reopening, a cleared one as no text (spec: flp/events/project-info.md).
+    /// reopening, a cleared one as no text (spec: project/events/project-info.md).
     #[test]
     fn credits_are_saved() {
         let mut app = app();
@@ -682,7 +682,7 @@ mod tests {
         crate::playlist::run(app, cmd);
     }
 
-    /// The genre menu: "(none)" and FL's 56 genres in order, the project's genre marked; a row writes the box, "(none)"
+    /// The genre menu: "(none)" and the original's 56 genres in order, the project's genre marked; a row writes the box, "(none)"
     /// empties it, and the box still takes any typed genre (spec: ui/settings-choices.md "Info").
     #[test]
     fn genre_menu_fills_the_box() {
@@ -716,7 +716,7 @@ mod tests {
     }
 
     /// The painted genre button: hint "MP3 music genres"; a click accepts the box being edited and opens the menu under
-    /// the button; the picked genre is saved like a typed one (event 206; spec: flp/events/project-info.md).
+    /// the button; the picked genre is saved like a typed one (event 206; spec: project/events/project-info.md).
     #[test]
     fn genre_button_opens_the_menu() {
         let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
@@ -782,7 +782,7 @@ mod tests {
         assert_eq!(lines[3], format!("Arrangements: {}, PL tracks: {}, PL clips: {}, Notes: {}", c.arrangements, c.pl_tracks, c.pl_clips, c.notes));
     }
 
-    /// What the footer counts (spec: flp/events/project-info.md "Info counts"): channels holding a plugin plus effect
+    /// What the footer counts (spec: project/events/project-info.md "Info counts"): channels holding a plugin plus effect
     /// slots holding one; the playlist tracks holding a clip; the notes of all patterns.
     #[test]
     fn footer_counts() {
@@ -818,7 +818,7 @@ mod tests {
         assert_eq!((counts(&p).pl_tracks, counts(&p).pl_clips), (1, 1));
     }
 
-    /// "Mixer Tracks" (spec: flp/events/project-info.md "Info counts"): the tracks channels are routed to, the master
+    /// "Mixer Tracks" (spec: project/events/project-info.md "Info counts"): the tracks channels are routed to, the master
     /// included, and the tracks another track sends to, the master not included; names, effects and a track's own
     /// routes do not count.
     #[test]
@@ -826,7 +826,7 @@ mod tests {
         use os_model::{MixerTrack, SlotPlugin};
         let mut p = crate::app::default_project();
         let ch = p.channels[0].clone();
-        // Inserts 1-4 route to the master (as FL's do); one channel straight to the master.
+        // Inserts 1-4 route to the master (as the original's do); one channel straight to the master.
         p.mixer = (0..5).map(MixerTrack::new).collect();
         p.channels = vec![ch.clone()];
         p.channels[0].mixer_track = 0;
@@ -907,7 +907,7 @@ mod tests {
         let mut app = app();
         let w = app.state.project.work_time.expect("a new project starts now");
         assert_eq!(w.spent, 0.0);
-        assert!((w.started - os_flp::project::work_time_now().started).abs() < 1.0 / 24.0);
+        assert!((w.started - os_project::project::work_time_now().started).abs() < 1.0 / 24.0);
         app.state.project.work_time = Some(WorkTime { started: 42_146.5, spent: 1.0 });
         app.saved.0.work_time = app.state.project.work_time;
         app.state.credits.clock = WorkClock::default();
@@ -917,7 +917,7 @@ mod tests {
         app.save_to(path.clone());
         assert!(!app.unsaved(), "{:?}", app.state.message);
         let bytes = std::fs::read(&path).expect("saved");
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&bytes).expect("parse")).expect("load").work_time.expect("237");
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&bytes).expect("parse")).expect("load").work_time.expect("237");
         assert_eq!(saved.started, 42_146.5);
         assert!((saved.spent - (1.0 + 10.0 * WorkTime::MINUTE)).abs() < WorkTime::MINUTE / 2.0, "{saved:?}");
         app.open(path.clone());
@@ -962,7 +962,7 @@ mod tests {
     }
 
     /// "Show info on opening" is live and saved (event 10); opening the project then shows the Song info box, 502 x 272
-    /// centred on the main window, which a click closes (spec: flp/events/project-info.md "The Song info box").
+    /// centred on the main window, which a click closes (spec: project/events/project-info.md "The Song info box").
     #[test]
     fn show_info_on_opening() {
         assert_eq!(song_box_rect((1920.0, 1040.0)), Rect::new(709.0, 384.0, 502.0, 272.0));
@@ -978,7 +978,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("lemonstudio-showinfo-{}.flp", std::process::id()));
         app.save_to(path.clone());
         let bytes = std::fs::read(&path).expect("saved");
-        assert_eq!(os_flp::project::load(&os_flp::FlpFile::parse(&bytes).expect("parse")).expect("load").show_info, Some(true));
+        assert_eq!(os_project::project::load(&os_project::FlpFile::parse(&bytes).expect("parse")).expect("load").show_info, Some(true));
         app.open(path.clone());
         assert!(app.state.credits.song_box);
         if let Ok(mut c) = os_ui::Canvas::new(1920, 1040, 1.0) {

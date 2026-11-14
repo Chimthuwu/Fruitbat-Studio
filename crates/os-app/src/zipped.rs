@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Zipped projects: a project file and its samples in one .zip, as FL's zipped loop packages are (the project file and
+//! Zipped projects: a project file and its samples in one .zip, as the original's zipped loop packages are (the project file and
 //! the samples side by side at the top of the zip). Opening a .zip unzips it into a folder beside it, then opens its
 //! project file: the samples are found by name in the project's folder (`crate::missing`). FILE > Export zipped
 //! project... writes the project and every sample it uses into a .zip. Both run on a thread of their own behind a
@@ -243,7 +243,7 @@ impl Pack {
 /// The project file's bytes as Save writes them (with the samples' names in the zip) and the samples to put beside it.
 /// The project itself, its file and its unsaved changes stay as they are.
 fn prepare(app: &mut App, zip: &Path) -> Result<(Vec<u8>, Pack), String> {
-    // The project goes in as Save writes it: a .lemon file (an FLP's name with .lemon).
+    // The project goes in as Save writes it: a .lemon file (a legacy project's name with .lemon).
     let ext = crate::project_files::EXT;
     let project = app.state.path.as_deref().and_then(Path::file_stem).map_or_else(
         || format!("{}.{ext}", zip.file_stem().map_or_else(|| "Untitled".into(), |s| s.to_string_lossy())),

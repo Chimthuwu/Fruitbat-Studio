@@ -28,7 +28,7 @@ const FILE: u8 = 254;
 /// Height of the info panel above the footer (spec §6).
 pub const INFO_H: f32 = 84.0;
 
-/// (label, icon, category colour index). Only the roots with content: FL's other disk-folder roots (Recent files,
+/// (label, icon, category colour index). Only the roots with content: the original's other disk-folder roots (Recent files,
 /// Channel presets, Packs...) are left out until Lemon Studio has content for them (owner decision); dropped folders
 /// follow these. Plugin presets: the preset store, user and factory (spec: plugins/presets.md "Browser").
 /// Channel presets: the channel state files (`crate::channel_states`; empty until one is saved).
@@ -863,7 +863,7 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
         icons::draw(ui.c, icon, Rect::new(r.x + 1.0, 87.0 + dy, 12.0, 14.0), if hov { t.glyph } else { t.text_dim });
     }
     ui.c.text(if meridian { os_ui::Font::condensed(13, 8).bold() } else { os_ui::Font::new(14) }, 52.0, 85.0 + dy, if meridian { t.accent } else { t.text_dim }, if meridian { "BROWSER" } else { "Browser" });
-    // Tabs (spec ui/browser.md §1): FL's five without Online content, sharing the strip.
+    // Tabs (spec ui/browser.md §1): the original's five without Online content, sharing the strip.
     ui.c.fill_rect(Rect::span(0.0, bw - 1.0, 106.0 + dy, 141.0 + dy), t.browser_tabs);
     if meridian {
         ui.c.fill_rect(Rect::new(0.0, 105.0 + dy, bw, 1.0), t.accent.with_alpha(90));

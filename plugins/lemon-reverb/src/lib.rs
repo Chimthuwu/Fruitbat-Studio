@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Reverb: Lemon Studio's plate reverb (a recreation of FL's Fruity Reeverb 2) as a VST3 / CLAP plugin
+//! Lemon Reverb: Lemon Studio's plate reverb (a recreation of the original's Fruity Reeverb 2) as a VST3 / CLAP plugin
 //! (nih-plug). The sound is `os_engine::effects::reverb`.
 //!
 // spec: plugins/lemon-reverb.md, plugins/fruity-reeverb-2.md, plugins/plugin-formats.md

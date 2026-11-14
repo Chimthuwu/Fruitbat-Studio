@@ -15,7 +15,7 @@ use crate::playlist::Snap;
 use crate::step_edit::Src;
 use os_model::{ClipSource, Note, TimeMarker};
 
-/// The undo step of a take (FL's name for it).
+/// The undo step of a take (the original's name for it).
 pub const RECORDED: &str = "Recorded items";
 
 /// The right-click menu's checks: key in `settings.txt` and default (spec §2 Right-click menu).

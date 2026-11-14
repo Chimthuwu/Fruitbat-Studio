@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Phaser: Lemon Studio's phaser (a recreation of FL's Fruity Phaser) as a plugin. The sound is
+//! Lemon Phaser: Lemon Studio's phaser (a recreation of the original's Fruity Phaser) as a plugin. The sound is
 //! `os_engine::effects::phaser`, started as a loaded project's slot (the filters empty, the LFO as after the idle
 //! frames); the editor is the original's grid of nine tiles, three across and three down.
 //!
@@ -214,7 +214,7 @@ mod tests {
 
     #[test]
     fn value_texts_and_typed_values() {
-        // The defaults (FL's editor shows 0.50000 Hz, 0.10000, 0.80000, small, 0.50000 phase, 8, 0.40000 amount,
+        // The defaults (the original's editor shows 0.50000 Hz, 0.10000, 0.80000, small, 0.50000 phase, 8, 0.40000 amount,
         // 50 % wet and 4.08240 dB).
         assert_eq!(text(dsp::SWEEP, 2500), "0.238 / 1.19Hz");
         assert_eq!(text(dsp::SWEEP, 5000), "2.000 / 10.00Hz");

@@ -17,7 +17,7 @@ pub const PATTERNS: usize = 10;
 pub const CONTROLS: usize = 12;
 /// The global ints: master level, master LFO level, follower level, attack, release, pattern number.
 pub const GLOBALS: usize = 6;
-/// The automatable settings (FL's automation indices 0..=358).
+/// The automatable settings (the original's automation indices 0..=358).
 pub const PARAMS: usize = 359;
 /// The version FL 2024 writes, and Lemon Studio.
 pub const VERSION: i32 = 0x000C_0003;
@@ -292,7 +292,7 @@ impl State {
         st
     }
 
-    /// Setting `k`'s value by FL's automation index (spec "The settings").
+    /// Setting `k`'s value by the original's automation index (spec "The settings").
     pub fn param(&self, k: usize) -> Option<i32> {
         Some(match k {
             0..=5 => self.globals[k],
@@ -560,7 +560,7 @@ mod tests {
         assert!(State::from_bytes(&b).is_none());
     }
 
-    /// FL's own Default.dat, when FL is installed here.
+    /// the original's own Default.dat, when FL is installed here.
     #[test]
     fn reads_fls_default_preset_when_present() {
         let p = r"C:\Program Files\Image-Line\FL Studio 2026\Plugins\Fruity\Effects\Fruity Love Philter\Data\Default.dat";

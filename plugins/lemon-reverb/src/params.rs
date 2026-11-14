@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn value_texts_match_the_original_hints() {
-        // FL's hints (screens of the original, 130 BPM).
+        // the original's hints (screens of the original, 130 BPM).
         assert_eq!(txt("lcut", 19), "Off");
         assert_eq!(txt("lcut", 75), "75Hz");
         assert_eq!(txt("lcut", 3000), "3000Hz");
@@ -451,7 +451,7 @@ mod tests {
 
     #[test]
     fn older_states_come_in_the_current_layout() {
-        // A factory preset: thirteen knobs and one byte (FL's Cathedral).
+        // A factory preset: thirteen knobs and one byte (the original's Cathedral).
         let mut preset = Vec::new();
         for v in [33, 21, 27, 90, 100, 45, 31, 150, 298, 0, 128, 128, 90] {
             preset.extend_from_slice(&i32::to_le_bytes(v));

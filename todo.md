@@ -26,7 +26,7 @@
 - [ ] **Modulator strip compaction**: the fixed 21-slot row still shows many empty add tiles. The handoff
       asks for the populated modulators plus exactly one add slot. Every populated tile now has a visible
       `×` remove button (plus its menu and Delete).
-- [ ] **FLP short-record writes** (`os_flp::project::patch_bytes`) still skip silently when the stored
+- [ ] **FLP short-record writes** (`os_project::project::patch_bytes`) still skip silently when the stored
       payload is shorter than the record, so a truncated project event is not reported. Needs a warning
       path before writing.
 - [ ] Launcher drag-and-drop, full playlist-style track headers, and the scene/automation polish remain in
@@ -499,7 +499,7 @@ Source: https://github.com/Dorfhaus/Lemon-Studio-Michael-Lane-Edition/tree/micha
   (spec-level only, clean-room rules respected)
 
 **Key audit facts driving the plan:**
-- The fork shares our crate skeleton (os-model / os-flp / os-engine / os-app /
+- The fork shares our crate skeleton (os-model / os-project / os-engine / os-app /
   nih-plug plugins), so porting surfaces map almost 1:1.
 - ⚠ Open licensing question before ANY porting: the fork is a public fork of the
   same upstream. If upstream+fork licenses permit, direct code reuse may be legal —
@@ -584,7 +584,7 @@ Order (cheapest/highest-certainty first; engine-touching items after RT hardenin
       4. Add a privacy-policy note in-app before shipping anything networked.
 
 Cross-cutting standing notes:
-- engine.rs and os-flp/project.rs are at sizes where MPE/FLP work forces a split —
+- engine.rs and os-project/project.rs are at sizes where MPE/FLP work forces a split —
   schedule that before MPE.
 - All six items touch code the 2026-11-04 quality audit flagged; re-run that audit
   after each feature lands.

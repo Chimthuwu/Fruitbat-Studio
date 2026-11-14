@@ -6,7 +6,7 @@
 //! settings and its plugin's state, to a file in the user folder's `Channel presets`; "Browse channel states" shows that
 //! folder in the browser, and a channel state file dropped (from there or the desktop) adds the channel it holds.
 //!
-//! A file is a project of the one channel, in the project file format (`os_flp::project::create`), with its own
+//! A file is a project of the one channel, in the project file format (`os_project::project::create`), with its own
 //! extension: the original's channel state files were not examined, so they are not read and these are not claimed to
 //! be theirs.
 // spec: ui/plugin-window.md "Channel states", ui/browser.md "Channel presets"
@@ -110,14 +110,14 @@ pub fn state_bytes(app: &mut App, row: usize) -> Result<Vec<u8>, String> {
     ch.index = 0;
     ch.id = os_model::Id::NONE;
     let one = os_model::Project { ppq: proj.ppq, channels: vec![ch], ..Default::default() };
-    os_flp::project::create(&one).map_err(|e| e.to_string())?.to_bytes().map_err(|e| e.to_string())
+    os_project::project::create(&one).map_err(|e| e.to_string())?.to_bytes().map_err(|e| e.to_string())
 }
 
 /// The channel a channel state file holds.
 pub fn read(path: &Path) -> Result<os_model::Channel, String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    let file = os_flp::FlpFile::parse(&bytes).map_err(|e| e.to_string())?;
-    let p = os_flp::project::load(&file).map_err(|e| e.to_string())?;
+    let file = os_project::FlpFile::parse(&bytes).map_err(|e| e.to_string())?;
+    let p = os_project::project::load(&file).map_err(|e| e.to_string())?;
     p.channels.into_iter().next().ok_or_else(|| "it holds no channel".into())
 }
 

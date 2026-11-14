@@ -36,7 +36,7 @@ pub fn band_param(k: usize) -> Option<(usize, usize)> {
     (7..PARAMS).contains(&k).then(|| ((k - 7) / 13, (k - 7) % 13))
 }
 
-/// The hint's name of setting `k` (FL's hint names, measured).
+/// The hint's name of setting `k` (the original's hint names, measured).
 pub fn name(k: usize) -> &'static str {
     match k {
         P_LOW_FREQ => "Low band frequency",
@@ -70,7 +70,7 @@ pub fn gain_text(g: f64) -> String {
     format!("{db}dB {g:.2}")
 }
 
-/// A time knob in ms: the knob law at 1 kHz, release times twice as long (as FL's hints show them).
+/// A time knob in ms: the knob law at 1 kHz, release times twice as long (as the original's hints show them).
 pub fn ms(k: usize, v: i32) -> f64 {
     let x = samples(v, 1000.0);
     match band_param(k) {
@@ -85,7 +85,7 @@ fn pct(v: i32) -> String {
 
 pub const MODE_NAMES: [&str; 4] = ["on", "compression off", "muted", "off"];
 
-/// The value text of setting `k` at `v` (FL's hint values, measured).
+/// The value text of setting `k` at `v` (the original's hint values, measured).
 pub fn text(k: usize, v: i32) -> String {
     match k {
         P_LOW_FREQ | P_HIGH_FREQ => format!("{}Hz", crossover_hz(v).round() as i64),
@@ -152,7 +152,7 @@ pub fn parse(k: usize, s: &str) -> Option<i32> {
 mod tests {
     use super::*;
 
-    /// The texts FL's hints show for the factory default and for unusual values (plugins/lemon-press.md §3).
+    /// The texts the original's hints show for the factory default and for unusual values (plugins/lemon-press.md §3).
     #[test]
     fn texts_match_fls_hints() {
         let b = |k| band(MASTER, k);

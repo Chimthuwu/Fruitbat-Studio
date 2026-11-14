@@ -5,7 +5,7 @@
 //! What Tesla saves, and Edison's state in and out.
 //!
 //! Tesla's own state is JSON: the sample as a plain WAV file embedded in base64 (the bytes File > Save would write,
-//! with no size limit), the path it came from, the view and the recording settings. Edison's state (FLP event 213)
+//! with no size limit), the path it came from, the view and the recording settings. Edison's state (legacy project event 213)
 //! is a short head, the embedded WAVE and a tail with the path and the recording settings: Lemon Studio opens an
 //! Edison slot as Tesla through [`from_edison`] and writes it back for FL through [`to_edison`].
 //!
@@ -70,7 +70,7 @@ pub struct Rec {
 }
 
 impl Default for Rec {
-    /// FL's default Edison instance: On input, 30 minutes, Append on, not slaved, not armed.
+    /// the original's default Edison instance: On input, 30 minutes, Append on, not slaved, not armed.
     fn default() -> Self {
         Rec { when: WHEN_ON_INPUT, max: 5, append: true, slave: false, armed: false, mute: false }
     }

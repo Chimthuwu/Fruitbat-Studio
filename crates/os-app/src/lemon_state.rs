@@ -2,23 +2,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Studio's own state saved in a `.lemon` file's `LMex` chunk, where an FLP has no place for it (Lemon Studio's
-//! design, spec: flp/lemon-format.md "LMex"): the icons chosen with Change icon..., the effect slots' names and colours,
+//! Lemon Studio's own state saved in a `.lemon` file's `LMex` chunk, where a legacy project has no place for it (Lemon Studio's
+//! design, spec: project/lemon-format.md "LMex"): the icons chosen with Change icon..., the effect slots' names and colours,
 //! Performance mode's settings, the mixer's Plugin delay compensation ▸ Automatic and View ▸ checks, the plugin windows'
 //! Scaling ▸, the channels' Show waveform preview and MIDI channel through checks, Set keyboard focus of all plugins
 //! to ▸, the playlist tracks' locks to their clips and the Receive notes from ▸ locks. Each kind is one event; its
 //! payload starts with a layout version (1), and numbers are little-endian. Save writes them all (empty ones too, so a
-//! file saved again holds no stale state); an FLP target drops them with the rest of `LMex`. Open reads them back from
-//! a `.lemon` file only; an FLP's icons come from its icon numbers instead.
+//! file saved again holds no stale state); a legacy project target drops them with the rest of `LMex`. Open reads them back from
+//! a `.lemon` file only; a legacy project's icons come from its icon numbers instead.
 //!
 //! Two of them belong to the modulation system: the persistent identity registry (M0, event 206) and the graph
 //! itself (M1, event 207). The graph names parameters by that identity, so the two are written together and neither
-//! is ever an FLP target (audit K.1/K.3).
+//! is ever a legacy project target (audit K.1/K.3).
 
 use crate::app::State;
 use crate::playlist::{ICONS, IconOwner};
 use crate::plugins::Plugins;
-use os_flp::{Event, FlpFile, Value, lemon};
+use os_project::{Event, FlpFile, Value, lemon};
 use os_model::modulation::{
     Curve, Envelope, IdentityRegistry, Lfo, LfoShape, ModGraph, ModSource, ModTarget, Modulator, ModulatorId, OwnerLocator,
     ParameterKey, ParameterPath, PersistentObjectId, Polarity, Steps, Timebase,
@@ -487,7 +487,7 @@ fn read_target(r: &mut Reader, layout: u8) -> Option<ModTarget> {
     Some(ModTarget { path: ParameterPath { owner, parameter }, depth, curve, polarity, enabled })
 }
 
-/// Puts the state a `.lemon` file holds into `s` and `plugins` (a project just opened, its ids given). An FLP has
+/// Puts the state a `.lemon` file holds into `s` and `plugins` (a project just opened, its ids given). A legacy project has
 /// none; its channels and mixer tracks show the icons their numbers stand for instead ([`from_flp`]).
 pub fn apply(s: &mut State, plugins: &mut Plugins, file: &FlpFile) {
     if !lemon::is_lemon(file) {
@@ -609,11 +609,11 @@ pub fn apply(s: &mut State, plugins: &mut Plugins, file: &FlpFile) {
     }
 }
 
-/// The icons of an opened FLP: each channel's and mixer track's icon number (events 155 and 95) that has a picture in
-/// the Change icon... list ([`crate::playlist::FLP_ICONS`]). A `.lemon` file's icons are its own (event 193), so a
-/// choice made in Lemon Studio, None too, wins over the numbers its FLP events keep.
+/// The icons of an opened legacy project: each channel's and mixer track's icon number (events 155 and 95) that has a picture in
+/// the Change icon... list ([`crate::playlist::legacy project_ICONS`]). A `.lemon` file's icons are its own (event 193), so a
+/// choice made in Lemon Studio, None too, wins over the numbers its legacy project events keep.
 fn from_flp(s: &mut State) {
-    // An FLP has no Linear mode of its own: the defaults (Classic, no tracks), as for every other kind of state.
+    // A legacy project has no Linear mode of its own: the defaults (Classic, no tracks), as for every other kind of state.
     s.project.linear_mode = false;
     s.project.tracks.clear();
     let p = &s.project;
@@ -1127,7 +1127,7 @@ mod tests {
         let mut app = with_state();
         app.save_to(path.clone());
         assert!(!app.unsaved());
-        let file = os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap();
+        let file = os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap();
         let ids: Vec<u8> = lemon::events(&file).unwrap().iter().map(|e| e.id).collect();
         let mut want = vec![lemon::SAVED_BY, lemon::ICONS, lemon::SLOT_NAMES, lemon::SLOT_COLORS, lemon::PERFORMANCE, lemon::MIXER];
         want.extend([lemon::SCALING, lemon::CHANNEL_CHECKS]);
@@ -1176,7 +1176,7 @@ mod tests {
         s.rack.wave_preview.insert(s.project.channels[1].id.0);
         s.rack.through_off.insert(s.project.channels[2].id.0);
         if s.project.arrangements.is_empty() {
-            s.project.arrangements.push(os_flp::project::default_arrangement());
+            s.project.arrangements.push(os_project::project::default_arrangement());
         }
         let tracks = &mut s.project.arrangements[0].tracks;
         tracks[3].clip_lock = Some(os_model::ClipSource::Pattern(1));
@@ -1187,7 +1187,7 @@ mod tests {
     }
 
     /// Saved to a .lemon file and opened again, the settings of events 197-201 come back (the checks on the channels
-    /// at the same rack positions), Set keyboard focus of all plugins to ▸ too; a project opened from an FLP has the
+    /// at the same rack positions), Set keyboard focus of all plugins to ▸ too; a project opened from a legacy project has the
     /// defaults (and a Scaling ▸ of the project opened before is gone). A changed Scaling ▸ is an unsaved change; the
     /// keyboard focus switch is not.
     #[test]
@@ -1224,7 +1224,7 @@ mod tests {
             set_editor_keys(true);
             assert!(!back.unsaved(), "the keyboard focus switch is not");
         }
-        // The FLP saved from the same state: no LMex, so the defaults (opened over the .lemon project).
+        // The legacy project saved from the same state: no LMex, so the defaults (opened over the .lemon project).
         back.open(flp_path);
         let s = &back.state;
         assert!(!s.project.pdc_off && !s.mixer.waveforms && s.mixer.extra);
@@ -1236,7 +1236,7 @@ mod tests {
     }
 
     /// The linear mode's tracks (event 203) and mode flag (204) come back through a .lemon file (ids are not saved, so
-    /// they are new); an FLP saved from the same state has none of them.
+    /// they are new); a legacy project saved from the same state has none of them.
     #[test]
     fn linear_mode_and_its_tracks_round_trip_through_a_lemon_file() {
         let d = dir("linear");
@@ -1247,7 +1247,7 @@ mod tests {
         app.state.project.tracks.push(os_model::Track::new(os_model::TrackKind::Bus, 0, 6, None));
         app.save_to(lemon_path.clone());
         app.save_to(flp_path.clone());
-        let file = os_flp::FlpFile::parse(&std::fs::read(&lemon_path).unwrap()).unwrap();
+        let file = os_project::FlpFile::parse(&std::fs::read(&lemon_path).unwrap()).unwrap();
         let midi = [1u8, 3, 0, 0, 0, 5, 0, 1, 0];
         let bus = [2u8, 0, 0, 0, 0, 6, 0, 255, 255];
         let mut want = vec![LAYOUT, 2, 0, 0, 0];
@@ -1266,7 +1266,7 @@ mod tests {
             (os_model::TrackKind::Midi, 3, 5, Some(1))
         );
         assert_eq!((s.project.tracks[1].kind, s.project.tracks[1].playlist_lane), (os_model::TrackKind::Bus, 0));
-        // The FLP saved from the same state: no tracks and no Linear mode (an FLP has no place for them).
+        // The legacy project saved from the same state: no tracks and no Linear mode (a legacy project has no place for them).
         back.open(flp_path);
         let s = &back.state;
         assert!(!s.project.linear_mode && s.project.tracks.is_empty());
@@ -1275,7 +1275,7 @@ mod tests {
 
     /// The automation lanes (event 205, spec: model/track-model.md §6b) come back through a .lemon file, their
     /// targets and collapsed flags with them; a lane whose track is gone (or a target bound twice) is left out; an
-    /// FLP saved from the same state has none.
+    /// legacy project saved from the same state has none.
     #[test]
     fn lane_bindings_round_trip_through_a_lemon_file() {
         let d = dir("lanes");
@@ -1292,7 +1292,7 @@ mod tests {
         ];
         app.save_to(lemon_path.clone());
         app.save_to(flp_path.clone());
-        let file = os_flp::FlpFile::parse(&std::fs::read(&lemon_path).unwrap()).unwrap();
+        let file = os_project::FlpFile::parse(&std::fs::read(&lemon_path).unwrap()).unwrap();
         let mut want = vec![LAYOUT, 3, 0, 0, 0];
         for (track, target, collapsed) in [(0u32, tgt, 0u8), (0, gone, 1), (7, os_model::target::TEMPO, 0)] {
             want.extend_from_slice(&track.to_le_bytes());
@@ -1308,14 +1308,14 @@ mod tests {
             back.state.project.auto_lanes,
             vec![os_model::AutoLane { track: 0, target: tgt, collapsed: false }, os_model::AutoLane { track: 0, target: gone, collapsed: true }]
         );
-        // The FLP saved from the same state: no lanes (an FLP has no place for them).
+        // The legacy project saved from the same state: no lanes (a legacy project has no place for them).
         back.open(flp_path);
         assert!(back.state.project.auto_lanes.is_empty());
         let _ = std::fs::remove_dir_all(&d);
     }
 
     /// Receive notes from ▸ locks (event 202) come back on the channels at the same rack positions; one taken off is an
-    /// unsaved change and stays off once saved; an FLP saved from the same state opens with none.
+    /// unsaved change and stays off once saved; a legacy project saved from the same state opens with none.
     #[test]
     fn note_locks_round_trip_through_a_lemon_file() {
         use crate::rack::NoteSrc;
@@ -1326,7 +1326,7 @@ mod tests {
         app.state.rack.note_lock[NoteSrc::Touch as usize] = Some(1);
         app.save_to(lemon_path.clone());
         app.save_to(flp_path.clone());
-        let file = os_flp::FlpFile::parse(&std::fs::read(&lemon_path).unwrap()).unwrap();
+        let file = os_project::FlpFile::parse(&std::fs::read(&lemon_path).unwrap()).unwrap();
         assert_eq!(lemon::data(&file, lemon::NOTE_LOCKS), Some(vec![LAYOUT, 2, 0, 0, 0, 0, 3, 0, 1, 1, 0]));
         let mut back = App::new(None);
         back.open(lemon_path.clone());
@@ -1349,8 +1349,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
-    /// An FLP's icon numbers (a channel's event 155, a mixer track's event 95) open as the icons with the same picture
-    /// (`playlist::FLP_ICONS`), other numbers as none. Saved as .lemon, the FLP events keep the file's numbers and the
+    /// A legacy project's icon numbers (a channel's event 155, a mixer track's event 95) open as the icons with the same picture
+    /// (`playlist::legacy project_ICONS`), other numbers as none. Saved as .lemon, the legacy project events keep the file's numbers and the
     /// icons come back from event 193, so one taken off in Lemon Studio stays off.
     #[test]
     fn flp_icon_numbers_open_as_icons() {
@@ -1364,10 +1364,10 @@ mod tests {
         m[3].icon = Some(74); // the automation clip's nodes: no picture of Lemon Studio's
         m[4].icon = Some(80);
         made.save_to(path.clone());
-        let mut file = os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap();
+        let mut file = os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap();
         // The second channel's icon number, before its colour: 30, the microphone.
         let ev = file.chunks.iter_mut().find_map(|c| match &mut c.body {
-            os_flp::ChunkBody::Events(v) => Some(v),
+            os_project::ChunkBody::Events(v) => Some(v),
             _ => None,
         });
         let ev = ev.unwrap();
@@ -1387,11 +1387,11 @@ mod tests {
         assert_eq!(s.playlist.icons.len(), 3, "74 has no picture here");
         assert_eq!(crate::playlist::window_icon(&s.project, &s.playlist.icons, 1), Some(Icon::Mic));
         assert!(!app.unsaved(), "the icons are the opened state");
-        // Saved as .lemon with the track 2 icon taken off: the FLP events keep the original numbers.
+        // Saved as .lemon with the track 2 icon taken off: the legacy project events keep the original numbers.
         app.state.playlist.icons.remove(&IconOwner::Track(2));
         let lemon_path = d.join("Icons.lemon");
         app.save_to(lemon_path.clone());
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&lemon_path).unwrap()).unwrap()).unwrap();
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&lemon_path).unwrap()).unwrap()).unwrap();
         assert_eq!((saved.channels[1].rack.icon, saved.mixer[2].icon, saved.mixer[3].icon), (30, Some(75), Some(74)));
         let mut back = App::new(None);
         back.open(lemon_path);
@@ -1402,7 +1402,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
-    /// A target named .flp has no place for the state: the save succeeds, the file is a plain FLP, and opening it gives
+    /// A target named .flp has no place for the state: the save succeeds, the file is a plain legacy project, and opening it gives
     /// the defaults.
     #[test]
     fn an_flp_target_drops_the_state() {
@@ -1411,7 +1411,7 @@ mod tests {
         let mut app = with_state();
         app.save_to(path.clone());
         assert!(app.state.message.as_deref().is_some_and(|m| m.starts_with("Saved")), "{:?}", app.state.message);
-        let file = os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap();
+        let file = os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap();
         assert!(!lemon::is_lemon(&file) && lemon::events(&file).unwrap().is_empty());
         let mut back = App::new(None);
         back.open(path);
@@ -1430,7 +1430,7 @@ mod tests {
         let path = d.join("State.lemon");
         let mut app = with_state();
         app.save_to(path.clone());
-        let mut file = os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap();
+        let mut file = os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap();
         let future = Event::new(240, Value::var([7, 7]));
         // A layout after this version's is left unread.
         let later = Event::new(lemon::PERFORMANCE, Value::var([LAYOUT + 1, 0]));
@@ -1441,7 +1441,7 @@ mod tests {
         assert!(back.state.playlist.perf_clip_progress, "a layout 2 Performance event is not read: the defaults stay");
         assert_eq!(back.state.playlist.icons.len(), 3);
         back.save_to(path.clone());
-        let file = os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap();
+        let file = os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(lemon::data(&file, 240), Some(vec![7, 7]), "the unknown event is kept");
         // Two colours, the second cut short: the first is read.
         let mut s = with_state();
@@ -1613,7 +1613,7 @@ mod modulation_graph_tests {
     }
 
     /// Saved to a .lemon file and opened again, every modulator comes back with its source, name, enabled flag and
-    /// its targets' depth, curve and polarity; adding one is an unsaved change, and an FLP drops the graph.
+    /// its targets' depth, curve and polarity; adding one is an unsaved change, and a legacy project drops the graph.
     #[test]
     fn the_graph_round_trips_through_a_lemon_file() {
         let d = dir("round");
@@ -1624,7 +1624,7 @@ mod modulation_graph_tests {
         app.state.modulation = graph();
         app.save_to(lemon_path.clone());
         app.save_to(flp_path.clone());
-        let file = os_flp::FlpFile::parse(&std::fs::read(&lemon_path).unwrap()).unwrap();
+        let file = os_project::FlpFile::parse(&std::fs::read(&lemon_path).unwrap()).unwrap();
         assert_eq!(lemon::data(&file, lemon::MODULATION), Some(write_graph(&graph())));
         let mut back = App::new(None);
         back.open(lemon_path.clone());
@@ -1639,7 +1639,7 @@ mod modulation_graph_tests {
         let mut again = App::new(None);
         again.open(lemon_path);
         assert_eq!(again.state.modulation.modulators.len(), 4);
-        // An FLP has no place for the identity or the graph.
+        // A legacy project has no place for the identity or the graph.
         let mut flp = App::new(None);
         flp.open(flp_path);
         assert!(flp.state.modulation.is_empty());
@@ -1648,7 +1648,7 @@ mod modulation_graph_tests {
 
     /// The launcher's clips and scenes go into a `.lemon` file and come back: the clips on the same tracks (by
     /// position — a file stores no ids), with their pattern, sample channel, name, colour and launch settings, and the
-    /// scenes with their names. A project that never used the launcher writes no such event, and an FLP drops it.
+    /// scenes with their names. A project that never used the launcher writes no such event, and a legacy project drops it.
     #[test]
     fn the_launcher_round_trips_through_a_lemon_file() {
         use crate::launcher::{Launch, LaunchQ, NextAction, NextTiming, OnRelease, PlayFrom, Scene, Slot};
@@ -1681,7 +1681,7 @@ mod modulation_graph_tests {
         app.state.launcher.scenes[2] = Scene { name: "Break".into(), comment: "drop out".into(), override_launch: true, ..Default::default() };
         app.save_to(lemon_path.clone());
         app.save_to(flp_path.clone());
-        let file = os_flp::FlpFile::parse(&std::fs::read(&lemon_path).unwrap()).unwrap();
+        let file = os_project::FlpFile::parse(&std::fs::read(&lemon_path).unwrap()).unwrap();
         assert!(lemon::data(&file, lemon::LAUNCHER).is_some(), "a launcher that was used is written");
         assert_eq!(lemon::data(&file, lemon::LAUNCHER).as_deref().map(|p| p[0]), Some(LAYOUT));
         assert!(!app.unsaved());
@@ -1713,7 +1713,7 @@ mod modulation_graph_tests {
         let mut again = App::new(None);
         again.open(lemon_path);
         assert_eq!(again.state.launcher.clips.len(), 1);
-        // An FLP has no place for the launcher.
+        // A legacy project has no place for the launcher.
         let mut flp = App::new(None);
         flp.open(flp_path);
         assert!(flp.state.launcher.clips.is_empty());

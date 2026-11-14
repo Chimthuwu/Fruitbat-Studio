@@ -64,7 +64,7 @@ fn remove(path: &Path) {
     restore(&paths);
 }
 
-/// What a row shows: the file's name with its extension, as FL's rows do.
+/// What a row shows: the file's name with its extension, as the original's rows do.
 pub fn label(path: &Path) -> String {
     path.file_name().map_or_else(|| path.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned())
 }

@@ -216,7 +216,7 @@ pub struct SettingsUi {
     pub assoc: bool,
 }
 
-/// Tabs: label, page title, group (0 system / 1 project / 2 info) (spec §2). Plugins takes the place of FL's Account
+/// Tabs: label, page title, group (0 system / 1 project / 2 info) (spec §2). Plugins takes the place of the original's Account
 /// tab (spec: ui/plugin-manager.md §2); tabs are laid out from their text widths (`tab_rects`).
 pub const TABS: [(&str, &str, u8); 11] = [
     ("MIDI", "MIDI input / output devices", 0),
@@ -340,7 +340,7 @@ const PANEL_WAITS: &str = "Show ASIO panel: the ASIO driver's own settings, whil
 pub const NO_ASIO_DRIVER: &str = "No ASIO driver is installed. For lower latency, install one (ASIO4ALL is free), then reopen Settings.";
 
 /// Project ▸ Time settings (spec: ui/settings-choices.md "Project"): the timebase, the "Set as" mode (event 35; the
-/// combo has no label beside it), and the bar (events 17, 18) as a time signature (Numerator / Denominator, FL's
+/// combo has no label beside it), and the bar (events 17, 18) as a time signature (Numerator / Denominator, the original's
 /// choices) or as a time division (Beats per bar / Steps per beat value boxes).
 pub const TIMEBASE: &str = "Timebase (PPQ)";
 pub const TIMEBASES: &[u16] = &[24, 48, 72, 96, 120, 144, 168, 192, 384, 768, 960];
@@ -354,7 +354,7 @@ pub const DENOMINATORS: &[u16] = &[2, 4, 8, 16];
 pub const BEATS_PER_BAR: &str = "Beats per bar";
 pub const STEPS_PER_BEAT: &str = "Steps per beat";
 /// Project ▸ Advanced ▸ Panning law (event 23; spec: ui/settings-choices.md "Project", audio/gain-laws.md "Panning
-/// law: Triangular"): FL's choices and their values.
+/// law: Triangular"): the original's choices and their values.
 pub const PANNING_LAW: &str = "Panning law";
 pub const PANNING_LAWS: [(&str, u8); 2] = [("Circular", 0), ("Triangular", 2)];
 /// The Project page's combos that work (their menus: `App::audio_menu`).
@@ -368,7 +368,7 @@ pub fn number_range(label: &str) -> Option<(u16, u16)> {
     LIVE_NUMBERS.iter().find(|n| n.0 == label).map(|n| (n.1, n.2)).or_else(|| crate::prefs::find_number(label).map(|n| (n.min, n.max)))
 }
 
-/// The Denominator box's text for `steps` per beat: 16 / steps (spec: flp/engine-events.md "Project"); steps that make
+/// The Denominator box's text for `steps` per beat: 16 / steps (spec: project/engine-events.md "Project"); steps that make
 /// no signature (3) show the quotient to two decimals.
 pub fn denominator_text(steps: u16) -> String {
     let steps = steps.max(1);
@@ -485,7 +485,7 @@ pub enum Row {
     Ppi,
     /// Project ▸ Data folder's Rename button, folder button and path (`super::data_folder`).
     DataFolder,
-    /// File ▸ FL Studio factory content folder's Reset button, folder button and path (`super::factory_folder`).
+    /// File ▸ factory content folder's Reset button, folder button and path (`super::factory_folder`).
     FactoryFolder,
     /// A row of Settings > MIDI drawn by `super::midi_page`.
     Midi(super::midi_page::MRow),
@@ -698,7 +698,7 @@ pub fn page(tab: usize, s: &State) -> Vec<Group> {
             ]
         }
         GENERAL => vec![
-            // Display and Language apply at once, so they leave off FL's "(requires a restart to take effect)" (spec:
+            // Display and Language apply at once, so they leave off the original's "(requires a restart to take effect)" (spec:
             // ui/settings.md "General").
             gf("Display", false, vec![
                 combo("System", 64.0, "Main GUI scaling"),
@@ -749,7 +749,7 @@ pub fn page(tab: usize, s: &State) -> Vec<Group> {
                 combo("100MB (default)", 110.0, "Project data size warning"),
             ]),
             gf("System", false, vec![Check(ASSOCIATE_CHECK, s.settings.assoc)]),
-            // FL's "Updates and privacy" without Send usage data and its More information button: Lemon Studio collects
+            // the original's "Updates and privacy" without Send usage data and its More information button: Lemon Studio collects
             // nothing. The update checks stay greyed until Lemon Studio can update itself (spec: ui/settings.md
             // "General").
             gf("Updates", false, vec![
@@ -888,7 +888,7 @@ pub fn page(tab: usize, s: &State) -> Vec<Group> {
                 rows
             }),
             // The panning law (event 23) and the check show what the engine plays. Fast declick shows the project's
-            // value, greyed: its sound is not played yet (event 40; spec: flp/engine-events.md "Project").
+            // value, greyed: its sound is not played yet (event 40; spec: project/engine-events.md "Project").
             gf("Advanced", true, vec![
                 combo(&panning_text(s.project.panning_law), 82.0, PANNING_LAW),
                 Check(TRUNCATED_CHECK, s.project.play_truncated),
@@ -904,7 +904,7 @@ pub fn page(tab: usize, s: &State) -> Vec<Group> {
             )]),
         ],
         // The credits are edited in place (spec: ui/settings.md "Info"; events 194 / 207 / 206 / 195 / 197,
-        // flp/events/project-info.md); the genre button opens FL's genre list (spec: ui/settings-choices.md "Info").
+        // flp/events/project-info.md); the genre button opens the original's genre list (spec: ui/settings-choices.md "Info").
         // "Show info on opening" is event 10; the footer and Reset working time are `crate::project_info`.
         INFO => {
             vec![g("Project credits", vec![
@@ -919,7 +919,7 @@ pub fn page(tab: usize, s: &State) -> Vec<Group> {
                 Text("Web link".into(), true),
                 Edit(InfoField::Url, 0.0),
                 Gap(8.0),
-                // FL's footer (spec: ui/settings-choices.md "Info").
+                // the original's footer (spec: ui/settings-choices.md "Info").
                 InfoFooter(crate::project_info::footer(s, std::time::Instant::now())),
             ])]
         }
@@ -940,7 +940,7 @@ pub fn page(tab: usize, s: &State) -> Vec<Group> {
             }
             vec![g("", vec![List(vec![("", 0.0)], lines.into_iter().map(|l| vec![l]).collect(), 40)])]
         }
-        // About also carries what FL's Account tab had (spec: ui/plugin-manager.md §2).
+        // About also carries what the original's Account tab had (spec: ui/plugin-manager.md §2).
         // The Windows build includes the ASIO SDK, which is under the GPL version 3 only, and names ASIO, so it carries
         // the ASIO logo and Steinberg's notice (THIRD-PARTY-NOTICES.txt §9).
         _ => vec![

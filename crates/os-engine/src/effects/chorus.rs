@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Studio's chorus (a recreation of FL's Fruity Chorus mixer effect), configured from its saved state.
+//! Lemon Studio's chorus (a recreation of the original's Fruity Chorus mixer effect), configured from its saved state.
 //!
 //! The input, at 0.7, is split by a one-pole crossover; one band goes into a short delay line per side and is read
 //! back at three places that three slow LFOs move; the three reads, at 0.6, are added to the input. There is no
@@ -33,7 +33,7 @@ pub const WET_ONLY: usize = 11;
 pub const RANGES: [(i32, i32); PARAMS] =
     [(0, 1024), (0, 5000), (0, 1024), (0, 5000), (0, 5000), (0, 5000), (0, 1024), (0, 1024), (0, 1024), (0, 100), (0, 5000), (0, 1024)];
 
-/// What a new Fruity Chorus holds (spec "Settings", the Default column). FL's "Default" preset differs in LFO 1's wave
+/// What a new Fruity Chorus holds (spec "Settings", the Default column). the original's "Default" preset differs in LFO 1's wave
 /// only (0 instead of 23: the same shape).
 pub const DEFAULTS: [i32; PARAMS] = [512, 2250, 341, 1500, 2500, 3500, 23, 0, 0, 0, 2500, 0];
 
@@ -271,7 +271,7 @@ impl Chorus {
         self.phase = self.generator.phases();
     }
 
-    /// Puts the LFOs at given phases (FL's export to compare with started there).
+    /// Puts the LFOs at given phases (the original's export to compare with started there).
     pub fn set_phases(&mut self, phase: [u32; 3]) {
         self.phase = phase;
     }
@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn states_round_trip_and_a_later_version_is_not_read() {
-        // FL's "50 Detune" preset.
+        // the original's "50 Detune" preset.
         let s = Settings { v: [40, 4375, 149, 3229, 0, 781, 587, 0, 1024, 65, 4531, 491] };
         let b = s.to_state();
         assert_eq!(b.len(), STATE_LEN);

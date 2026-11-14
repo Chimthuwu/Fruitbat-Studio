@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Formula Controller's settings and editor (a recreation of FL's Fruity Formula Controller): the knobs a, b and
+//! Lemon Formula Controller's settings and editor (a recreation of the original's Fruity Formula Controller): the knobs a, b and
 //! c, and the formula, a line of text kept in the saved state with the comments after it. The plugin itself
 //! (`plugins/lemon-formula-controller`) is not a [`crate::SmallFx`]: it works the formula out on the song's ticks and
 //! sends its output out as MIDI, so it only borrows the description, the parameters and the editor from here.

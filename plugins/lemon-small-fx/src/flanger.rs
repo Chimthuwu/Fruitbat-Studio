@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Flanger: Lemon Studio's flanger (a recreation of FL's Fruity Flanger) as a plugin. The sound is
+//! Lemon Flanger: Lemon Studio's flanger (a recreation of the original's Fruity Flanger) as a plugin. The sound is
 //! `os_engine::effects::flanger`, started as a loaded project's slot (lines empty, the LFO at phase 0); the editor is
 //! the original's grid of twelve tiles, three across and four down.
 //!
@@ -169,7 +169,7 @@ impl Sound for FlangerSound {
     fn set_sample_rate(&mut self, rate: u32) {
         self.0.set_sample_rate(rate);
     }
-    /// The lines and the low pass empty, the LFO back at phase 0 (as FL's plugin when it is enabled again).
+    /// The lines and the low pass empty, the LFO back at phase 0 (as the original's plugin when it is enabled again).
     fn reset(&mut self) {
         self.0.start();
     }
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn value_texts_and_typed_values() {
-        // The defaults (FL's editor shows 0 ms, 2.35294 ms, 0.31250 Hz, 118 degrees, 23 percent, -3.1, -4.4, -6.0 dB).
+        // The defaults (the original's editor shows 0 ms, 2.35294 ms, 0.31250 Hz, 118 degrees, 23 percent, -3.1, -4.4, -6.0 dB).
         assert_eq!(text(dsp::DELAY, 0), "0.00ms");
         assert_eq!(text(dsp::DEPTH, 2000), "2.35ms");
         assert_eq!(text(dsp::DELAY, 1024), "20.00ms");

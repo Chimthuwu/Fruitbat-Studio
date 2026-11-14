@@ -220,7 +220,7 @@ pub(crate) fn instrument_job(cx: &InstCx, lane: InstLane, sc: &mut multicore::Mi
 /// `(t, routes, out)`: the slot's track, its routes and its outbox, for an own effect's extra output, which is
 /// added to the input of one of the track's outputs (spec: audio/sidechain.md "Extra output"). It is not padded for
 /// delay compensation (audio/delay-compensation.md); it is connected from the first tick (the cleaner choice of
-/// audio/quirks.md for FL's late connection).
+/// audio/quirks.md for the original's late connection).
 ///
 /// `key`: the output of the track the slot listens to as its sidechain input, and a buffer for it after the slot's
 /// pad, which runs also while the slot is off (spec: audio/sidechain.md "While the slot is off"). It is connected from

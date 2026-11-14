@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Null test of Lemon Studio's Fruity Peak Controller and Fruity Formula Controller against FL Studio's own exports,
+//! Null test of Lemon Studio's Fruity Peak Controller and Fruity Formula Controller against the original's own exports,
 //! tick by tick. Skipped unless `OS_PC_NULL` (Peak Controller) or `OS_FC_NULL` (Formula Controller) names a directory
 //! of cases; nothing in them is needed to build or to run the other tests.
 //!
@@ -25,7 +25,7 @@
 //! | `formula` | The link's formula (default none) |
 //! | `dry` | The probe (a WAV) |
 //! | `gain` | What the channel does to the probe before the master (the slot hears `dry * gain`) |
-//! | `fl` | FL's export |
+//! | `fl` | the original's export |
 //! | `carrier` | The right side's constant in `dry` (default 1e-4) |
 //! | `bpm`, `ppq` | The project's tempo and timebase (default 130, 96) |
 //! | `limit` | The largest difference allowed, in link value (default 2e-4) |
@@ -33,7 +33,7 @@
 //! | `judge` | `no`: only report (the random shape) |
 //! | `rest` | The target's own value, held while the controller has no output (a formula that does not compile) |
 //!
-//! Paths are relative to the case file. The cases (FL's exports) are not part of the repository.
+//! Paths are relative to the case file. The cases (the original's exports) are not part of the repository.
 //!
 // spec: plugins/lemon-peak-controller.md "Null test", plugins/lemon-formula-controller.md "Null test",
 // flp/events/automation.md "Controller links"

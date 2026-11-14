@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Transient Processor: Lemon Studio's transient processor (a recreation of FL's Transient Processor) as a
+//! Lemon Transient Processor: Lemon Studio's transient processor (a recreation of the original's Transient Processor) as a
 //! plugin. The sound is `os_engine::effects::transient_processor`, started with the settings in force (as a loaded
 //! project's slot); the editor has the attack and the release with their shapes, the split, and the drive, the gain
 //! and the on switch.

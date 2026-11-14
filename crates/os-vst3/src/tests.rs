@@ -98,17 +98,17 @@ fn lists_instrument_and_effect_classes() {
     assert!(eq.plugins()[0].is_effect(), "{:?}", eq.plugins()[0].features);
 }
 
-/// An instrument plays notes, saves its state in FL Studio's wrapper layout and loads it into a second instance.
+/// An instrument plays notes, saves its state in the original's wrapper layout and loads it into a second instance.
 #[test]
 fn hosts_lemon_sampler() {
     let Some((m, shared)) = sampler() else { return };
     let mut p = shared.lock().unwrap();
     let wav = tone("os-vst3-test.wav", 4800);
     assert!(p.load_state(&sampler_state(&wav, "")), "a bare component state loads");
-    // As FL Studio writes it for most plugins: no controller chunk, parameter ids the instance does not need.
+    // As the original writes it for most plugins: no controller chunk, parameter ids the instance does not need.
     let unused = tone("os-vst3-unused.wav", 4800);
     let fl = fl_state::FlState { component: sampler_state(&unused, ""), controller: None, params: vec![1, 2, 3] };
-    assert!(p.load_state(&fl.to_bytes()), "FL Studio's layout loads");
+    assert!(p.load_state(&fl.to_bytes()), "the original's layout loads");
     let back = fl_state::FlState::parse(&p.save_state().unwrap()).unwrap();
     assert!(String::from_utf8_lossy(&back.component).contains("os-vst3-unused.wav"), "the component got FL's state");
     assert!(p.load_state(&sampler_state(&wav, "")));
@@ -120,7 +120,7 @@ fn hosts_lemon_sampler() {
     assert!(peak(&l) > 0.05, "plays the sample (peak {})", peak(&l));
     assert!(p.active());
     let saved = p.save_state().unwrap();
-    let st = fl_state::FlState::parse(&saved).expect("FL Studio's wrapper layout");
+    let st = fl_state::FlState::parse(&saved).expect("the original's wrapper layout");
     assert!(String::from_utf8_lossy(&st.component).contains("os-vst3-test.wav"));
     assert!(!st.params.is_empty(), "the parameter ids are listed");
     // Another instance takes the saved bytes, and the same state as a .vstpreset; a preset of another class is refused.

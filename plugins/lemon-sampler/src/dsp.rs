@@ -5,7 +5,7 @@
 //! Lemon Sampler voices: pitch, loop, declicking, the channel's envelopes and LFOs, the channel filter, the gains, and
 //! the realtime stretch methods. The played sample itself is built in `fx`.
 //!
-//! Everything that changes during a note changes at tick starts, as in FL: the envelopes and LFOs step, the ratio, the
+//! Everything that changes during a note changes at tick starts, as in the original: the envelopes and LFOs step, the ratio, the
 //! filter's knob positions and the gain targets are worked out, and the gains ramp to their targets over the tick.
 //! Lemon Studio hands the plugin one tick per `process` call ([`Time::host_ticks`]); in another host the voices keep a
 //! tick clock of their own.

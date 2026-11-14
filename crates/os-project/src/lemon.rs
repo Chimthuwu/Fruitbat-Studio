@@ -2,24 +2,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! The `.lemon` project file: an FLP container with Lemon Studio's header chunk (`LMhd`) before the FLP's chunks and
-//! its own event chunk (`LMex`) after them. The FLP chunks keep every event's FLP meaning, so [`FlpFile::parse`] and
+//! The `.lemon` project file: a legacy project container with Lemon Studio's header chunk (`LMhd`) before the legacy project's chunks and
+//! its own event chunk (`LMex`) after them. The legacy project chunks keep every event's legacy project meaning, so [`FlpFile::parse`] and
 //! the project layer read both kinds of file; these functions turn a file into one kind or the other.
 
-// spec: flp/lemon-format.md
+// spec: project/lemon-format.md
 
 use crate::{Chunk, ChunkBody, Event, EventReader, FlpFile, ReadError, Tag, Value};
 
 /// Lemon Studio's header chunk, first in a `.lemon` file.
 pub const HEADER: Tag = Tag(*b"LMhd");
-/// Lemon Studio's events, after the FLP chunks.
+/// Lemon Studio's events, after the legacy project chunks.
 pub const EXTRA: Tag = Tag(*b"LMex");
 /// The format version written.
 pub const VERSION: u16 = 1;
 /// `LMex` event: the program and version that saved the file (UTF-8 text).
 pub const SAVED_BY: u8 = 192;
 /// `LMex` event: the icons chosen with Change icon... (channels, mixer tracks, effect slots). The payloads of these
-/// events are Lemon Studio's (os-app `lemon_state`, spec: flp/lemon-format.md "LMex").
+/// events are Lemon Studio's (os-app `lemon_state`, spec: project/lemon-format.md "LMex").
 pub const ICONS: u8 = 193;
 /// `LMex` event: the names given to effect slots.
 pub const SLOT_NAMES: u8 = 194;
@@ -40,7 +40,7 @@ pub const TRACK_LOCKS: u8 = 201;
 /// `LMex` event: the channels the live note sources are locked to (Receive notes from ▸).
 pub const NOTE_LOCKS: u8 = 202;
 /// `LMex` event: Linear mode's tracks (`os_model::Track`; spec: model/track-model.md). Lemon Studio's design: the
-/// original has no such mode, so an FLP has no place for it.
+/// original has no such mode, so a legacy project has no place for it.
 pub const TRACKS: u8 = 203;
 /// `LMex` event: whether the project is in Linear mode (spec: model/track-model.md).
 pub const LINEAR_MODE: u8 = 204;
@@ -55,12 +55,12 @@ pub const LANE_BINDINGS: u8 = 205;
 pub const OWNER_IDS: u8 = 206;
 /// `LMex` event: the modulation system's graph (M1) — each modulator's source, name and enabled flag, and the
 /// parameters it drives with their depth, curve and polarity. Lemon Studio's design, like `OWNER_IDS`: it refers to
-/// parameters by their persistent identity and is never written into an FLP target (audit K.1/K.3).
+/// parameters by their persistent identity and is never written into a legacy project target (audit K.1/K.3).
 pub const MODULATION: u8 = 207;
 /// `LMex` event: the clip launcher — its clips (by the owning track's position, the scene, the pattern or audio
 /// channel, name, colour and launch settings) and its scenes (name, colour, comment and launch settings). Written only
 /// when the launcher has been used, so a project that never opened it keeps no such event. Lemon Studio's design: the
-/// original has no launcher, so an FLP has no place for it and the clips go with the rest of `LMex`.
+/// original has no launcher, so a legacy project has no place for it and the clips go with the rest of `LMex`.
 pub const LAUNCHER: u8 = 208;
 
 /// Whether `file` is a `.lemon` file (its first chunk is `LMhd`).
@@ -68,7 +68,7 @@ pub fn is_lemon(file: &FlpFile) -> bool {
     file.chunks.first().is_some_and(|c| c.tag == HEADER)
 }
 
-/// The `.lemon` format version, `None` for an FLP.
+/// The `.lemon` format version, `None` for a legacy project.
 pub fn version(file: &FlpFile) -> Option<u16> {
     let c = file.chunks.first().filter(|c| c.tag == HEADER)?;
     match &c.body {
@@ -77,12 +77,12 @@ pub fn version(file: &FlpFile) -> Option<u16> {
     }
 }
 
-/// The `LMex` events, in file order (none for an FLP or a file without them).
+/// The `LMex` events, in file order (none for a legacy project or a file without them).
 pub fn events(file: &FlpFile) -> Result<Vec<Event>, ReadError> {
     let mut out = Vec::new();
     for c in file.chunks.iter().filter(|c| c.tag == EXTRA) {
         if let ChunkBody::Raw(raw) = &c.body {
-            // Lemon events follow the ID ranges only: the FLP's size exceptions are the original's.
+            // Lemon events follow the ID ranges only: the legacy project's size exceptions are the original's.
             for e in EventReader::new(raw, 0).ranges_only() {
                 out.push(e?.1);
             }
@@ -99,7 +99,7 @@ pub fn data(file: &FlpFile, id: u8) -> Option<Vec<u8>> {
 
 /// Makes `file` a `.lemon` file: an `LMhd` chunk first (an existing one keeps its extra bytes, with the version
 /// written), and one `LMex` chunk last holding `extra` (an event of the same ID there is replaced; the others are kept
-/// in order). The FLP chunks are not touched.
+/// in order). The legacy project chunks are not touched.
 pub fn to_lemon(file: &mut FlpFile, extra: &[Event]) -> Result<(), ReadError> {
     let mut kept = events(file)?;
     kept.retain(|e| !extra.iter().any(|x| x.id == e.id));
@@ -120,7 +120,7 @@ pub fn to_lemon(file: &mut FlpFile, extra: &[Event]) -> Result<(), ReadError> {
     Ok(())
 }
 
-/// Makes `file` a plain FLP: Lemon Studio's chunks are dropped.
+/// Makes `file` a plain legacy project: Lemon Studio's chunks are dropped.
 pub fn to_flp(file: &mut FlpFile) {
     file.chunks.retain(|c| c.tag != HEADER && c.tag != EXTRA);
 }
@@ -150,7 +150,7 @@ mod tests {
         FlpFile::parse(&b).unwrap()
     }
 
-    /// A file becomes .lemon and back to the same FLP; the version and the saved-by text read back; unknown Lemon
+    /// A file becomes .lemon and back to the same legacy project; the version and the saved-by text read back; unknown Lemon
     /// events are kept and a known one is replaced.
     #[test]
     fn lemon_and_back() {

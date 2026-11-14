@@ -16,7 +16,7 @@
 //! - `--builtin-only`: host only Lemon Studio's own plugins, not the installed ones the last scan found (a render
 //!   that is the same on every machine).
 //!
-//! The ignored test `render_project` does the same from environment variables (`OS_RENDER_FLP`, `OS_RENDER_OUT`,
+//! The ignored test `render_project` does the same from environment variables (`OS_RENDER_legacy project`, `OS_RENDER_OUT`,
 //! `OS_RENDER_RATE`, `OS_RENDER_SECS`, `OS_RENDER_FROM`, `OS_RENDER_SCAN`=1 to scan the installed plugins in-process).
 // spec: audio/export.md
 
@@ -209,8 +209,8 @@ fn report(app: &crate::app::App) { // This code is a part of L e m o n S t u d i
 mod tests {
     use super::*;
 
-    /// Renders `OS_RENDER_FLP` into `OS_RENDER_OUT`:
-    /// `OS_RENDER_FLP=<project.flp> OS_RENDER_OUT=<out.wav> cargo test -p os-app --bin lemonstudio render_project -- --ignored --nocapture`.
+    /// Renders `OS_RENDER_legacy project` into `OS_RENDER_OUT`:
+    /// `OS_RENDER_legacy project=<project.flp> OS_RENDER_OUT=<out.wav> cargo test -p os-app --bin lemonstudio render_project -- --ignored --nocapture`.
     /// With `OS_RENDER_SCAN=1` it scans and loads plugin files in-process: run it alone, in its own process.
     #[test]
     #[ignore]
@@ -259,7 +259,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lemon-render-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (flp, out) = (dir.join("song.flp"), dir.join("song.wav"));
-        let file = os_flp::project::create(&crate::app::test_project()).expect("create");
+        let file = os_project::project::create(&crate::app::test_project()).expect("create");
         std::fs::write(&flp, file.to_bytes().expect("bytes")).unwrap();
         let o = Opts { hosted: Hosted::Builtin, seconds: Some(2.0), ..Opts::new(flp, out.clone()) };
         render(&o).expect("render");
@@ -313,7 +313,7 @@ mod tests {
         // One beat (96 ticks at 130 BPM: about 0.46 s).
         p.patterns = vec![Pattern { number: 1, notes: vec![Note { length: 96, key: 60, ..Note::step(0, 0) }], ..Pattern::default() }];
         p.arrangements = vec![Arrangement { number: 1, clips: vec![Clip::new(0, 384, 0, ClipSource::Pattern(1))], ..Default::default() }];
-        let file = os_flp::project::create(&p).expect("create");
+        let file = os_project::project::create(&p).expect("create");
         std::fs::write(&flp, file.to_bytes().expect("bytes")).unwrap();
         render(&Opts { hosted: Hosted::Builtin, seconds: Some(1.5), ..Opts::new(flp, out.clone()) }).expect("render");
 

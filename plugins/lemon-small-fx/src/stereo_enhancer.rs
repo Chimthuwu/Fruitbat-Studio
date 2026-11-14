@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Stereo Enhancer: Lemon Studio's stereo enhancer (a recreation of FL's Fruity Stereo Enhancer) as a plugin.
+//! Lemon Stereo Enhancer: Lemon Studio's stereo enhancer (a recreation of the original's Fruity Stereo Enhancer) as a plugin.
 //! The sound is `os_engine::effects::stereo_enhancer`, started with its gains at the settings (no pre-roll); the editor
 //! has the separation and pan, the phase offset and its placement, and the volume and the inversion.
 //!
@@ -147,7 +147,7 @@ impl Sound for Enhancer {
     }
 }
 
-/// The plugin starts with its gains at the settings (Lemon Studio's choice: FL's mixer slot glides there from the
+/// The plugin starts with its gains at the settings (Lemon Studio's choice: the original's mixer slot glides there from the
 /// creation values in its pre-roll, which a plugin has none of).
 fn sound(rate: u32, v: &[i32]) -> Box<dyn Sound> {
     let mut e = StereoEnhancer::with_settings(rate, &settings(v));
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn value_texts_and_typed_values() {
-        // FL's "For strings" preset: -18, 256, -54, -248, Post, none.
+        // the original's "For strings" preset: -18, 256, -54, -248, Post, none.
         assert_eq!(text(dsp::PAN, -18), "14.1% left");
         assert_eq!(text(dsp::VOLUME, 256), "0.0dB");
         assert_eq!(text(dsp::SEPARATION, -54), "42.2% separated");

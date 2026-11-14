@@ -4,8 +4,8 @@
 
 // spec: plugins/fruity-parametric-eq-2.md (Checked against FL)
 //
-// Parametric EQ 2 against FL's exports. Runs only when OPENSTUDIO_EQ_EXPORTS names a folder of projects
-// (`<name>.flp`) with FL's export of each beside it (`<name>.wav`). Every project there with the plugin in a mixer
+// Parametric EQ 2 against the original's exports. Runs only when OPENSTUDIO_EQ_EXPORTS names a folder of projects
+// (`<name>.flp`) with the original's export of each beside it (`<name>.wav`). Every project there with the plugin in a mixer
 // slot is rendered with the engine and compared with the export frame by frame; the figures are printed (run with
 // `--nocapture`). A sample a project names that is not where it says is looked for by its file name in that folder,
 // its parent and their subfolders (the folders may have moved since). The exports are never committed.
@@ -54,7 +54,7 @@ fn parametric_eq_matches_fl_exports() {
     for path in &projects {
         let name = path.file_stem().unwrap().to_string_lossy();
         let bytes = std::fs::read(path).unwrap();
-        let Some(mut project) = os_flp::FlpFile::parse(&bytes).ok().and_then(|f| os_flp::project::load(&f).ok()) else {
+        let Some(mut project) = os_project::FlpFile::parse(&bytes).ok().and_then(|f| os_project::project::load(&f).ok()) else {
             eprintln!("{name}: not read");
             continue;
         };
@@ -78,7 +78,7 @@ fn parametric_eq_matches_fl_exports() {
         let limit = if in_16_bit { 20.0 * STEP_16.log10() + 1e-9 } else { LIMIT_DB };
         let mut library = SampleLibrary::new(SampleLibrary::default_factory_dir());
         let ours = Engine::new(&project, &mut library, fl.rate, PlayMode::Song).render_all(512);
-        // The render skips the slots' delay as FL's export does (spec: audio/delay-compensation.md).
+        // The render skips the slots' delay as the original's export does (spec: audio/delay-compensation.md).
         let frames = (ours.len() / 2).min(fl.frames());
         let mut worst = [0.0f64; 2];
         for i in 0..frames {

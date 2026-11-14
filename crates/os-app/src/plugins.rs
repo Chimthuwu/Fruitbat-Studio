@@ -89,7 +89,7 @@ impl Hosted {
     /// The plugin's native parameter ids (CLAP `clap_id` / VST3 `ParamID`) in positional order, once the
     /// UI has read its parameter list. `None` until asked. Read-only: the modulation resolver uses this to
     /// map a [`os_model::modulation::ParameterKey::PluginNativeId`] to a positional index without depending
-    /// on any FLP target encoding.
+    /// on any legacy project target encoding.
     pub fn param_ids(&self) -> Option<Vec<u32>> {
         self.infos.get().map(|v| v.iter().map(|i| i.id).collect())
     }
@@ -440,7 +440,7 @@ pub fn arp_values(p: &mut dyn os_host::Plugin) -> crate::note_fx::ArpValues {
     v
 }
 
-/// Plugin editor windows open at once under "Limit the number of open plugin editors" (FL's hint: 25; spec:
+/// Plugin editor windows open at once under "Limit the number of open plugin editors" (the original's hint: 25; spec:
 /// ui/settings-choices.md "Miscellaneous: naming, detached plugins and startup").
 pub const MAX_EDITORS: usize = 25;
 
@@ -2267,7 +2267,7 @@ pub fn store_sampler(ch: &mut os_model::Channel, state: &[u8]) {
     if let Some(d) = i("declick").filter(|&d| d != if s.declick <= 5 { i32::from(s.declick) } else { 0 }) {
         s.declick = d.clamp(0, 5) as u8;
     }
-    // A channel without sampler flags has those of FL's new channel (Load regions, Use loop points); it gets the
+    // A channel without sampler flags has those of the original's new channel (Load regions, Use loop points); it gets the
     // event when one of them changes.
     let flags = s.sampler_flags.unwrap_or(os_model::ChannelSound::DEFAULT_FLAGS);
     let mut new = flags;
@@ -2342,7 +2342,7 @@ const ENV_PREFIXES: [&str; 5] = ["envpan", "envvol", "envmodx", "envmody", "envp
 /// Envelope record flags and their switches: 1 = envelope times follow the tempo, 2 = LFO times follow the tempo,
 /// 0x20 = global LFO (spec: audio/envelopes-and-lfos.md).
 const ENV_FLAGS: [(i32, &str); 3] = [(1, "tempo"), (2, "lfo_tempo"), (0x20, "lfo_global")];
-/// Sampler flags (event 143) and their switches (spec: flp/events/channels.md "Sampler flags").
+/// Sampler flags (event 143) and their switches (spec: project/events/channels.md "Sampler flags").
 const SAMPLER_FLAGS: [(u32, &str); 5] = [
     (os_model::ChannelSound::RESAMPLE, "resample"),
     (os_model::ChannelSound::LOAD_REGIONS, "load_regions"),
@@ -2357,7 +2357,7 @@ fn amount_scale(k: usize) -> i32 {
     if k == os_model::Envelope::PITCH { 2400 } else { 128 }
 }
 
-/// The stored key zone end for Lemon Sampler's key: its highest key is FL's "no zone" 256.
+/// The stored key zone end for Lemon Sampler's key: its highest key is the original's "no zone" 256.
 fn zone_units(key: i32) -> i32 {
     if key >= lemon_sampler::params::KEY_MAX { 256 } else { key.max(0) }
 }
@@ -2373,7 +2373,7 @@ fn sample_frames(path: &str) -> Option<u64> {
 }
 
 /// Lemon Sampler's loop start / end knobs for stored loop points (frames) of a sample of `n` frames: fractions of its
-/// last frame's index, where FL's END knob stops; -1, `i64::MAX` and points past it are the sample's ends.
+/// last frame's index, where the original's END knob stops; -1, `i64::MAX` and points past it are the sample's ends.
 fn loop_knobs(points: Option<[i64; 2]>, n: u64) -> (f32, f32) {
     let last = n.saturating_sub(1);
     let Some([s, e]) = points.filter(|_| last > 0) else { return (0.0, 1.0) };
@@ -2490,7 +2490,7 @@ fn stretch_params(sound: &os_model::ChannelSound) -> [(&'static str, serde_json:
 /// Lemon Sampler's parameters for a channel's sample settings: start and length, the precomputed effects and the loop
 /// options (spec: audio/precomputed-effects.md "Settings"), the channel filter (audio/channel-filter.md: knob
 /// positions = stored / 256) and the declick mode (audio/declick.md). "Use loop points" only when the file has the
-/// sampler flags (value 8), or off on an audio clip channel (`clip`) without them: FL's clips never loop.
+/// sampler flags (value 8), or off on an audio clip channel (`clip`) without them: the original's clips never loop.
 fn sample_params(sound: &os_model::ChannelSound, clip: bool) -> Vec<(&'static str, serde_json::Value)> {
     use lemon_sampler::params::{unit, Unit};
     use os_model::SampleFx;
@@ -3374,7 +3374,7 @@ mod tests {
         p.canonicalize().unwrap().to_string_lossy().trim_start_matches(r"\\?\").to_string()
     }
 
-    /// Main swing delays an off-beat step played by a hosted Lemon Sampler (spec: flp/events/project-info.md "Swing timing").
+    /// Main swing delays an off-beat step played by a hosted Lemon Sampler (spec: project/events/project-info.md "Swing timing").
     #[test]
     fn swing_reaches_hosted_sampler() {
         let wav = std::env::temp_dir().join(format!("os-swing-click-{}.wav", std::process::id()));
@@ -3705,7 +3705,7 @@ mod tests {
     }
 
     /// Lemon Sampler's root note page edits reach the channel as they happen (`misc_param`): the engine plays the main
-    /// pitch switch; the key zone's top key is FL's "no zone".
+    /// pitch switch; the key zone's top key is the original's "no zone".
     #[test]
     fn lemon_sampler_root_page_edits_give_the_channel_settings() {
         use lemon_sampler::params::KEY_MAX;
@@ -3923,7 +3923,7 @@ mod tests {
         let json = format!("{{\"version\":\"0.0.1\",\"params\":{{}},\"fields\":{{\"sample-path\":{}}}}}", json_string(&json_string(&wav.to_string_lossy())));
         assert!(pl.set_state(0, json.as_bytes()), "the sample reaches the VST3 instance");
         let state = pl.state(0).unwrap();
-        assert!(os_vst3::fl_state::FlState::parse(&state).is_some(), "state bytes are in FL Studio's wrapper layout");
+        assert!(os_vst3::fl_state::FlState::parse(&state).is_some(), "state bytes are in the original's wrapper layout");
         assert!(pl.set_state(0, &state));
         let (_, inst) = pl.instruments().pop().unwrap();
         let mut i = inst.lock().unwrap();
@@ -3971,12 +3971,12 @@ mod tests {
         }
         let (ch_state, fx_state) = (a.plugins.state(row).unwrap(), a.plugins.state(fx_key(3, 2)).unwrap());
         let fl = |b: &[u8]| os_vst3::fl_state::FlState::parse(b).is_some();
-        assert!(fl(&ch_state) && fl(&fx_state), "saved in FL Studio's wrapper layout");
+        assert!(fl(&ch_state) && fl(&fx_state), "saved in the original's wrapper layout");
         a.save_to(path.clone());
         assert!(a.state.message.as_deref().is_some_and(|m| m.starts_with("Saved")), "{:?}", a.state.message);
 
         // The file names each class by its id.
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let r = crate::project_plugins::wrapped_channel(&saved.channels[row]).unwrap();
         assert_eq!((r.format.as_str(), r.id.as_str(), r.name.as_str()), ("vst3", a.plugins.available[0].desc.id.as_str(), "Lemon Sampler"));
         assert_eq!(r.state, ch_state);
@@ -4142,11 +4142,11 @@ mod tests {
         eprintln!("RESULT ok (state {} bytes, finite output {finite})", st.len());
     }
 
-    /// A project file's native plugins (`OS_NATIVE_FLP=<path>`) hosted the way an opened project's are with the native
+    /// A project file's native plugins (`OS_NATIVE_legacy project=<path>`) hosted the way an opened project's are with the native
     /// host on (`App::host_native`, spec plugins/fruity-abi.md "Opened projects"): prints each plugin channel and filled
     /// slot with what became of it (hosted, hosted but keeping the file's state, not installed, did not start), then
     /// renders a few blocks through every instance. Loads FL DLLs in-process: ignored, run alone on a hidden desktop:
-    /// `OS_NATIVE_FLP="x.flp" cargo test -p os-app --bin lemonstudio native_plugins_of_an_opened_project -- --ignored --nocapture`.
+    /// `OS_NATIVE_legacy project="x.flp" cargo test -p os-app --bin lemonstudio native_plugins_of_an_opened_project -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn native_plugins_of_an_opened_project() {

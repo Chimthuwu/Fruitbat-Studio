@@ -1535,7 +1535,7 @@ fn restore(s: &mut State, side: Side) {
     reselect_clips(s, &sel_clips);
 }
 
-/// Muting and soloing are steps of their own (a channel's, `Taken::Mutes`) or none (a mixer track's, as in FL): an undo
+/// Muting and soloing are steps of their own (a channel's, `Taken::Mutes`) or none (a mixer track's, as in the original): an undo
 /// or redo of another step leaves every channel and mixer track that is still there muted or not as it is now. The
 /// states by id.
 struct Mutes {

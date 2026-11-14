@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Knobs: one value model for every rotary control, dragged vertically like FL's (spec: ui/knobs.md).
+//! Knobs: one value model for every rotary control, dragged vertically like the original's (spec: ui/knobs.md).
 //!
 //! Values are normalised 0..1. Every knob reads and writes the project model.
 
@@ -271,7 +271,7 @@ impl State {
             KnobId::Send(a, b) => crate::mixer::send(self, a, b).unwrap_or(0.8) as f32,
             KnobId::ChanVol(i) => self.project.channels.get(i).map_or(0.8, |c| c.volume as f32).clamp(0.0, 1.0),
             KnobId::ChanPan(i) => self.project.channels.get(i).map_or(0.5, |c| 0.5 + c.pan as f32 / 2.0).clamp(0.0, 1.0),
-            // Main swing is project data, 0..=128 (spec: flp/events/project-info.md, event 11).
+            // Main swing is project data, 0..=128 (spec: project/events/project-info.md, event 11).
             KnobId::Swing => f32::from(self.project.swing.unwrap_or(0).min(128)) / 128.0,
             KnobId::MasterVol => f32::from(self.project.main_volume.unwrap_or(os_model::Project::MAIN_VOLUME_DEFAULT).min(16000)) / 16000.0,
             KnobId::MasterPitch => (0.5 + f32::from(self.project.main_pitch.unwrap_or(0)) / 2400.0).clamp(0.0, 1.0),

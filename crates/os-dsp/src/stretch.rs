@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Time stretching and pitch shifting: Lemon Studio's stretcher wherever a project asks for one of FL Studio's own
+//! Time stretching and pitch shifting: Lemon Studio's stretcher wherever a project asks for one of the original's own
 //! stretch methods, which are proprietary. Built on Signalsmith Stretch (MIT licence, Signalsmith Audio) through the
 //! `signalsmith-stretch` binding (MIT licence, Colin Marc).
 //!

@@ -2,17 +2,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! The linear mode's tracks and an FLP: the file keeps the playlist tracks' links (the original's audio/instrument
+//! The linear mode's tracks and a legacy project: the file keeps the playlist tracks' links (the original's audio/instrument
 //! track records) and nothing of the Lemon-only state (spec: model/track-model.md).
 
-use os_flp::lemon;
-use os_flp::project;
+use os_project::lemon;
+use os_project::project;
 
-/// A project with tracks round trips through an FLP: the PlaylistTrack links come back (no new chunks needed), and
+/// A project with tracks round trips through a legacy project: the PlaylistTrack links come back (no new chunks needed), and
 /// `tracks` and `linear_mode` do not leak into the file's bytes (a `.lemon` file keeps them, in its own events).
 #[test]
 fn an_flp_keeps_the_links_and_drops_the_linear_tracks() {
-    // Channels first (the file's regions follow FL's order: prelude, channels, arrangements, mixer).
+    // Channels first (the file's regions follow the original's order: prelude, channels, arrangements, mixer).
     let sampler = |index: u16, name: &str, track: u16| os_model::Channel {
         id: os_model::Id::NONE,
         index,
@@ -38,7 +38,7 @@ fn an_flp_keeps_the_links_and_drops_the_linear_tracks() {
     p.channels.push(sampler(1, "Keys", 6));
     p.mixer = (0..=6).map(os_model::MixerTrack::new).collect();
     p.current_arrangement = Some(0);
-    let mut arr = os_flp::project::default_arrangement();
+    let mut arr = os_project::project::default_arrangement();
     arr.tracks[2].link = os_model::TrackLink::instrument(1);
     arr.tracks[2].name = Some("Lead".into());
     arr.tracks[0].link = os_model::TrackLink::audio(4);
@@ -52,7 +52,7 @@ fn an_flp_keeps_the_links_and_drops_the_linear_tracks() {
     let bytes = file.to_bytes().unwrap();
     assert!(!bytes.windows(4).any(|w| w == b"LMex"), "the tracks' event ids are not written either");
 
-    let back = project::load(&os_flp::FlpFile::parse(&bytes).unwrap()).unwrap();
+    let back = project::load(&os_project::FlpFile::parse(&bytes).unwrap()).unwrap();
     let lane = |link: os_model::TrackLink| back.arrangements[0].tracks.iter().find(|t| t.link == link).unwrap();
     assert_eq!(lane(os_model::TrackLink::instrument(1)).name.as_deref(), Some("Lead"));
     assert!(lane(os_model::TrackLink::audio(4)).name.is_none(), "the audio track kept its link, not the midi one's name");

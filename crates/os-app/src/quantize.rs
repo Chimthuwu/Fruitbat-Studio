@@ -77,7 +77,7 @@ impl Default for Settings {
     }
 }
 
-/// Whole percent, halves to even, as FL's hints.
+/// Whole percent, halves to even, as the original's hints.
 fn pct(v: f32) -> i64 {
     (f64::from(v) * 100.0).round_ties_even() as i64
 }
@@ -117,7 +117,7 @@ impl Settings {
 pub struct Template(pub Pattern);
 
 impl Default for Template {
-    /// FL's Default template: sixteen one-step notes, one on every step of a bar, with neutral levels.
+    /// the original's Default template: sixteen one-step notes, one on every step of a bar, with neutral levels.
     fn default() -> Self {
         Template::grid("Default", 24)
     }
@@ -140,7 +140,7 @@ impl Template {
     }
 }
 
-/// FL's Quantization folder (read in place when FL Studio is installed).
+/// the original's Quantization folder (read in place when the original is installed).
 pub fn folder() -> PathBuf {
     os_native::default_fl_dir().join("Data").join("Patches").join("Scores").join("Quantization")
 }
@@ -169,7 +169,7 @@ pub fn template_menu(cur: &Pattern, root: &Path) -> Vec<PItem> {
     items
 }
 
-/// A score folder as FL's Quantize and Chop menus list it (§2): its files, then each sub-folder under its name as a
+/// A score folder as the original's Quantize and Chop menus list it (§2): its files, then each sub-folder under its name as a
 /// heading with its files, deeper folders as submenus. `pick` makes an entry's command (None: the built-in Default,
 /// listed first when the folder has no Default file). Entries named as the current pattern are ticked.
 pub fn score_items(cur: &Pattern, root: &Path, pick: impl Fn(Option<PathBuf>) -> Cmd) -> Vec<PItem> {
@@ -202,7 +202,7 @@ pub fn score_items(cur: &Pattern, root: &Path, pick: impl Fn(Option<PathBuf>) ->
     items
 }
 
-/// A long menu goes on in further columns (FL's own breaks where the screen ends).
+/// A long menu goes on in further columns (the original's own breaks where the screen ends).
 pub fn columns(items: &mut [PItem]) {
     for i in (MENU_COLUMN..items.len()).step_by(MENU_COLUMN) {
         items[i - 1].col = true;
@@ -337,7 +337,7 @@ mod tests {
         quantize(ns, tpl, &set, ppq).iter().map(|n| (n.position, n.length)).collect()
     }
 
-    /// The notes FL's batches start from (spec §8).
+    /// The notes the original's batches start from (spec §8).
     const QN: [(u32, u32); 12] = [(5, 20), (30, 30), (50, 10), (70, 40), (100, 24), (130, 50), (200, 7), (250, 100), (301, 13), (347, 60), (395, 2), (420, 36)];
 
     /// §3, §5: Reset's settings on the Default template (Start 50 %, Duration 50 %, Quantize end time, 0:18).
@@ -443,7 +443,7 @@ mod tests {
             (384, 49, 49, 24, 38, 211, 42),
         ];
         assert_eq!(got, fl);
-        // The velocity target is truncated before the move: FL's 16_tight took velocity 90 with rows 33, 99 and 63 to
+        // The velocity target is truncated before the move: the original's 16_tight took velocity 90 with rows 33, 99 and 63 to
         // 29, 89 and 56.
         assert_eq!([33, 99, 63].map(|r| level(90, r, 1, 1.0)), [29, 89, 56]);
     }

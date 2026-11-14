@@ -3,8 +3,8 @@
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! Lemon Sampler parameters. Every control of the editor is a host-visible parameter, addressed by its id. Most are
-//! stored as the knob position 0..1 (FL's knobs are positions too) and converted where they are used; the value
-//! texts follow FL's hint bar.
+//! stored as the knob position 0..1 (the original's knobs are positions too) and converted where they are used; the value
+//! texts follow the original's hint bar.
 //!
 // spec: plugins/lemon-sampler.md (§Controls: ids, ranges, defaults, value texts)
 

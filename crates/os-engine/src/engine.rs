@@ -241,7 +241,7 @@ pub struct Engine {
     params: param_auto::ParamAuto,
     /// The modulation graph (M1b), evaluated every tick: its values reach the plugin parameters after the clips'.
     mods: modulation::Modulation,
-    /// The project's random generator (random layers; spec: audio/channel-misc.md "FL's random generator").
+    /// The project's random generator (random layers; spec: audio/channel-misc.md "the original's random generator").
     rng: layers::Mt19937,
     /// The metronome of a playback stream (`set_metronome`), and the beats from one accent to the next: the project
     /// signature's numerator (spec: ui/metronome.md §4).
@@ -354,7 +354,7 @@ impl Engine {
                             s
                         }
                         // Lemon Studio choice: an empty sampler channel plays a built-in tone so new
-                        // projects make sound (FL's empty sampler is silent).
+                        // projects make sound (the original's empty sampler is silent).
                         None if ch.kind == ChannelKind::Sampler => {
                             Some(library.tones.entry(rate).or_insert_with(|| fallback_tone(rate)).clone())
                         }
@@ -489,7 +489,7 @@ impl Engine {
                             .iter()
                             .filter(|&&r| usize::from(r) < n_tracks && r != m.index)
                             .map(|&r| {
-                                // A route without a level record is at unity (spec: flp/engine-events.md "The mixer").
+                                // A route without a level record is at unity (spec: project/engine-events.md "The mixer").
                                 let level = m.send_levels.iter().find(|(d, _)| *d == r).map(|&(_, l)| l);
                                 let gain = level.map_or(1.0, |l| os_dsp::mixer::send_gain((l * 16000.0).round() as i32));
                                 let level = level.map_or(0.8, |l| l as f32);
@@ -636,7 +636,7 @@ impl Engine {
                     continue;
                 }
                 // A clip drives every target it is linked to; unknown targets are left out, and a clip without a known
-                // one is ignored (spec: flp/events/automation.md "Event 227").
+                // one is ignored (spec: project/events/automation.md "Event 227").
                 let targets: Vec<_> = a
                     .targets
                     .iter()
@@ -696,8 +696,8 @@ impl Engine {
             exporting: false,
             params: param_auto::ParamAuto::new(autos.iter().flat_map(|a| &a.targets).any(|&t| param_auto::is_param(t))),
             mods: modulation::Modulation::default(),
-            // Seeded, one output taken, at every start of playback or of a render (spec: audio/channel-misc.md "FL's
-            // random generator"; whether FL's live playback draws as its render does is not covered, Lemon Studio
+            // Seeded, one output taken, at every start of playback or of a render (spec: audio/channel-misc.md "the original's
+            // random generator"; whether the original's live playback draws as its render does is not covered, Lemon Studio
             // does).
             rng: layers::Mt19937::for_playback(),
             autos,
@@ -1893,7 +1893,7 @@ impl Engine {
                     self.clock.set_tempo(self.rate, self.ppq, self.clock_tempo());
                 }
             }
-            // The channel rack's swing knob, mixer box and LED (spec: flp/events/automation.md "Targets"): the main
+            // The channel rack's swing knob, mixer box and LED (spec: project/events/automation.md "Targets"): the main
             // swing `v × 128` to the nearest step, the mixer track `v × 500` to the nearest track up to the last insert,
             // the switch on from 0.5.
             Target::MainSwing => self.set_swing(os_model::target::swing_of(v)),
@@ -2904,7 +2904,7 @@ impl Engine {
         self.frame = self.clock.next_start();
         self.next_trigger = self.triggers.partition_point(|t| t.tick < to);
         // Control points replay from the top: until the first one the channel has its own settings, and mixer tracks
-        // glide back to theirs until automation hands its values on again (a Lemon Studio choice; FL's behaviour at
+        // glide back to theirs until automation hands its values on again (a Lemon Studio choice; the original's behaviour at
         // the loop point is not measured).
         for t in &mut self.tracks {
             t.restore(false);
@@ -3149,7 +3149,7 @@ mod tests {
 
     /// spec: plugins/vst3-hosting.md §1: the transport carries the project's time signature, and its bars and the
     /// pattern loop follow it (a pattern is whole bars of the project's bar, spec: audio/song-structure.md). The bar
-    /// is events 17 and 18, beats per bar and steps per beat: 6/8 is (6, 2) (spec: flp/engine-events.md "Project").
+    /// is events 17 and 18, beats per bar and steps per beat: 6/8 is (6, 2) (spec: project/engine-events.md "Project").
     #[test]
     fn plugins_see_the_project_time_signature() {
         // 6/8: six beats of two sixteenths, three quarter notes. A time division of three beats of three steps has no
@@ -5679,7 +5679,7 @@ mod tests {
         (log.iter().filter(|l| l.1).map(|l| tick(l.0)).collect(), log.iter().filter(|l| !l.1).map(|l| tick(l.0)).collect())
     }
 
-    /// The main swing as a target (spec: flp/events/automation.md "Targets": `v × 128`). A change while the song plays
+    /// The main swing as a target (spec: project/events/automation.md "Targets": `v × 128`). A change while the song plays
     /// places the notes not started yet again (Lemon Studio's design, `Engine::set_swing`): before the clip the stored
     /// swing, from it on the clip's, after it the clip's last value, and a new position past it starts with that value
     /// (audio/automation.md "A new position"). A note the change moves to before now starts now. A control point
@@ -5713,7 +5713,7 @@ mod tests {
         assert_eq!(probe_ticks(&p, PlayMode::Pattern(1), 0, 380.0).0, [27.0, 78.0, 126.0, 174.0]);
     }
 
-    /// A channel's mixer track as a target (the rack's mixer box; spec: flp/events/automation.md "Targets": `v × 500` to
+    /// A channel's mixer track as a target (the rack's mixer box; spec: project/events/automation.md "Targets": `v × 500` to
     /// the nearest track, at most the last insert): the channel's voices go to that track from the tick the value
     /// arrives, those already sounding included; after the clip the track stays, and a new position past the clip
     /// starts there. A control point holds the track number.
@@ -5756,7 +5756,7 @@ mod tests {
         assert_eq!(e.channels[0].insert, 5);
     }
 
-    /// A channel's switch as a target (the rack's LED; spec: flp/events/automation.md "Targets": on from 0.5;
+    /// A channel's switch as a target (the rack's LED; spec: project/events/automation.md "Targets": on from 0.5;
     /// audio/voice-levels.md, the switch): off, its sounding notes end on that tick and the notes that start while it is
     /// off do not play; on again, its later notes play. By clip and by control point alike.
     #[test]
@@ -5787,7 +5787,7 @@ mod tests {
         assert!(rms(&out[out.len() / 2..]) < 1e-6, "off");
     }
 
-    // spec: flp/events/automation.md "Event 227" (one link per target); audio/automation.md "The link", "When a clip acts"
+    // spec: project/events/automation.md "Event 227" (one link per target); audio/automation.md "The link", "When a clip acts"
     #[test]
     fn an_automation_clip_drives_every_target_it_is_linked_to() {
         use os_model::{AutoPoint, Automation, ChannelKind, Clip, ClipSource, target};
@@ -6719,7 +6719,7 @@ mod tests {
     }
 
     /// spec: audio/sidechain.md "Settings", "Sidechain input"; plugins/fruity-limiter-dsp.md: a Fruity Limiter on
-    /// insert 1 keyed from insert 2, which is routed into it at level 0 only (FL's "sidechain to this track"): its
+    /// insert 1 keyed from insert 2, which is routed into it at level 0 only (the original's "sidechain to this track"): its
     /// compressor ducks insert 1 while insert 2 sounds and leaves it alone while insert 2 is silent.
     #[test]
     fn a_limiter_is_keyed_from_its_tracks_sidechain_input() {

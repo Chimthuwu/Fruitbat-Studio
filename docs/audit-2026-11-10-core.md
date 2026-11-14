@@ -6,7 +6,7 @@ Generated from workspace audit using cargo metadata + targeted reads. All file:l
 
 | Crate | Role | ~LOC (rs) | Key deps |
 |-------|------|-----------|----------|
-| `os-app` | Main DAW application (binary `lemonstudio`) | ~22,000 (app.rs + views/) | `os-model`, `os-dsp`, `os-engine`, `os-flp`, `os-hostlink`, `os-theme`, `os-ui`, `os-clap`, `os-native`, `os-host` |
+| `os-app` | Main DAW application (binary `lemonstudio`) | ~22,000 (app.rs + views/) | `os-model`, `os-dsp`, `os-engine`, `os-project`, `os-hostlink`, `os-theme`, `os-ui`, `os-clap`, `os-native`, `os-host` |
 | `os-model` | Project data model (Track, Clip, Pattern, playlist, undo/redo, FLP round-trip) | 136567 bytes (lib.rs) | workspace deps only (no external crates) |
 | `os-dsp` | DSP building blocks: level, curve, pan, gain, EQ, mixer matrix | 1842 bytes (lib.rs) | `signalsmith-stretch` |
 | `os-engine` | Audio engine: sample loading, mixing, rendering, chains | 1610 bytes (lib.rs) | `os-model`, `os-dsp`, `miniz_oxide`, `thiserror`, `symphonia` (format I/O) |
@@ -19,7 +19,7 @@ Generated from workspace audit using cargo metadata + targeted reads. All file:l
 | `os-theme` | Theme tokens + HSL adjustment model | — | none |
 | `os-ui` | Painting primitives: shapes and text on a CPU canvas | — | `os-theme`, `tiny-skia`, `fontdue`; `windows-sys` on Windows |
 | `os-smf` | Standard MIDI Files: reading/writing types 0 and 1 | — | none |
-| `os-flp` | Lossless FLP project file reader/writer | — | `os-model`, `thiserror`, `chrono` |
+| `os-project` | Lossless FLP project file reader/writer | — | `os-model`, `thiserror`, `chrono` |
 
 **Root-level files**: `todo.md` (33982 bytes), `HANDOFF.md` (15810 bytes), `README.md` (34655 bytes), `Cargo.lock` (134769 bytes), `Cargo.toml` (3064 bytes).
 
@@ -29,7 +29,7 @@ Generated from workspace audit using cargo metadata + targeted reads. All file:l
 - **`Clip`** + **`Pattern`**: event containers. Clips have a `lane` (playlist lane) and reference a `Pattern`. Patterns hold note data.
 - **`playlist_lane`**: an integer identifying which lane a track/clip belongs to. The Clip Launcher (`launcher.rs:472-498`) only shows columns where `playlist_lane > 0` — this is the root cause of the duplicate‑track bug (see audit‑2026‑11‑09‑clip-launcher-bugs.md).
 - **Undo / snapshot system**: mutation API through `project_*` functions (e.g. `project.track_lane_inserted` at `os-model/src/lib.rs:2254`). Each command allocates a snapshot; `cargo test -p os-app` baseline: 1129 passed / 62 ignored.
-- **FLP round‑trip**: `os-flp` reads/writes Ableton Live project files. Key marker: event 237 (project start time, spec: `flp/events/project-info.md`). Serialization is lossless for the model subset Lemon supports.
+- **FLP round‑trip**: `os-project` reads/writes Ableton Live project files. Key marker: event 237 (project start time, spec: `flp/events/project-info.md`). Serialization is lossless for the model subset Lemon supports.
 - **Undo‑snapshot API** (high‑level): `Command` enum in `crates/os-app/src/app.rs` drives state transitions. Every UI action (track create, delete, duplicate, group, etc.) funnels through `app.rs` command routing → `os-model` mutation → new snapshot.
 
 ## 3. Audio engine path

@@ -37,7 +37,7 @@ pub fn note_name(key: i32) -> String {
     name_in(key, prefs::index(&prefs::NOTE_NAMES), prefs::index(&prefs::BLACK_NOTES) == 1)
 }
 
-/// The hint over a key: `<name><octave> / <MIDI number>` (`C5 / 60`), as FL's piano roll keyboard reads.
+/// The hint over a key: `<name><octave> / <MIDI number>` (`C5 / 60`), as the original's piano roll keyboard reads.
 pub fn key_hint(key: i32) -> String {
     format!("{} / {key}", note_name(key))
 }

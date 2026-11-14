@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-// spec: flp/container.md (Conformance requirements; Alignment checks)
+// spec: project/container.md (Conformance requirements; Alignment checks)
 //
-// Corpus round-trip. Runs only when OPENSTUDIO_FLP_CORPUS names a text file listing FLP
+// Corpus round-trip. Runs only when OPENSTUDIO_legacy project_CORPUS names a text file listing legacy project
 // paths, one per line (blank lines ignored). The corpus is never committed.
 
-use os_flp::{FlpFile, check_alignment};
+use os_project::{FlpFile, check_alignment};
 
 #[test]
 fn corpus_roundtrip_and_alignment() {

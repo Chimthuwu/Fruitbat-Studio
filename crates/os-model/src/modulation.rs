@@ -2,13 +2,13 @@
 //!
 //! This module defines the project-persistent identity types that the modulation graph (later
 //! milestones) will store. It is intentionally separate from [`crate::target`]: the existing
-//! `Target` encoding and the FL Studio `.flp` `AUTO_LINK` record are frozen (see the project's
+//! `Target` encoding and the original `.flp` `AUTO_LINK` record are frozen (see the project's
 //! modulation audit, K.1). Everything here is persisted in Lemon Studio's own `.lemon` extension
-//! (K.3), never inside FLP target bytes.
+//! (K.3), never inside legacy project target bytes.
 //!
 //! Two identities exist:
 //! - a *device/owner* identity ([`PersistentObjectId`]), stable across save/load and device moves;
-//! - a *parameter* identity ([`ParameterKey`]), which reuses the FLP-compatible parameter code
+//! - a *parameter* identity ([`ParameterKey`]), which reuses the legacy project-compatible parameter code
 //!   space wherever possible rather than inventing a competing host-control scheme.
 
 use std::collections::BTreeMap;
@@ -56,7 +56,7 @@ pub enum ParameterKey {
     /// Native plugin parameter id: CLAP `clap_id` or VST3 `ParamID`. Stable across plugin
     /// parameter reordering, so it is the preferred identity for hosted plugins.
     PluginNativeId(u32),
-    /// A legacy positional target (FLP-compatible `0x8000 + index`). Permanent: a legacy target is
+    /// A legacy positional target (legacy project-compatible `0x8000 + index`). Permanent: a legacy target is
     /// never silently upgraded to a native binding on load or save (K.2).
     LegacyPluginIndex(u16),
     /// An existing host-control code (the lower 16 bits of a `Target`): volume, pan, EQ, send, and
@@ -121,7 +121,7 @@ pub const CHANNEL_SENTINEL: u8 = 0xFF;
 // A *modulator* is one source (an LFO, a step sequence or an envelope) plus the parameters it drives, each with its
 // own depth, curve and polarity. The graph is the list of them. It refers to parameters by [`ParameterPath`], so an
 // assignment survives a device move the way the device's identity does, and it is saved in the `.lemon` extension
-// (never in an FLP target). Nothing here evaluates or renders anything yet: this is the data the engine path and the
+// (never in a legacy project target). Nothing here evaluates or renders anything yet: this is the data the engine path and the
 // UI are built on.
 // ---------------------------------------------------------------------------------------------------------------
 

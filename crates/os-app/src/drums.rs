@@ -54,7 +54,7 @@ pub fn store(proj: &mut Project, plugins: &Plugins) {
     }
 }
 
-/// The plugin state for a channel's FPC state: every layer's stored sample path resolved for the plugin to open (FL's
+/// The plugin state for a channel's FPC state: every layer's stored sample path resolved for the plugin to open (the original's
 /// placeholders made real), the stored paths kept in the state.
 pub fn plugin_state(fl: &[u8]) -> Vec<u8> {
     let paths: Vec<String> = lemon_drum_sampler::params::stored_paths(fl).iter().map(|p| crate::plugins::resolve_sample(p)).collect();
@@ -197,13 +197,13 @@ mod tests {
         a.sync_drums();
         assert!(a.state.hosted_rows.contains(&row));
         a.save_to(file.clone());
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&file).unwrap()).unwrap()).unwrap();
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&file).unwrap()).unwrap()).unwrap();
         assert_eq!(saved.channels[row].plugin_state.as_deref(), Some(lemon_drum_sampler::params::default_state().as_slice()));
 
         let fl = state_for(&path);
         assert!(a.plugins.set_state(row, &plugin_state(&fl)));
         a.save_to(file.clone());
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&file).unwrap()).unwrap()).unwrap();
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&file).unwrap()).unwrap()).unwrap();
         assert_eq!(saved.channels[row].plugin_state.as_deref(), Some(fl.as_slice()));
         let mut b = App::new(None);
         b.plugins.available = crate::plugins::builtin();
@@ -215,12 +215,12 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
-    /// FL's own Breakbeat template (when FL 2026 is installed): its two FPC channels open with their pads, every
+    /// the original's own Breakbeat template (when FL 2026 is installed): its two FPC channels open with their pads, every
     /// sample they name opens, a pad plays, and a save writes their bytes back unchanged.
     #[test]
     fn the_breakbeat_template_plays_its_kits() {
         let path = std::path::PathBuf::from(r"C:\Program Files\Image-Line\FL Studio 2026\Data\Templates\Advanced\Electronic\Breakbeat.flp");
-        let Some(project) = std::fs::read(&path).ok().and_then(|b| os_flp::FlpFile::parse(&b).ok()).and_then(|f| os_flp::project::load(&f).ok()) else {
+        let Some(project) = std::fs::read(&path).ok().and_then(|b| os_project::FlpFile::parse(&b).ok()).and_then(|f| os_project::project::load(&f).ok()) else {
             return;
         };
         let rows: Vec<usize> = (0..project.channels.len()).filter(|&r| is_fpc(&project.channels[r])).collect();
@@ -256,7 +256,7 @@ mod tests {
         let out = std::env::temp_dir().join(format!("openstudio-drums-breakbeat-{}.flp", std::process::id()));
         let before = a.state.project.clone();
         a.save_to(out.clone());
-        let back = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&out).unwrap()).unwrap()).unwrap();
+        let back = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&out).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_file(&out);
         for &r in &rows {
             assert_eq!(back.channels[r], before.channels[r], "channel {r}");

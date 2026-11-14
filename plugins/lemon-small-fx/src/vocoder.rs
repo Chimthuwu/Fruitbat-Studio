@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Vocoder's settings and editor (a recreation of FL's Vocodex): the mixer's levels and filters, the envelope
+//! Lemon Vocoder's settings and editor (a recreation of the original's Vocodex): the mixer's levels and filters, the envelope
 //! follower, the bands and the inputs. The plugin itself (`plugins/lemon-vocoder`) is not a [`crate::SmallFx`]: it has
 //! a sidechain input bus for the carrier, so it only borrows the description, the parameters and the editor from here.
 //!

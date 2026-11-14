@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Delay: Lemon Studio's stereo delay (a recreation of FL's Fruity Delay 3) as a VST3 / CLAP plugin
+//! Lemon Delay: Lemon Studio's stereo delay (a recreation of the original's Fruity Delay 3) as a VST3 / CLAP plugin
 //! (nih-plug). The sound is `os_engine::effects::delay`.
 //!
 // spec: plugins/lemon-delay.md, plugins/fruity-delay-3.md, plugins/plugin-formats.md
@@ -161,7 +161,7 @@ mod tests {
         assert_eq!(d.settings(), Settings { v: params::START });
         d.params.live.set(d.params.p[WET].as_ptr(), 0.0);
         assert_eq!(d.settings().v[WET], 0);
-        // FL's Chorus preset stores Time 0, below the knob's range: it plays as stored while the knob is not moved.
+        // the original's Chorus preset stores Time 0, below the knob's range: it plays as stored while the knob is not moved.
         let mut fl = params::default_state();
         params::set_field(&mut fl, TIME + 1, 0);
         let p = DelayParams::default();

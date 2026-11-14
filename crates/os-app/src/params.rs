@@ -1041,7 +1041,7 @@ mod tests {
         a.state.params.plugin(key).unwrap().lock().unwrap().param_text(id, v).unwrap()
     }
 
-    /// Corpus check (OPENSTUDIO_FLP_CORPUS): automation clips made on Parametric EQ 2 slot parameters load as slot
+    /// Corpus check (OPENSTUDIO_legacy project_CORPUS): automation clips made on Parametric EQ 2 slot parameters load as slot
     /// parameter targets of the hosted Lemon Parametric EQ, and every clip whose name still ends in the parameter
     /// name ("... - Band 7 freq") points at the parameter of that name: the index maps 1:1 (spec §3, §7).
     #[test]
@@ -1050,7 +1050,7 @@ mod tests {
         let text = std::fs::read_to_string(list).unwrap();
         let (mut checked, mut bad) = (0, Vec::new());
         for path in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
-            let Some(project) = std::fs::read(path).ok().and_then(|b| os_flp::FlpFile::parse(&b).ok()).and_then(|f| os_flp::project::load(&f).ok()) else {
+            let Some(project) = std::fs::read(path).ok().and_then(|b| os_project::FlpFile::parse(&b).ok()).and_then(|f| os_project::project::load(&f).ok()) else {
                 continue;
             };
             let eq_slot = |t: u16, k: u8| {
@@ -1091,7 +1091,7 @@ mod tests {
     }
 
     /// Writes a project with an automation clip on a slot plugin parameter, for opening in other software:
-    /// OS_PARAM_FLP_IN (a project with a parametric EQ in a mixer slot) -> OS_PARAM_FLP_OUT, one clip on the EQ's band 1
+    /// OS_PARAM_legacy project_IN (a project with a parametric EQ in a mixer slot) -> OS_PARAM_legacy project_OUT, one clip on the EQ's band 1
     /// frequency (parameter OS_PARAM_K, default 7) rising from 0 to 1 over its 4 bars (spec §7).
     #[test]
     #[ignore]

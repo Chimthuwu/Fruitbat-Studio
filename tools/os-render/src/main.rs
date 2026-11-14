@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! os-render: render an FLP project to a 32-bit float WAV with the Lemon Studio engine.
+//! os-render: render a project file to a 32-bit float WAV with the Lemon Studio engine.
 //!
-//! Usage: os-render <project.flp> <out.wav> [--pattern N] [--rate HZ] [--factory DIR] [--threads N]
+//! Usage: os-render <project> <out.wav> [--pattern N] [--rate HZ] [--factory DIR] [--threads N]
 //!
-//! `--factory` is the FL Studio install folder used to resolve `%FLStudioFactoryData%` sample
-//! paths (default: `C:\Program Files\Image-Line\FL Studio 2026` if present).
+//! `--factory` is the install folder `%FLStudioFactoryData%` sample paths are resolved against (default: the
+//! install found on this computer, if there is one).
 //!
 //! `--threads` is the number of mixing workers beside the rendering thread (default: one fewer than the physical
 //! cores, guessed; 0 renders on one thread). The result is the same sample for sample either way.
@@ -49,8 +49,8 @@ fn run() -> Result<(), String> {
     };
 
     let bytes = std::fs::read(input).map_err(|e| format!("{input}: {e}"))?;
-    let file = os_flp::FlpFile::parse(&bytes).map_err(|e| format!("{input}: {e}"))?;
-    let project = os_flp::project::load(&file).map_err(|e| format!("{input}: {e}"))?;
+    let file = os_project::FlpFile::parse(&bytes).map_err(|e| format!("{input}: {e}"))?;
+    let project = os_project::project::load(&file).map_err(|e| format!("{input}: {e}"))?;
 
     let mut library = SampleLibrary::new(factory);
     let started = std::time::Instant::now();

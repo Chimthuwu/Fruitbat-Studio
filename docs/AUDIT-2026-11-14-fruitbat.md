@@ -241,7 +241,7 @@ keyboard cursor.
 
 | Status | Detail |
 |---|---|
-| ✅ | FL Studio `.flp` read/write with lossless round-trip, `.lemon` extension for fork state, MIDI import/export, WAV/FLAC/MP3/OGG export, stems, offline render. |
+| ✅ | the original `.flp` read/write with lossless round-trip, `.lemon` extension for fork state, MIDI import/export, WAV/FLAC/MP3/OGG export, stems, offline render. |
 | 🚧 | Known file-format risks from the 2026-11-04 audit are still open (ANSI/Latin-1 text, silent short-record writes). |
 | 🚧 | Engine RT hardening (SIMD, sinc cost, allocations on audio thread) remains a quality-audit item, not a feature regression. |
 

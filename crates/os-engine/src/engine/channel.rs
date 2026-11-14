@@ -169,7 +169,7 @@ impl Ramp {
 }
 
 /// Glide of a volume / pan control point on voices already sounding: the parameter moves linearly and the
-/// law is applied to it. FL's volume glide lasts about 9.3 ms (shorter for tiny changes) and its pan glide
+/// law is applied to it. the original's volume glide lasts about 9.3 ms (shorter for tiny changes) and its pan glide
 /// about 4.7 ms (measured; spec: audio/pattern-controls.md).
 const VOLUME_GLIDE_SECONDS: f64 = 0.0093;
 const PAN_GLIDE_SECONDS: f64 = 0.0047;

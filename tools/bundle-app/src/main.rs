@@ -111,7 +111,7 @@ fn info_plist() -> String {
 	<array>
 		<dict>
 			<key>CFBundleTypeName</key>
-			<string>FL Studio project</string>
+			<string>Project file</string>
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>LSHandlerRank</key>

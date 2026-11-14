@@ -4,7 +4,7 @@
 
 //! Citrus in Lemon Studio: compiled in like Lemon Trio, it plays every Sytrus channel of a project (started from the
 //! state the file holds) and every one added from the picker, the browser or the channel rack; saving writes the
-//! Sytrus state it plays back into the channel byte for byte, so the file keeps its own plugin. FL's Sytrus factory
+//! Sytrus state it plays back into the channel byte for byte, so the file keeps its own plugin. the original's Sytrus factory
 //! presets (`.fst`), when FL is installed, are listed with Citrus's own presets.
 //!
 // spec: plugins/citrus.md (app integration, presets)
@@ -50,7 +50,7 @@ pub fn store(proj: &mut Project, plugins: &Plugins) {
     }
 }
 
-/// FL's Sytrus factory presets, when FL is installed.
+/// the original's Sytrus factory presets, when FL is installed.
 fn factory_dir() -> PathBuf {
     let fl = crate::factory_folder::dir().unwrap_or_else(os_native::default_fl_dir);
     fl.join("Data").join("Patches").join("Plugin presets").join("Generators").join("Sytrus")
@@ -81,7 +81,7 @@ pub fn fst_presets_in(dir: &Path) -> Vec<crate::presets::Preset> {
     out
 }
 
-/// Citrus's presets beyond its own folder: FL's factory ones.
+/// Citrus's presets beyond its own folder: the original's factory ones.
 pub fn more_presets(plugin: &str) -> Vec<crate::presets::Preset> {
     if plugin == CITRUS { fst_presets_in(&factory_dir()) } else { Vec::new() }
 }
@@ -199,14 +199,14 @@ mod tests {
         assert!(a.state.hosted_rows.contains(&row));
         assert_eq!(a.plugins.sytrus_file_state(row), Some(Vec::new()));
         a.save_to(path.clone());
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         assert_eq!((saved.channels[row].plugin.as_deref(), saved.channels[row].plugin_state.as_deref()), (Some(FILE_NAME), None));
 
         // A patch goes in (as a preset load does), the project is saved and reopened.
         let fl = saw_state();
         assert!(a.plugins.set_state(row, &citrus::plugin_state_from_fl(&fl)));
         a.save_to(path.clone());
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         assert_eq!(saved.channels[row].plugin_state.as_deref(), Some(fl.as_slice()));
         let mut b = App::new(None);
         b.plugins.available = crate::plugins::builtin();
@@ -215,7 +215,7 @@ mod tests {
         assert!(b.state.hosted_rows.contains(&row), "{:?}", b.state.message);
         assert_eq!(b.plugins.sytrus_file_state(row), Some(fl.clone()));
         b.save_to(path.clone());
-        let again = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let again = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(again.channels[row], saved.channels[row]);
     }

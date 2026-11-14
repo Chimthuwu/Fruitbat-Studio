@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Studio's fast distortion (a recreation of FL's Fruity Fast Dist mixer effect), configured from its saved
+//! Lemon Studio's fast distortion (a recreation of the original's Fruity Fast Dist mixer effect), configured from its saved
 //! state.
 //!
 //! A waveshaper without memory: each sample is replaced by a value looked up, with linear interpolation, from a table
@@ -26,7 +26,7 @@ pub const POST: usize = 4;
 /// pre amp, mix and post gain are used as they are.
 pub const RANGES: [(i32, i32); PARAMS] = [(64, 192), (1, 10), (0, 1), (0, 128), (0, 128)];
 
-/// FL's `Default` preset: unity pre amp, threshold 10, type A, full mix and post gain.
+/// the original's `Default` preset: unity pre amp, threshold 10, type A, full mix and post gain.
 pub const DEFAULTS: [i32; PARAMS] = [128, 10, 0, 128, 128];
 
 /// Curve types.
@@ -114,7 +114,7 @@ pub fn table(threshold: i32, kind: i32, wet: f32) -> Vec<f64> {
     t
 }
 
-/// From `p = 2^31` on (and for NaN) the table's part of a sample is +0: FL's whole-number index overflows there (spec
+/// From `p = 2^31` on (and for NaN) the table's part of a sample is +0: the original's whole-number index overflows there (spec
 /// "Checked against FL", very loud input).
 const OVERFLOW: f64 = 2_147_483_648.0;
 
@@ -176,7 +176,7 @@ impl FastDist {
     }
 
     /// One sample of either channel: the interpolated table at `p = |x * pre * 8191|`, with the sign of `x`, over `x *
-    /// dry`, all in doubles (FL's extended precision; doubles give the same samples), rounded toward zero to single.
+    /// dry`, all in doubles (the original's extended precision; doubles give the same samples), rounded toward zero to single.
     #[inline]
     pub fn sample(&self, x: f32) -> f32 {
         let x64 = f64::from(x);
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn states_round_trip() {
-        // FL's "fuzz" preset.
+        // the original's "fuzz" preset.
         let s = Settings { v: [192, 10, 1, 128, 80] };
         let b = s.to_state();
         assert_eq!(b.len(), STATE_LEN);
@@ -299,16 +299,16 @@ mod tests {
         assert!(chop(f64::NAN).is_nan());
     }
 
-    /// Samples of FL's renders of the null test's probe (spec "Checked against FL").
+    /// Samples of the original's renders of the null test's probe (spec "Checked against FL").
     #[test]
     fn known_samples_from_fl() {
         let cases: [([i32; PARAMS], f32, f32); 11] = [
             // Type A, threshold 1.
             ([128, 1, 0, 128, 128], 0.021931838, 0.02192916),
             ([128, 1, 0, 128, 128], 0.0591505, 0.059143275),
-            // FL's compressor preset (pre amp 192, reduced mix and post gain).
+            // the original's compressor preset (pre amp 192, reduced mix and post gain).
             ([192, 1, 0, 104, 93], 0.087571196, 0.11551188),
-            // FL's fuzz preset.
+            // the original's fuzz preset.
             ([192, 10, 1, 128, 80], 0.06572277, 0.14467822),
             // Type B, threshold 10, pre amp 192.
             ([192, 10, 1, 128, 128], -0.25366217, -0.8983255),

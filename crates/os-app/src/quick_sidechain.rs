@@ -55,8 +55,8 @@ pub fn run(app: &mut App, dst: u16) -> Option<String> {
     let port = inputs.iter().position(|t| *t == src).unwrap() + 1;
     let state = preset(port);
     let reference = crate::project_plugins::plugin_ref(&app.plugins.effects[index].desc, state.clone());
-    let wrapper = os_flp::wrapper::encode(None, &reference);
-    let Some(wrapper) = os_flp::wrapper::set_input_port(&wrapper, 1, port as i32) else {
+    let wrapper = os_project::wrapper::encode(None, &reference);
+    let Some(wrapper) = os_project::wrapper::set_input_port(&wrapper, 1, port as i32) else {
         return Some("Could not configure the sidechain input".into());
     };
     // The whole project changes (the destination's chain and the source's routing): one undo step.
@@ -67,12 +67,12 @@ pub fn run(app: &mut App, dst: u16) -> Option<String> {
         if let Some(m) = mx::track_mut(&mut app.state, dst) {
             // Effects already keyed from a destination input keep their source when the list grows.
             for effect in m.slots.iter_mut().flatten() {
-                if effect.name == os_flp::wrapper::WRAPPER {
-                    for (bus, old) in os_flp::wrapper::input_ports(&effect.state).iter().enumerate() {
+                if effect.name == os_project::wrapper::WRAPPER {
+                    for (bus, old) in os_project::wrapper::input_ports(&effect.state).iter().enumerate() {
                         if *old > 0 {
                             if let Some(source) = old_inputs.get(*old as usize - 1) {
                                 if let Some(new) = inputs.iter().position(|t| t == source) {
-                                    if let Some(state) = os_flp::wrapper::set_input_port(&effect.state, bus, (new + 1) as i32) {
+                                    if let Some(state) = os_project::wrapper::set_input_port(&effect.state, bus, (new + 1) as i32) {
                                         effect.state = state;
                                     }
                                 }
@@ -90,7 +90,7 @@ pub fn run(app: &mut App, dst: u16) -> Option<String> {
                     }
                 }
             }
-            m.slots[slot] = Some(os_model::SlotPlugin { id: os_model::Id::NONE, name: os_flp::wrapper::WRAPPER.into(), state: wrapper });
+            m.slots[slot] = Some(os_model::SlotPlugin { id: os_model::Id::NONE, name: os_project::wrapper::WRAPPER.into(), state: wrapper });
             m.slot_on[slot] = true;
             m.slot_mix[slot] = 1.0;
             m.slots_enabled = true;

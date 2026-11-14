@@ -52,14 +52,14 @@ const GAP: f32 = 6.0;
 /// The page area (left of the matrix) and the matrix panel, both from under the strip to the keyboard.
 pub const PAGE: Rect = Rect::span(GAP, 544.0, 35.0, 346.0);
 pub const MATRIX: Rect = Rect::span(550.0, 850.0 - GAP, 35.0, 346.0);
-/// The matrix's cell pitch (FL's is 31 px; Pith's card padding takes the rest) and its first cell's corner: the row
+/// The matrix's cell pitch (the original's is 31 px; Pith's card padding takes the rest) and its first cell's corner: the row
 /// labels, the cells, the column labels and the FM / RM bar centred in the panel.
 const PITCH: f32 = 29.0;
 const GRID_X: f32 = 577.0;
 const GRID_Y: f32 = 56.0;
 /// The keys start 3 px over this (their rounded tops), 6 px under the cards.
 pub const KEYS: Rect = Rect::new(GAP, 355.0, 838.0, 95.0);
-/// The testing keyboard's keys: C3 .. B7 (FL's names, key 60 = C5).
+/// The testing keyboard's keys: C3 .. B7 (the original's names, key 60 = C5).
 pub const FIRST_KEY: u8 = 36;
 pub const LAST_KEY: u8 = 95;
 /// The XY pad.
@@ -859,7 +859,7 @@ fn filter(ui: &mut Ui, m: usize) {
     for (k, x, l) in [(1, 153.0, "ENV"), (2, 198.0, "CUT"), (3, 243.0, "RES"), (7, 426.0, "AMP"), (8, 471.0, "MIX"), (9, 516.0, "NEXT")] {
         knob(ui, Field::Head(m, k), x, 63.0, 14.0, l);
     }
-    // MODE: FL's "+" button, whose setting was not identified: greyed out.
+    // MODE: the original's "+" button, whose setting was not identified: greyed out.
     let r = Rect::new(380.0, 53.0, 20.0, 20.0);
     let ink = lemon::plug_button(ui.c, r, 5.0, Look { disabled: true, ..Look::NORMAL });
     ui.c.text_center(LABEL, r, ink, "+");
@@ -1118,10 +1118,10 @@ pub fn point_xy(c: &crate::curve::Curve, i: usize, span: f64) -> (f32, f32) {
     (t_to_x(edit::times(c)[i], span), level_to_y(c.points[i].level))
 }
 
-/// A selected point's fill (FL's green, measured).
+/// A selected point's fill (the original's green, measured).
 const SELECTED: Color = Color::rgb(0xa8e44a);
 
-/// The Level scaling dialog over the page (FL's at 187, 40, 172 x 277) and its controls' ranges and defaults.
+/// The Level scaling dialog over the page (the original's at 187, 40, 172 x 277) and its controls' ranges and defaults.
 pub const SCALE_DLG: Rect = Rect::new(187.0, 40.0, 172.0, 277.0);
 pub const SCALE_RANGE: [(f32, f32); 4] = [(0.0, 1.0), (-2.0, 2.0), (-1.0, 1.0), (-1.0, 1.0)];
 pub const SCALE_DEFAULT: [f32; 4] = [0.0, 1.0, 0.0, 0.0];
@@ -1410,7 +1410,7 @@ pub fn is_black(k: u8) -> bool {
     !WHITE.contains(&(k % 12))
 }
 
-/// A key's name (FL's: key 60 = C5).
+/// A key's name (the original's: key 60 = C5).
 pub fn key_name(k: u8) -> String {
     const N: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
     format!("{}{}", N[usize::from(k % 12)], k / 12)

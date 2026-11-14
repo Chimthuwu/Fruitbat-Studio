@@ -1,5 +1,5 @@
 [package]
-name = "os-flp"
+name = "os-project"
 description = "Lossless FLP project file reader/writer"
 version.workspace = true
 edition.workspace = true

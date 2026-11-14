@@ -1083,7 +1083,7 @@ impl Plugin {
         self.editor = false;
     }
 
-    /// The instance's state in the layout FL Studio's plugin wrapper keeps ([`fl_state`], spec §8).
+    /// The instance's state in the layout the original's plugin wrapper keeps ([`fl_state`], spec §8).
     pub fn save_state(&self) -> Option<Vec<u8>> {
         unsafe {
             let s = Stream::create(Vec::new());

@@ -22,7 +22,7 @@
 //! On the audio side, [`levels`] hands a Lemon instrument the channel's volume and pan. Both sides read a plugin's
 //! saved state with [`state`].
 //!
-//! Spec: `plugins/host-link.md`. This is a Lemon Studio design, not FL's protocol.
+//! Spec: `plugins/host-link.md`. This is a Lemon Studio design, not the original's protocol.
 // spec: plugins/host-link.md
 
 pub mod levels;

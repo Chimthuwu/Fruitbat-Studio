@@ -1714,7 +1714,7 @@ fn launcher_shadow(s: &State, base: &Project, w: u64) -> Project {
             let mut clip = Clip::new(at as u32, length, lane, source);
             clip.id = os_model::Id::NONE;
             if let ClipSource::Channel(_) = source {
-                // Gain 1.0, as `playlist::place` gives a new audio clip (spec: flp/events/playlist.md, byte 52).
+                // Gain 1.0, as `playlist::place` gives a new audio clip (spec: project/events/playlist.md, byte 52).
                 clip.set_gain(1.0);
             }
             arr.clips.push(clip);

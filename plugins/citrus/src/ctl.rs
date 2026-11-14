@@ -217,14 +217,14 @@ pub fn range(f: Field) -> (i32, i32) {
         Field::S(12) => (0, 96),
         Field::S(14) => (0, 192),
         Field::S(25 | 26) => (0, 512),
-        // Oversampling 1x .. 32x: the engine's limit (FL's range was not measured).
+        // Oversampling 1x .. 32x: the engine's limit (the original's range was not measured).
         Field::S(30 | 31) => (0, 5),
         // The FX page.
         Field::S(15 | 21 | 22) => (-128, 128),
         Field::S(16) => (0, 9),
         Field::S(17 | 18) => (0, 1024),
         Field::S(19 | 20 | 23) => (0, 128),
-        // The send's target: none, or the mixer's inserts (FL's end was not measured).
+        // The send's target: none, or the mixer's inserts (the original's end was not measured).
         Field::S(24) => (-1, 125),
         Field::Head(m, k) if m < OPERATORS => match k {
             0 => (0, 256),
@@ -236,7 +236,7 @@ pub fn range(f: Field) -> (i32, i32) {
         Field::Head(_, 8) => (0, 128),
         Field::Head(_, 9) => (-256, 256),
         Field::Head(..) => (0, 256),
-        // The ratio up to 100 x and the offset within 1 kHz (Lemon choices: FL's ranges were not measured).
+        // The ratio up to 100 x and the offset within 1 kHz (Lemon choices: the original's ranges were not measured).
         Field::Op(_, 0) => (0, 1_000_000),
         Field::Op(_, 1) => (-100_000, 100_000),
         Field::Op(_, 3) => (0, 512),
@@ -327,7 +327,7 @@ const FILTER_NAMES: [&str; 13] = [
     "Mango low pass",
     "Cherry phaser",
 ];
-/// The stages column's positions; FL's hint read "dual" for x2, the others are Lemon names.
+/// The stages column's positions; the original's hint read "dual" for x2, the others are Lemon names.
 pub const STAGE_LABELS: [&str; 6] = ["OFF", "x1", "x2", "x3", "ALT x2", "ALT x3"];
 const STAGE_NAMES: [&str; 6] = ["off", "single", "dual", "triple", "dual spread", "triple spread"];
 const DELAY_MODES: [&str; 3] = ["normal", "inverted", "ping-pong"];
@@ -380,7 +380,7 @@ fn module(r: usize) -> String {
     if r < OPERATORS { format!("operator {}", r + 1) } else { format!("filter {}", r - OPERATORS + 1) }
 }
 
-/// A setting's name as its hint starts (FL's texts, spec plugins/sytrus-editor.md).
+/// A setting's name as its hint starts (the original's texts, spec plugins/sytrus-editor.md).
 pub fn name(f: Field) -> String {
     match f {
         Field::Main(0) => "Master level".into(),
@@ -405,7 +405,7 @@ pub fn name(f: Field) -> String {
         Field::S(23) => "Send level".into(),
         Field::S(24) => "Send to effect track number".into(),
         Field::S(k) => format!("Setting {k}"),
-        // FL's hint for SMOOTH was not read.
+        // the original's hint for SMOOTH was not read.
         Field::S32(0) => "Smooth X / Y modulation".into(),
         Field::S32(1) => "Enable randomness".into(),
         Field::S32(_) => "Operator 1 pitch articulator = global".into(),
@@ -549,7 +549,7 @@ pub fn text(f: Field, v: i32) -> String {
     }
 }
 
-/// The hint while hovering (FL's: the name and the value; a switch its name alone, portamento its state; a matrix
+/// The hint while hovering (the original's: the name and the value; a switch its name alone, portamento its state; a matrix
 /// cell its name, with "FM" or "RM" right on the operator block) or dragging (a cell's bare value).
 pub fn hint(st: &State, f: Field, dragging: bool) -> String {
     let v = get(st, f);
@@ -617,7 +617,7 @@ pub fn parse(f: Field, s: &str) -> Option<i32> {
 mod tests {
     use super::*;
 
-    /// The hints read FL's texts (spec plugins/sytrus-editor.md §2, §6).
+    /// The hints read the original's texts (spec plugins/sytrus-editor.md §2, §6).
     #[test]
     fn hints_read_fls_texts() {
         let mut st = crate::preset::default_patch();

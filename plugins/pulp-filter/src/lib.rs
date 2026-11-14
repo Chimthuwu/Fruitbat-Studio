@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Pulp Filter: Lemon Studio's pattern-controlled multi-filter (a recreation of FL's Fruity Love Philter) as a VST3 /
+//! Pulp Filter: Lemon Studio's pattern-controlled multi-filter (a recreation of the original's Fruity Love Philter) as a VST3 /
 //! CLAP plugin (nih-plug). The sound is `os_engine::effects::love_philter`; a project's or preset's state is loaded
 //! as it is stored, and the editor edits that state.
 //!
@@ -145,7 +145,7 @@ impl Default for PulpFilter {
 }
 
 impl PulpFilter {
-    /// A state replaced from outside: applied as FL applies a loaded state, then FL's start (silent buffers, a
+    /// A state replaced from outside: applied as FL applies a loaded state, then the original's start (silent buffers, a
     /// reposition).
     fn pick_up_state(&mut self) {
         let v = self.params.state_version.load(Ordering::Acquire);

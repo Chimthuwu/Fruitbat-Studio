@@ -7,7 +7,7 @@
 //! loaded, a box lists the samples and plugins still missing; Find samples... looks for the samples by name in a folder
 //! the user picks and its subfolders, on a thread of its own, behind a progress panel.
 //!
-// spec: flp/sample-paths.md "Missing samples", ui/project-loading.md §5-6
+// spec: project/sample-paths.md "Missing samples", ui/project-loading.md §5-6
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

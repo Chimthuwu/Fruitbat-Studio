@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Delay compensation against FL's exports: projects with Fruity Limiter in mixer slots, rendered with Lemon Studio's
+//! Delay compensation against the original's exports: projects with Fruity Limiter in mixer slots, rendered with Lemon Studio's
 //! recreation of its processing as a slot that reports its look-ahead. FL starts the export late by the delay, so the
-//! file shows none; the engine's render must line up with FL's from the first sample, at the same length.
+//! file shows none; the engine's render must line up with the original's from the first sample, at the same length.
 //!
-//! Runs only when `OPENSTUDIO_PDC_EXPORTS` names a folder of `<name>.flp` projects next to FL's `<name>.wav` exports
-//! (32-bit float); prints each case's lag and how far its difference to FL's export lies below FL's peak.
+//! Runs only when `OPENSTUDIO_PDC_EXPORTS` names a folder of `<name>.flp` projects next to the original's `<name>.wav` exports
+//! (32-bit float); prints each case's lag and how far its difference to the original's export lies below the original's peak.
 //!
 //! `OPENSTUDIO_PDC_EXPORTS=<folder> cargo test -p os-render --test integration pdc_null -- --nocapture`
 // spec: audio/delay-compensation.md, plugins/fruity-limiter.md
@@ -44,8 +44,8 @@ fn limiter_state(state: &[u8]) -> Option<([i32; PARAMS], u8)> {
 /// export skipped at its start.
 fn render(flp: &Path, rate: u32) -> (Vec<f32>, usize) {
     let bytes = std::fs::read(flp).unwrap();
-    let file = os_flp::FlpFile::parse(&bytes).unwrap();
-    let project = os_flp::project::load(&file).unwrap();
+    let file = os_project::FlpFile::parse(&bytes).unwrap();
+    let project = os_project::project::load(&file).unwrap();
     let song = project.arrangements.iter().any(|a| !a.clips.is_empty());
     let mode = if song { PlayMode::Song } else { PlayMode::Pattern(1) };
     let mut library = SampleLibrary::new(SampleLibrary::default_factory_dir());

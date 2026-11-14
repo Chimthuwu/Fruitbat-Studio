@@ -4,7 +4,7 @@
 
 //! Lemon Drum Sampler's saved state: the original's whole saved state (`state`, hex), so what the editor does not
 //! change comes back out byte for byte, and the sample files to open (`sample-paths`, a JSON list, one per layer in
-//! the state's order; "" = the stored path). The host fills the list with the stored paths resolved (FL's
+//! the state's order; "" = the stored path). The host fills the list with the stored paths resolved (the original's
 //! placeholders made real); the stored paths stay as written. No automatable parameters: the pads' settings live
 //! in the state.
 //!

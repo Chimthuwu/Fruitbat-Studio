@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Citrus: Lemon Studio's six-operator synthesizer (a recreation of FL's Sytrus) as a VST3 / CLAP plugin (nih-plug).
+//! Citrus: Lemon Studio's six-operator synthesizer (a recreation of the original's Sytrus) as a VST3 / CLAP plugin (nih-plug).
 //! It plays Sytrus patches: a project's or preset's state is loaded as it is stored and kept byte for byte.
 //!
 // spec: plugins/citrus.md, plugins/sytrus.md, plugins/sytrus-effects.md, plugins/plugin-formats.md
@@ -289,7 +289,7 @@ impl CitrusPlugin {
         }
     }
 
-    /// A note's own levels. The host sends FL's velocity byte / 128; the engine joins the volume and pan with the
+    /// A note's own levels. The host sends the original's velocity byte / 128; the engine joins the volume and pan with the
     /// channel's, which Lemon Studio sends (spec: plugins/citrus.md §2).
     fn levels(&self, note: u8, velocity: f32) -> Levels {
         let link = self.engine.state().is_none_or(|s| s.switch(8) != 0);

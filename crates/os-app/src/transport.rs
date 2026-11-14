@@ -436,7 +436,7 @@ enum Cmd {
     Open,
     /// Opens the ASIO driver's own settings window (`Transport::asio_panel`).
     AsioPanel,
-    /// The FL Studio factory content folder changed (`Transport::set_factory`).
+    /// The factory content folder changed (`Transport::set_factory`).
     Factory(Option<PathBuf>),
     /// Disk recording started or ended (`Transport::record_tracks`): the playback's engine takes it at once.
     Record,
@@ -593,7 +593,7 @@ impl Transport {
         let _ = self.tx.send(Cmd::AsioPanel);
     }
 
-    /// The FL Studio install folder that sample paths' placeholders point into is now `dir` (`crate::factory_folder`):
+    /// The original's install folder that sample paths' placeholders point into is now `dir` (`crate::factory_folder`):
     /// the playing engines take their factory samples from there.
     pub fn set_factory(&self, dir: Option<PathBuf>) {
         let _ = self.tx.send(Cmd::Factory(dir));
@@ -804,7 +804,7 @@ impl Transport {
     }
 
     /// Stop everything: playback rewinds, hosted instruments fall silent, live notes and previews end; the hosted
-    /// effects' tails (reverb, delay) ring out, as in FL (spec: audio/transport.md "Stop"). Also works when already
+    /// effects' tails (reverb, delay) ring out, as in the original (spec: audio/transport.md "Stop"). Also works when already
     /// stopped: it silences notes still ringing from the typing keyboard or a preview, and tails still ringing.
     pub fn stop(&self) {
         self.stop_with(true);
@@ -1753,7 +1753,7 @@ fn audio_thread(rx: Receiver<Cmd>, shared: Arc<Shared>, latest: Arc<Mutex<Option
             }
             Ok(Cmd::Stop(ring)) => {
                 // Everything fades out and goes, and the instruments are reset. The playback's hosted effects ring out
-                // their tails (reverb, delay) as in FL: its channels are held as at Pause (`Engine::pause`) while its
+                // their tails (reverb, delay) as in the original: its channels are held as at Pause (`Engine::pause`) while its
                 // mixer runs on, until the tails are quiet (`Ringing`), and the effects are reset then, so no frozen
                 // tail comes back with the next stream. Without `ring` (Stop sound), with no hosted effect, or at a
                 // Stop while tails ring, the effects are reset at once.

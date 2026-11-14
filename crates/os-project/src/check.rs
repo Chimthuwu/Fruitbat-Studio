@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-// spec: flp/container.md (Alignment checks)
+// spec: project/container.md (Alignment checks)
 
 use crate::container::FlpFile;
 use crate::event::Value;

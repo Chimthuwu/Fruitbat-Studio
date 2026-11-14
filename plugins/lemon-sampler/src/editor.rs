@@ -2039,7 +2039,7 @@ mod win32 {
                 self.last_sig = self.logic.vals.signature();
                 self.last_view = self.logic.view.clone();
                 self.last_ver = ver;
-                // Show the editor area: the painted frame minus FL's border.
+                // Show the editor area: the painted frame minus the original's border.
                 let (ox, oy) = ((view::CROP_X as f32 * self.scale).round() as usize, (self.crop_y() as f32 * self.scale).round() as usize);
                 let (cw, ch) = self.content();
                 let (w, h) = ((cw as f32 * self.scale).round() as u32, (ch as f32 * self.scale).round() as u32);
@@ -2827,7 +2827,7 @@ mod gui {
             self.last_sig = self.logic.vals.signature();
             self.last_view = self.logic.view.clone();
             self.last_ver = ver;
-            // Show the editor area: the painted frame minus FL's border.
+            // Show the editor area: the painted frame minus the original's border.
             let (ox, oy) = ((view::CROP_X as f32 * self.scale).round() as usize, (self.crop_y() as f32 * self.scale).round() as usize);
             let (cw, ch) = self.content();
             let (w, h) = ((cw as f32 * self.scale).round() as u32, (ch as f32 * self.scale).round() as u32);

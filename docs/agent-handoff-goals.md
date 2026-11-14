@@ -7,7 +7,7 @@ Read alongside: `todo.md` (checklist), `docs/track-model-plan.md` (full design),
 ## Who we are
 Lemon Studio (`Z:\github\Lemon-Studio`): pattern-based clean-room DAW in Rust, FL-style,
 opens/saves .flp with lossless round-trip. ~26-crate workspace: os-model (plain data) →
-os-flp (file I/O) → os-engine (playback) → os-app/os-ui; built-in plugins are separate
+os-project (file I/O) → os-engine (playback) → os-app/os-ui; built-in plugins are separate
 nih-plug (VST3+CLAP) crates linked in via os-hostlink. Clean-room rules apply: no code from
 Michael's fork — spec-level study only.
 

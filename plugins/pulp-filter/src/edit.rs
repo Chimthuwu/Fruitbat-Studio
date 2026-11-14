@@ -116,7 +116,7 @@ pub fn toggle_marker(c: &mut Curve, i: usize, sustain: bool) {
     done(c);
 }
 
-/// The loop from the first point to the last (FL's patterns loop so).
+/// The loop from the first point to the last (the original's patterns loop so).
 pub fn make_all_loop(c: &mut Curve) {
     c.loop_start = 0;
     c.sustain = c.points.len() as i32 - 1;

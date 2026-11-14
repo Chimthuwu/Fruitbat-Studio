@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Peak Controller: Lemon Studio's peak follower and LFO controller (a recreation of FL's Fruity Peak Controller)
+//! Lemon Peak Controller: Lemon Studio's peak follower and LFO controller (a recreation of the original's Fruity Peak Controller)
 //! as a VST3 / CLAP plugin. It follows the peak of the sound it is given and runs an LFO, once per tick of the song
 //! (1/96 beat), and puts out three controller values, Peak + LFO, Peak and LFO; the sound passes through, or is
 //! muted. The values leave as MIDI: output k on channel k, as a pitch bend with the CC 63 after it adding 7 finer bits

@@ -313,18 +313,18 @@ fn states_round_trip_as_chunks_or_parameter_lists() {
     let (m, mut p) = gain();
     p.set_param(0, 0.75);
     let saved = p.save_state().expect("state");
-    assert_eq!(&saved[..5], &[0xF7, 0xFF, 0xFF, 0xFF, 12], "FL Studio's header");
+    assert_eq!(&saved[..5], &[0xF7, 0xFF, 0xFF, 0xFF, 12], "the original's header");
     let mut q = Plugin::new(&m, &id_text(GAIN_ID)).expect("create");
     assert!(q.load_state(&saved));
     assert_eq!(q.param_value(0), Some(0.75));
     assert!(q.take_param_events().is_empty(), "restoring is no edit");
     assert!(!q.load_state(b"not a state"));
-    // A plugin without chunks: its parameters, in FL Studio's list (which keeps no program).
+    // A plugin without chunks: its parameters, in the original's list (which keeps no program).
     let (sm, mut s) = synth();
     s.set_param(0, 0.3);
     s.inst.dispatch(op::SET_PROGRAM, 0, 2, std::ptr::null_mut(), 0.0);
     let saved = s.save_state().expect("state");
-    assert_eq!(&saved[..5], &[0xF7, 0xFF, 0xFF, 0xFF, 4], "FL Studio's header for a parameter list");
+    assert_eq!(&saved[..5], &[0xF7, 0xFF, 0xFF, 0xFF, 4], "the original's header for a parameter list");
     let mut t = Plugin::new(&sm, &id_text(SYNTH_ID)).expect("create");
     clear();
     assert!(t.load_state(&saved));

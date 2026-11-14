@@ -10,7 +10,7 @@
 //! slot returns the object itself, every data field points back at the object — is enough for the
 //! plugin to finish construction and (for effects) to render: whatever the plugin pulls out of the
 //! object and dereferences, as data or as a sub-object, stays on valid, readable memory with a
-//! usable method table. This is an experimental interoperability shim, not a reproduction of FL's
+//! usable method table. This is an experimental interoperability shim, not a reproduction of the original's
 //! object; it carries no state and is shared process-wide.
 //
 // spec: plugins/fruity-abi.md

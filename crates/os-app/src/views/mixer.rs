@@ -1330,7 +1330,7 @@ fn strip(ui: &mut Ui, s: &State, n: u16, left: f32, bottom: f32, f: &FrameInfo, 
     mod_arcs(ui, s, os_model::target::mixer(n, os_model::target::MIXER_PAN), kx, ly.y(PAN_Y), 15.0, s.knob(pan).clamp(0.0, 1.0));
 
     // Reverse polarity (⇕) and swap left / right (⇔) buttons, lit when on, then the separation knob (§4).
-    // They keep their size and spacing below the fader's top at any mixer height (FL's short mixer stacks them the
+    // They keep their size and spacing below the fader's top at any mixer height (the original's short mixer stacks them the
     // same way), so they are placed from the fader's top, not scaled with it.
     // View ▸ Extra properties off hides them (Lemon Studio's design).
     if s.mixer.extra {
@@ -1612,7 +1612,7 @@ fn slot_panel(ui: &mut Ui, s: &State, r: Rect) {
         };
         // Lemon centres the name's capitals on the row, level with the chevron, knob and LED: the baseline sits half a
         // cap height (the face's is about 0.72 of its size) under the middle, measured on the face drawn (the italic
-        // one has its own ascent). Classic keeps FL's place.
+        // one has its own ascent). Classic keeps the original's place.
         let ty = if super::lemon(ui) { (row.cy() + 0.36 * f32::from(fs) - ui.c.ascent(f)).round() } else { row.y + 4.0 * kp };
         // Change icon... (Lemon Studio's design): the icon before the name.
         let icon = crate::playlist::window_icon(&s.project, &s.playlist.icons, crate::plugins::fx_key(n, k));

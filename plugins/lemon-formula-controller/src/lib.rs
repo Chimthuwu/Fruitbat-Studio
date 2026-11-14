@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Formula Controller: Lemon Studio's formula controller (a recreation of FL's Fruity Formula Controller) as a
+//! Lemon Formula Controller: Lemon Studio's formula controller (a recreation of the original's Fruity Formula Controller) as a
 //! VST3 / CLAP plugin. Once per tick of the song (1/96 beat) it works out its formula of the knobs a, b and c, the song
 //! position, the tempo and the clock, and puts out the result as one controller value; the sound passes through. The
 //! value leaves as MIDI on channel 0, a pitch bend with the CC 63 after it adding 7 finer bits (21 bits in all), as

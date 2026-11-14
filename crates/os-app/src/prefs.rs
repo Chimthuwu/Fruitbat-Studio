@@ -160,7 +160,7 @@ pub const BACKUP_LOCATION: Combo = Combo {
 };
 
 /// File ▸ Backup: the most autosaves kept per project name; after a backup the oldest beyond it are deleted
-/// (`crate::backup::prune`). Lowering it deletes nothing until the next backup. FL's range was not measured: Lemon
+/// (`crate::backup::prune`). Lowering it deletes nothing until the next backup. the original's range was not measured: Lemon
 /// Studio's is 1 to 999. Spec: ui/settings-choices.md "Backup files".
 pub const BACKUP_MAXIMUM: Number = Number { key: "backup_maximum", label: "Maximum", min: 1, max: 999, default: 100 };
 
@@ -186,7 +186,7 @@ pub const AUTO_ZIP_EMPTY: Check = Check { key: "auto_zip_empty_channels", label:
 /// Spec: ui/settings-choices.md "Miscellaneous: seven more checks, Default template and Startup project".
 pub const MONO_PAINTING: Check = Check { key: "monophonic_painting", label: "Monophonic painting in piano roll", default: false };
 
-/// Project ▸ Playlist: a new project's "Automatic crossfades" (event 44) takes this value, whatever FL's template file
+/// Project ▸ Playlist: a new project's "Automatic crossfades" (event 44) takes this value, whatever the original's template file
 /// holds (`app::default_project`); opening a file keeps the file's. A program setting, on by default. Spec:
 /// ui/settings-choices.md "Project" (the storage table).
 pub const AUTO_CROSSFADES_NEW: Check =
@@ -268,7 +268,7 @@ pub const LIMIT_EDITORS: Check = Check { key: "limit_plugin_editors", label: "Li
 /// naming, detached plugins and startup".
 pub const SHOW_SPLASH: Check = Check { key: "show_startup_splash", label: "Show startup splash screen", default: true };
 
-/// General ▸ Miscellaneous: stored and shown only. Lemon Studio has no startup sound (and does not use FL's); if it ever
+/// General ▸ Miscellaneous: stored and shown only. Lemon Studio has no startup sound (and does not use the original's); if it ever
 /// gets one, this check silences it. Spec: ui/settings-choices.md "Miscellaneous: naming, detached plugins and startup".
 pub const SILENT_STARTUP: Check = Check { key: "silent_startup", label: "Silent startup", default: false };
 
@@ -289,7 +289,7 @@ pub const STARTUP_PROJECT: Combo =
 pub const CLICK_AND_HOLD: Check = Check { key: "click_and_hold_gestures", label: "Click-and-hold gestures", default: false };
 
 /// General ▸ Undo history: the most steps the project's undo history keeps; past it the oldest step goes
-/// (`crate::history`). FL's range was not measured: Lemon Studio's is 1 to 999. Spec: ui/settings-choices.md "Undo
+/// (`crate::history`). the original's range was not measured: Lemon Studio's is 1 to 999. Spec: ui/settings-choices.md "Undo
 /// history: the four checks (2026-10-16)".
 pub const MAX_UNDO_LEVELS: Number = Number { key: "max_undo_levels", label: "Maximum undo levels", min: 1, max: 999, default: 100 };
 
@@ -458,7 +458,7 @@ fn headings(c: &Combo) -> &'static [(usize, &'static str)] {
 }
 
 /// General ▸ Hints and warnings: after a save writes a project file over this size (MB = 1024 × 1024 bytes), an
-/// information message says so (`crate::messages`); "Don't warn me" never warns. FL's choices. Spec:
+/// information message says so (`crate::messages`); "Don't warn me" never warns. the original's choices. Spec:
 /// ui/settings-choices.md "Hints and warnings: Manage messages and Project data size warning (2026-10-16)".
 pub const PROJECT_DATA_SIZE_WARNING: Combo = Combo {
     key: "project_data_size_warning",

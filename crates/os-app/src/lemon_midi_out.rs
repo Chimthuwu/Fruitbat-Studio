@@ -787,7 +787,7 @@ mod tests {
 
         a.save_to(path.clone());
         assert!(a.state.message.as_deref().is_some_and(|m| m.starts_with("Saved")), "{:?}", a.state.message);
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let ch = &saved.channels[row];
         assert_eq!((ch.kind, ch.plugin.as_deref(), ch.plugin_state.as_deref()), (ChannelKind::Plugin, Some(FILE_NAME), Some(state.as_slice())));
 
@@ -800,7 +800,7 @@ mod tests {
         assert!(b.plugins.midi_outs.contains_key(&row) && !b.state.hosted_rows.contains(&row), "{:?}", b.state.message);
         assert_eq!(row_settings(&b.state.project, row), Some(want));
         b.save_to(path.clone());
-        let again = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
+        let again = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&path).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(again.channels[row], saved.channels[row]);
     }
@@ -888,7 +888,7 @@ mod tests {
         let states: Vec<Option<Vec<u8>>> = b.state.project.channels.iter().map(|c| c.plugin_state.clone()).collect();
         b.save_to(second.clone());
         assert!(b.state.message.as_deref().is_some_and(|m| m.starts_with("Saved")), "{:?}", b.state.message);
-        let saved = os_flp::project::load(&os_flp::FlpFile::parse(&std::fs::read(&second).unwrap()).unwrap()).unwrap();
+        let saved = os_project::project::load(&os_project::FlpFile::parse(&std::fs::read(&second).unwrap()).unwrap()).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         let names = ["Kick", "Clap", "Hat", "Snare", "Pluck"];
         assert_eq!(saved.channels.len(), 5);

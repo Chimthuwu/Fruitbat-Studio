@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Peak Controller's settings and editor (a recreation of FL's Fruity Peak Controller): the peak follower's four
+//! Lemon Peak Controller's settings and editor (a recreation of the original's Fruity Peak Controller): the peak follower's four
 //! knobs, the LFO's five and its shape, the Ramp and Mute switches. The plugin itself (`plugins/lemon-peak-controller`)
 //! is not a [`crate::SmallFx`]: it works on the song's ticks and sends its outputs out as MIDI, so it only borrows the
 //! description, the parameters and the editor from here.

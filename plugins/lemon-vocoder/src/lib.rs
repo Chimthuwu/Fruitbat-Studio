@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Vocoder: Lemon Studio's vocoder (a recreation of FL's Vocodex) as a VST3 / CLAP plugin. Stereo in and out,
+//! Lemon Vocoder: Lemon Studio's vocoder (a recreation of the original's Vocodex) as a VST3 / CLAP plugin. Stereo in and out,
 //! with a stereo sidechain input bus. The modulator and the carrier are picked from the main input (the track's own
 //! audio) and the sidechain by the two input settings, as the original picks them from its track and the tracks
 //! sidechained to it: by default the modulator is the main input and the carrier the sidechain.

@@ -3,7 +3,7 @@
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! The channel's levels: how Lemon Studio hands a Lemon instrument the channel's volume and pan, which the instrument
-//! then works into its voices' final levels the way FL's sampler does (spec: audio/voice-levels.md "Final levels"),
+//! then works into its voices' final levels the way the original's sampler does (spec: audio/voice-levels.md "Final levels"),
 //! instead of the engine putting them on the instrument's output.
 //!
 //! Transport: one MIDI SysEx message on the plugin's note port, at the start of the tick the levels apply from, sent
@@ -11,7 +11,7 @@
 //! they arrive exactly. 0x7D is MIDI's manufacturer id for non-commercial use: a plugin that does not know the message
 //! ignores it.
 //!
-//! Spec: `plugins/host-link.md` "Channel levels". This is a Lemon Studio design, not FL's protocol.
+//! Spec: `plugins/host-link.md` "Channel levels". This is a Lemon Studio design, not the original's protocol.
 // spec: plugins/host-link.md
 
 /// Bytes of the message: `F0 7D 4C 01`, the volume and the pan as 5 data bytes each, `F7`.

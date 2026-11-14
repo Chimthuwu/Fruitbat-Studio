@@ -4,22 +4,22 @@
 
 //! Project files of the older generations: FL 10 to FL 24.1, and FL 24.2 betas whose channel blocks have no end event.
 //! [`upgrade`] rewrites such a stream once, when the file is opened, into the current (FL 24.2 and later) layout, so
-//! that [`load`] and [`apply`] see one layout and a save writes the current one, as FL 26 does with every older file
-//! (spec: flp/layouts.md "Converting to the newer layout"). Nothing is written back in the older layout.
+//! that [`load`] and [`apply`] see one layout and a save writes the current one, as version 26 does with every older file
+//! (spec: project/layouts.md "Converting to the newer layout"). Nothing is written back in the older layout.
 //!
-// spec: flp/layouts.md, flp/engine-events.md "A channel", flp/events/channels.md "Version scope",
+// spec: project/layouts.md, flp/engine-events.md "A channel", flp/events/channels.md "Version scope",
 //       flp/events/playlist.md
 
 use std::collections::BTreeMap;
 
 use super::*;
 
-/// Text events: 8-bit text in files up to FL 11, UTF-16 later (spec: flp/coverage.md, flp/engine-events.md
+/// Text events: 8-bit text in files up to FL 11, UTF-16 later (spec: project/coverage.md, flp/engine-events.md
 /// "Events"). Event 199, the version, is 8-bit in every file.
 const TEXT_IDS: [u8; 19] = [192, 193, 194, 195, 196, 197, 198, 200, 201, 202, 203, 204, 205, 206, 207, 230, 231, 239, 241];
 
 /// Events that end the channel section in a file without channel end events: the playlist, the global events after
-/// it and the mixer (spec: flp/engine-events.md "A channel": the last block runs to the first event of the playlist
+/// it and the mixer (spec: project/engine-events.md "A channel": the last block runs to the first event of the playlist
 /// or the mixer).
 const SECTION_END: [u8; 16] = [99, 233, 238, 236, 29, 31, 38, 39, 100, 242, 103, 149, 42, 27, 204, 95];
 
@@ -29,7 +29,7 @@ const TRACK_HEADER: [u8; 5] = [149, 42, 204, 95, 27];
 /// Events that end a track's slot area (routes and the events after them, the parameter records).
 const SLOTS_END: [u8; 8] = [235, 165, 166, 49, 154, 147, 225, 133];
 
-/// Step sequencer dots of the older files: on / off, velocity, shift; the low byte is the step (spec: flp/layouts.md
+/// Step sequencer dots of the older files: on / off, velocity, shift; the low byte is the step (spec: project/layouts.md
 /// "Older files").
 const DOT_ON: u8 = 91;
 const DOT_VELOCITY: u8 = 72;
@@ -38,19 +38,19 @@ const DOT_SHIFT: u8 = 92;
 /// A channel's colour in the older files when it was not chosen (the 0x6A655C of FL 26's resaves with colour flag 0).
 const OLD_CHANNEL_COLOR: u32 = 0x006A_655C;
 
-/// The channel's mixer track before FL 24.2, a signed byte (spec: flp/engine-events.md "A channel").
+/// The channel's mixer track before FL 24.2, a signed byte (spec: project/engine-events.md "A channel").
 const CH_TARGET_OLD: u8 = 22;
 
-/// The mixer's first place before FL 24.2 and from it (spec: flp/layouts.md "Mixer places").
+/// The mixer's first place before FL 24.2 and from it (spec: project/layouts.md "Mixer places").
 const OLD_BASE: u16 = 0x2000;
 const PROJECT_PLACE: u16 = 0x4000;
 
-/// Mixer sizes: 105 tracks in FL 11 and 12 files, 127 later (spec: flp/layouts.md "What differs").
+/// Mixer sizes: 105 tracks in FL 11 and 12 files, 127 later (spec: project/layouts.md "What differs").
 const OLD_MIXER: usize = 105;
 const MIXER: usize = 127;
 
 /// Parameter ids (bytes 4..5 of a mixer record, 8..9 of a link): the send level to track `d`, 0x1F00 + 64 + d before
-/// FL 24.2, 0x2000 + d from it (spec: flp/layouts.md "Parameter ids in an automation link").
+/// FL 24.2, 0x2000 + d from it (spec: project/layouts.md "Parameter ids in an automation link").
 const OLD_SEND: std::ops::RangeInclusive<u16> = 0x1F40..=0x1FBE;
 const SEND: u16 = 0x2000;
 const MIXER_PARAM: u16 = 0x1F00;
@@ -67,7 +67,7 @@ fn saved_by(events: &[Event]) -> (u32, u32) {
 }
 
 /// True when `events` are in an older generation's layout: saved before FL 24.2, or with channel blocks that no event
-/// 51 closes (spec: flp/layouts.md "How to tell the generation").
+/// 51 closes (spec: project/layouts.md "How to tell the generation").
 pub fn is_legacy(events: &[Event]) -> bool {
     saved_by(events) < (24, 2) || (events.iter().any(|e| e.id == id::CH_START) && !events.iter().any(|e| e.id == id::CH_END))
 }
@@ -112,8 +112,8 @@ fn text_to_utf16(ev: &mut [Event]) {
     }
 }
 
-/// The version and the events FL 26 writes after it (159, the build; 169, which FL needs to read more than one clip:
-/// spec: flp/events/project-info.md).
+/// The version and the events version 26 writes after it (159, the build; 169, which FL needs to read more than one clip:
+/// spec: project/events/project-info.md).
 fn set_version(ev: &mut Vec<Event>) {
     let v = Event::new(id::VERSION, Value::var(format!("{COMPAT_VERSION}\0").into_bytes()));
     let at = match ev.iter().position(|e| e.id == id::VERSION) {
@@ -144,7 +144,7 @@ fn set_version(ev: &mut Vec<Event>) {
 /// A step sequencer dot: (pattern, channel, step) → (on, velocity, shift).
 type Dots = BTreeMap<(u16, u16, u8), (bool, Option<u8>, Option<u8>)>;
 
-/// Closes every channel block with event 51 (spec: flp/events/channels.md "Version scope"). A block runs from its event
+/// Closes every channel block with event 51 (spec: project/events/channels.md "Version scope"). A block runs from its event
 /// 64 to the next; the pattern events the older files keep inside it, from its first event 65 on, follow the block
 /// instead, as pattern blocks of the current layout. The block's mixer track moves from event 22 to event 104, and
 /// before FL 24.2 the sample's stretch length (event 215, int 24) from an integer to a single. The step sequencer dots
@@ -222,7 +222,7 @@ fn channel_blocks(ev: &mut Vec<Event>, version: (u32, u32)) -> Dots {
     dots
 }
 
-/// A dot as the note FL 26 writes for it: length 0 on key 60 at `step * PPQ / 4 + trunc(shift * PPQ / 192)` with the
+/// A dot as the note version 26 writes for it: length 0 on key 60 at `step * PPQ / 4 + trunc(shift * PPQ / 192)` with the
 /// dot's velocity (100 without one), flags 0x4000, fine pitch 120, pan 64, mod X and mod Y 128, byte 18 at 64 (spec:
 /// flp/layouts.md "Older files").
 fn dot_note(channel: u16, step: u8, velocity: Option<u8>, shift: Option<u8>, ppq: u16) -> [u8; NOTE_LEN] {
@@ -279,7 +279,7 @@ fn add_dot_notes(ev: &mut Vec<Event>, dots: Dots, ppq: u16) {
 }
 
 /// 3x Osc's channel settings that became its own parameters in FL 21: filter cutoff (2), resonance (3), the pitch
-/// envelope's amount (0x1408) and one more envelope field (0x120B) (spec: flp/layouts.md "Older files").
+/// envelope's amount (0x1408) and one more envelope field (0x120B) (spec: project/layouts.md "Older files").
 const THREE_OSC: [(u16, u16); 4] = [(2, PLUGIN_PARAM + 110), (3, PLUGIN_PARAM + 111), (0x1408, PLUGIN_PARAM + 99), (0x120B, PLUGIN_PARAM + 68)];
 
 /// Automation links and control points on those settings of a 3x Osc channel, rewritten to its parameters as FL 26
@@ -330,14 +330,14 @@ fn three_osc(ev: &mut [Event]) {
 }
 
 /// A playlist track's colour in the older files when it was not chosen (the 0x565148 of FL 26's resaves with colour
-/// flag 0); the current default is 0x2D2C29 (spec: flp/events/playlist.md "Event 238 layout").
+/// flag 0); the current default is 0x2D2C29 (spec: project/events/playlist.md "Event 238 layout").
 const OLD_TRACK_COLOR: u32 = 0x0056_5148;
 
 /// Events that end an arrangement: the globals after the playlist and the mixer.
 const ARRANGEMENT_END: [u8; 14] = [100, 242, 29, 31, 38, 39, 40, 103, 149, 42, 27, 236, 204, 95];
 
 /// The playlist: an arrangement block (99, 241, 36, 233) around it where the file has none, clip records at 88 bytes,
-/// track records at 70 bytes and 500 of them, and the current arrangement (100) (spec: flp/events/playlist.md,
+/// track records at 70 bytes and 500 of them, and the current arrangement (100) (spec: project/events/playlist.md,
 /// flp/layouts.md "Playlist clip records").
 fn playlist(ev: &mut Vec<Event>, version: (u32, u32)) {
     let channels_end = ev.iter().rposition(|e| e.id == id::CH_END).map_or(0, |i| i + 1);
@@ -437,7 +437,7 @@ fn header_start(ev: &[Event], flags: usize) -> usize {
     k
 }
 
-/// The mixer in the current form (spec: flp/layouts.md "Mixer places", "A mixer track's record", "Older files";
+/// The mixer in the current form (spec: project/layouts.md "Mixer places", "A mixer track's record", "Older files";
 /// flp/events/mixer.md).
 fn mixer(ev: &mut Vec<Event>, version: (u32, u32)) {
     let flags: Vec<usize> = ev.iter().enumerate().filter(|(_, e)| e.id == id::MX_FLAGS).map(|(i, _)| i).collect();
@@ -552,7 +552,7 @@ fn mixer(ev: &mut Vec<Event>, version: (u32, u32)) {
         let f = flags[t];
         let mut next = heads.get(t + 1).copied().unwrap_or_else(|| params.unwrap_or(ev.len()));
         let master_like = t == 0 || t + 1 == count;
-        // The record at 12 bytes (spec: flp/layouts.md "A mixer track's record (event 236)").
+        // The record at 12 bytes (spec: project/layouts.md "A mixer track's record (event 236)").
         if let Some(d) = ev[f].data().filter(|d| d.len() < 12) {
             let (out, inp) = track_latency(d, old_latency);
             let mut r = [0u8; 12];

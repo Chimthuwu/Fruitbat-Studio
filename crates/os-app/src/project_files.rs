@@ -104,10 +104,10 @@ fn files_under(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// The files of data folder `dir` the project does not use (`used`: the files it refers to): those in its Samples,
-/// What Save writes: Lemon Studio's own project file (spec: flp/lemon-format.md).
+/// What Save writes: Lemon Studio's own project file (spec: project/lemon-format.md).
 pub const EXT: &str = "lemon";
 
-/// The project files Lemon Studio opens: its own, and the FLPs it migrates from (spec: flp/lemon-format.md).
+/// The project files Lemon Studio opens: its own, and the legacy projects it migrates from (spec: project/lemon-format.md).
 pub const PROJECT_EXTS: [&str; 2] = [EXT, "flp"];
 
 /// Whether `p` is a project file by its extension (`.lemon` or `.flp`).
@@ -115,7 +115,7 @@ pub fn is_project(p: &Path) -> bool {
     p.extension().is_some_and(|e| PROJECT_EXTS.iter().any(|x| e.eq_ignore_ascii_case(x)))
 }
 
-/// Whether `p` is an FLP: Save does not write over it but asks for a `.lemon` name (spec: flp/lemon-format.md
+/// Whether `p` is a legacy project: Save does not write over it but asks for a `.lemon` name (spec: project/lemon-format.md
 /// "Opening and saving").
 pub fn is_flp(p: &Path) -> bool {
     p.extension().is_some_and(|e| e.eq_ignore_ascii_case("flp"))
@@ -428,7 +428,7 @@ mod tests {
         app.pick_new_template("User/Slow");
         assert_eq!((app.state.tempo, app.state.path.clone()), (97.0, None), "an untitled project from the template");
         assert!(!app.unsaved());
-        // A template saved by the original (an FLP) is listed and opens too.
+        // A template saved by the original (a legacy project) is listed and opens too.
         let fl = root.join("User").join("Old");
         std::fs::create_dir_all(&fl).unwrap();
         app.state.tempo = 88.0;

@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use crate::app::App;
 
-/// How many MIDI FX slots a track has (FL Studio's).
+/// How many MIDI FX slots a track has (the original's).
 pub const SLOTS: usize = 8;
 
 /// One MIDI FX slot of a MIDI track: what is in it, and whether it is on.

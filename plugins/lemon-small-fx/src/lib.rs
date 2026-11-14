@@ -423,7 +423,7 @@ mod tests {
     }
 
     /// The factory presets (`crates/os-app/factory-presets/<name>/`, one level of category folders) list every
-    /// parameter by its name, as its step count from the minimum, and hold FL's presets (spec
+    /// parameter by its name, as its step count from the minimum, and hold the original's presets (spec
     /// plugins/factory-presets.md).
     #[test]
     fn factory_presets_list_every_parameter_and_hold_fls_states() {
@@ -466,7 +466,7 @@ mod tests {
             for name in all(spec) {
                 read(spec, &name);
             }
-            // Lemon Chorus starts on the spec's defaults; FL's "Default" preset has LFO 1's wave at 0 (the same shape).
+            // Lemon Chorus starts on the spec's defaults; the original's "Default" preset has LFO 1's wave at 0 (the same shape).
             let mut start = spec.start();
             if spec.name == chorus::SPEC.name {
                 start[os_engine::effects::chorus::WAVE[0]] = 0;
@@ -483,16 +483,16 @@ mod tests {
         assert_eq!(read(chorus::SPEC, "Detune"), [40, 4375, 149, 3229, 0, 781, 587, 0, 1024, 65, 4531, 491]);
         assert_eq!(read(chorus::SPEC, "Ensemble"), [115, 3669, 0, 1458, 0, 0, 0, 0, 0, 0, 1719, 0]);
         assert_eq!(all(chorus::SPEC).len(), 8);
-        // The Stereo Shaper's presets without the difference output (it has no parameter): FL's 21 of 25.
+        // The Stereo Shaper's presets without the difference output (it has no parameter): the original's 21 of 25.
         assert_eq!(read(stereo_shaper::SPEC, "Mixing/LR to MS"), [8076, 8076, -8076, 8076, 0, 0, 1]);
         assert_eq!(read(stereo_shaper::SPEC, "Effects/Stereoize 3"), [0, 12800, 12800, 0, 1408, -2496, 1]);
         assert_eq!(read(stereo_shaper::SPEC, "Effects/Narrow"), [8176, 12800, 12800, 8076, -1952, 0, 0]);
         assert_eq!(all(stereo_shaper::SPEC).len(), 21);
-        // FL's four, Center on in each.
+        // the original's four, Center on in each.
         assert_eq!(read(filter::SPEC, "Party next door"), [160, 1024, 864, 0, 0, 0, 1]);
         assert_eq!(read(filter::SPEC, "Tiny speakers"), [544, 0, 0, 1024, 464, 1, 1]);
         assert_eq!(all(filter::SPEC).len(), 4);
-        // FL's 27 Flanger and 27 Phaser presets. Their Default presets are not what a new instance holds: the Flanger's has
+        // the original's 27 Flanger and 27 Phaser presets. Their Default presets are not what a new instance holds: the Flanger's has
         // the phase at 119 and the feedback at 24 (a new one 118 and 23), the Phaser's is a slower, all-wet sweep.
         for spec in [flanger::SPEC, phaser::SPEC] {
             for name in all(spec) {

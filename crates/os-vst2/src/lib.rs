@@ -892,7 +892,7 @@ impl Plugin {
         Some(saved.to_bytes())
     }
 
-    /// Restores a `save_state` blob, one FL Studio saved, or one Lemon Studio's first saves wrote ([`state`]).
+    /// Restores a `save_state` blob, one the original saved, or one Lemon Studio's first saves wrote ([`state`]).
     pub fn load_state(&mut self, data: &[u8]) -> bool {
         match Saved::parse(data, self.inst.flags() & flags::CHUNKS != 0) {
             Some(Saved::Chunk(mut c)) => {

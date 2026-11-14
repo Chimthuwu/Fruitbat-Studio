@@ -6,6 +6,6 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-os-flp.workspace = true
+os-project.workspace = true
 os-model.workspace = true
 os-engine.workspace = true

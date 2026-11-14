@@ -57,7 +57,7 @@ pub enum NCmd {
 }
 
 /// The sixteen colour groups' note colours, from the Michael Lane Edition's note-colour tab. Group 0 keeps the theme's
-/// ordinary note colour, as FL's does.
+/// ordinary note colour, as the original's does.
 const COLORS: [u32; 16] = [
     0x9fcf8d, 0xdca4b6, 0xc5a7dd, 0xaba8df, 0x95b3dd, 0x8bc8d5, 0x8bd1bb, 0xbed08d, 0xd4cb88, 0xd8b080, 0xd99b88,
     0xd99b9d, 0xc5aaba, 0xb2b5c6, 0x9bbeb7, 0xc8c5a0,
@@ -684,7 +684,7 @@ mod tests {
         assert_eq!(spans(&g), vec![(0, 48, 60), (60, 10, 60), (48, 10, 62)]);
     }
 
-    /// Ctrl+L as FL 26 does it (spec: ui/piano-keys.md §2 "Editing"): slide notes stay and are no next start; the
+    /// Ctrl+L as version 26 does it (spec: ui/piano-keys.md §2 "Editing"): slide notes stay and are no next start; the
     /// last notes last until the pattern's end.
     #[test]
     fn legato_skips_slides_and_ends_at_the_pattern_end() {

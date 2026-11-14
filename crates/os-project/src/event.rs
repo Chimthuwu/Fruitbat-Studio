@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-// spec: flp/container.md (Events; Exceptions to the range rule; Variable-length prefix)
+// spec: project/container.md (Events; Exceptions to the range rule; Variable-length prefix)
 // Kind labels agree with flp/coverage.md.
 
 use std::fmt;

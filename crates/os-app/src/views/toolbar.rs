@@ -711,7 +711,7 @@ fn cpu(ui: &mut Ui, c: &Ctx) {
 }
 
 /// Utility buttons: "left / right" hints, right clicks in `App::toolbar_right` (spec: ui/toolbar-buttons.md §2).
-/// FL's last one, the content library's download, is left out (spec: ui/main-window.md §2).
+/// the original's last one, the content library's download, is left out (spec: ui/main-window.md §2).
 fn utilities(ui: &mut Ui, c: &Ctx) -> bool {
     let (a, s) = (c.a, c.s);
     let utils = [
@@ -986,7 +986,7 @@ fn window_buttons(ui: &mut Ui, c: &Ctx, which: Range<usize>) -> bool {
         (Icon::Plug, Action::PickerOpen, "Plugin palette (F8)"),
         (Icon::Kick, Action::ToggleWin(Win::Tapper), "Tap tempo (Ctrl+F5)"),
         (Icon::Touch, Action::ToggleWin(Win::Touch), "Touch controller (Alt+F7)"),
-        // FL's store button is hidden: its stand-in, a repository of free and open-source plugins (spec:
+        // the original's store button is hidden: its stand-in, a repository of free and open-source plugins (spec:
         // ui/main-window.md §3), had the plugin picker's icon. It is to come back with a shop icon.
     ];
     for (i, (icon, action, hint)) in wins.into_iter().enumerate().filter(|(i, _)| which.contains(i)) {
@@ -998,7 +998,7 @@ fn window_buttons(ui: &mut Ui, c: &Ctx, which: Range<usize>) -> bool {
         let ink = super::tool_face(ui, r, if hov { super::Look::Hot } else { super::Look::Off });
         icons::draw(ui.c, icon, Rect::new(r.x + 5.0, r.y + 6.5, 20.0, 20.0), ink);
     }
-    // FL's news panel (x 1304..1470, with its separator) is left out: it suggested an online service Lemon Studio
+    // the original's news panel (x 1304..1470, with its separator) is left out: it suggested an online service Lemon Studio
     // does not have. A tips panel may take its place (spec: ui/main-window.md §3).
     true
 }

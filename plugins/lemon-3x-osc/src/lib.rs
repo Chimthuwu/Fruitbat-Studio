@@ -84,7 +84,7 @@ impl Shared {
     }
 }
 
-/// Seconds in a tick at `tempo` BPM: the plugin is not told the project's PPQ and takes FL's default of 96.
+/// Seconds in a tick at `tempo` BPM: the plugin is not told the project's PPQ and takes the original's default of 96.
 pub fn tick_seconds(tempo: f64) -> f64 {
     60.0 / (tempo.max(1.0) * 96.0)
 }

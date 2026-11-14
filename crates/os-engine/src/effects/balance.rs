@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Lemon Studio's balance (a recreation of FL's Fruity Balance mixer effect), configured from its saved state.
+//! Lemon Studio's balance (a recreation of the original's Fruity Balance mixer effect), configured from its saved state.
 //!
 //! Two knobs, balance and volume, make a two-by-two gain matrix: turning the balance to one side attenuates the other
 //! side and folds what it loses into the favoured output, so hard left or right carries the sum of both inputs. The
@@ -223,7 +223,7 @@ mod tests {
         let wild = Settings { v: [-300, 400] };
         assert_eq!(Settings::from_state(&wild.to_state()), Some(wild));
         assert_eq!(Settings::from_state(&[0, 0, 0, 0]), None);
-        // FL's render of balance -300, volume 400: the matrix fitted to it is LL 3.62603, RL 10.02686, RR -6.40084.
+        // the original's render of balance -300, volume 400: the matrix fitted to it is LL 3.62603, RL 10.02686, RR -6.40084.
         let [ll, rr, rl, lr] = gains(-300, 400);
         assert!((ll - 3.62603).abs() < 1e-5 && (rl - 10.02686).abs() < 1e-5 && (rr + 6.40084).abs() < 1e-5);
         assert_eq!(lr, 0.0);
@@ -250,7 +250,7 @@ mod tests {
 
     #[test]
     fn centred_at_unity_and_hard_sides_carry_the_sum() {
-        // Centre: the nearest doubles to sin and cos(pi / 4) differ by one unit, so LR is -2^-52 (as in FL's render).
+        // Centre: the nearest doubles to sin and cos(pi / 4) differ by one unit, so LR is -2^-52 (as in the original's render).
         assert_eq!(gains(0, 256), [1.0, 1.0, 0.0, -(2f32.powi(-52))]);
         assert_eq!(gains(0, 0), [0.0, 0.0, 0.0, 0.0]);
         // Hard left: RR = 0, left' = LL * (left + right), LL at 0.7071 of its centre value.

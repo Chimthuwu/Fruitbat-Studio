@@ -196,7 +196,7 @@ pub struct MiscVals {
 }
 
 impl Default for MiscVals {
-    /// A new channel (measured on FL's default Sampler channel).
+    /// A new channel (measured on the original's default Sampler channel).
     fn default() -> Self {
         let mut v = [0.0; M::COUNT];
         for m in M::ALL {
@@ -277,7 +277,7 @@ pub fn range_of(m: M) -> (f32, f32) {
     }
 }
 
-/// Note name ("C5", "F#4"): FL's naming, C5 = MIDI 60, as the settings choose it (`crate::note_names`).
+/// Note name ("C5", "F#4"): the original's naming, C5 = MIDI 60, as the settings choose it (`crate::note_names`).
 pub fn note_name(key: i32) -> String {
     crate::note_names::note_name(key)
 }
@@ -668,7 +668,7 @@ fn state_of(ui: &MiscUi, v: &MiscVals, h: Hit) -> KS {
     KS::hover(ui.hover == Some(h) && !off).with_disabled(off)
 }
 
-/// A highlight colour of the page: FL's orange accent and the root key's blues. The Lemon design draws them in its
+/// A highlight colour of the page: the original's orange accent and the root key's blues. The Lemon design draws them in its
 /// yellow (through the theme), as Lemon Sampler's pages do.
 fn hi(t: &Palette, hex: u32) -> Color {
     if !t.style.lemon() {
@@ -736,7 +736,7 @@ pub fn paint(c: &mut Canvas, t: &Palette, ax: f32, ay: f32, v: &MiscVals, ui: &M
         let ring_col = if off { accent.mix(t.s(0x222525), 0.45) } else { accent };
         let st = state_of(ui, v, Hit::Value(mm));
         inst::dial(c, t, x, y, r, ring, v.get(mm), bipolar, ring_col, st);
-        // The Classic kit dial colours its dot from the accent; FL's Misc dots have their own colours. The Lemon dial
+        // The Classic kit dial colours its dot from the accent; the original's Misc dots have their own colours. The Lemon dial
         // has a pointer line and no dot.
         if !t.style.lemon() && !st.disabled {
             let a = inst::dial_angle(v.get(mm), bipolar);
@@ -899,7 +899,7 @@ fn headers(c: &mut Canvas, t: &Palette, v: &MiscVals, ui: &MiscUi) {
     c.text(tf, 338.0 + dx(), ty2, title_col, "Echo delay / fat mode");
 }
 
-/// FL's number box: a rounded grey block, brightest across its middle, with the value right-aligned (or `---`) and
+/// the original's number box: a rounded grey block, brightest across its middle, with the value right-aligned (or `---`) and
 /// small up / down arrows at its right edge; a disabled box has a faint value. The Lemon design draws it as a field
 /// (Lemon Sampler's list boxes).
 fn spin_box(c: &mut Canvas, t: &Palette, r: Rect, text: Option<&str>, st: KS) {
@@ -945,7 +945,7 @@ fn spin_box(c: &mut Canvas, t: &Palette, r: Rect, text: Option<&str>, st: KS) {
     }
 }
 
-/// FL's dark push button (Cut self, Reset); the Lemon design's is Lemon Sampler's (`inst::text_button`).
+/// the original's dark push button (Cut self, Reset); the Lemon design's is Lemon Sampler's (`inst::text_button`).
 fn dark_button(c: &mut Canvas, t: &Palette, r: Rect, s: &str, st: KS) {
     if t.style.lemon() {
         inst::text_button(c, r, s, st);

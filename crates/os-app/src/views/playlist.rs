@@ -562,7 +562,7 @@ fn markers_paint(ui: &mut Ui, s: &State, g: &PGeom, lane: Rect) {
     ui.c.pop_clip();
 }
 
-/// A time marker's action icon (§7a "Look"), Lemon Studio's own drawing at FL's measured sizes: light grey, the
+/// A time marker's action icon (§7a "Look"), Lemon Studio's own drawing at the original's measured sizes: light grey, the
 /// recording markers' dot red; none for a plain marker. `x` is the marker's place, `cy` the middle of its tab.
 fn marker_glyph(ui: &mut Ui, kind: u8, x: f32, cy: f32) {
     let grey = ui.t.s(0xa8abae);
@@ -1436,7 +1436,7 @@ pub fn paint_overlays(ui: &mut Ui, s: &State) {
     }
 }
 
-// Row heights follow the display scale like FL's popup menus (spec: ui/ui-scaling.md §2).
+// Row heights follow the display scale like the original's popup menus (spec: ui/ui-scaling.md §2).
 fn item_h(m: &os_ui::kit::menu::Metrics, it: &pl::PItem) -> f32 {
     if it.col { 0.0 } else if it.sep { m.sep } else if it.head { m.head } else { m.row }
 }
