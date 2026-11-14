@@ -138,6 +138,8 @@ pub fn target_for(owner: OwnerLocator, key: ParameterKey, native_ids: Option<&[u
     };
     match key {
         ParameterKey::HostParameterCode(c) => Some((mk(c), ParamResolution::Unique(0))),
+        // A route into the graph is not a device parameter: `resolve_path` handles it before asking the registry.
+        ParameterKey::ModulatorParam(..) => None,
         ParameterKey::LegacyPluginIndex(i) => {
             let lower = plugin_lower(i)?;
             Some((mk(lower), ParamResolution::Unique(i)))
@@ -157,6 +159,12 @@ pub fn target_for(owner: OwnerLocator, key: ParameterKey, native_ids: Option<&[u
 
 /// Resolves a persisted [`ParameterPath`] against the current project and plugin metadata.
 pub fn resolve_path(s: &State, plugins: &Plugins, path: ParameterPath) -> Option<(u32, ParamResolution)> {
+    // A route into the graph names a modulator, not a device: it needs no registry (a modulator never moves) and
+    // resolves only while that modulator is still there.
+    if let ParameterKey::ModulatorParam(id, param) = path.parameter {
+        s.modulation.get(id)?;
+        return Some((target::modulator_param(id.0, param.code()), ParamResolution::Unique(0)));
+    }
     let owner = s.identity.owners.get(&path.owner).copied()?;
     let native_ids = hosted_native_ids(plugins, owner);
     target_for(owner, path.parameter, native_ids.as_deref())
@@ -204,6 +212,13 @@ pub fn target_path(s: &mut State, target: u32) -> Option<ParameterPath> {
 /// label; the engine's own resolution (`engine_spec`) stays the authority on whether a routing reaches audio.
 pub fn path_label(s: &State, path: ParameterPath) -> String {
     use os_model::modulation::ParameterKey;
+    // A route into the graph names a modulator, which the graph itself still holds (or does not).
+    if let Some((id, param)) = path.modulator() {
+        return match s.modulation.get(id) {
+            Some(m) => format!("{} - {}", name_of(m), param.label()),
+            None => "Missing parameter".into(),
+        };
+    }
     let Some(loc) = s.identity.owners.get(&path.owner).copied() else { return "Missing parameter".into() };
     let key = match loc {
         OwnerLocator::Channel(ch) => Some(usize::from(ch)),
@@ -216,7 +231,7 @@ pub fn path_label(s: &State, path: ParameterPath) -> String {
         match path.parameter {
             ParameterKey::LegacyPluginIndex(i) => l.params.get(usize::from(i)),
             ParameterKey::PluginNativeId(native) => l.params.iter().find(|e| e.id == native),
-            ParameterKey::HostParameterCode(_) => None,
+            ParameterKey::HostParameterCode(_) | ParameterKey::ModulatorParam(..) => None,
         }
         .map(|e| e.name.clone())
     });
@@ -1675,6 +1690,32 @@ mod tests {
         let (t, res) = target_for(OwnerLocator::Member(2, 0, 1), ParameterKey::PluginNativeId(50), Some(&[50, 60])).unwrap();
         assert_eq!(t, target::slot_param(2, 0, target::member_item(1, 0).unwrap()));
         assert_eq!(res, ParamResolution::Unique(0));
+    }
+
+    /// A route into the graph resolves from the graph itself (no device identity) and reaches the engine as the
+    /// graph's own edge, so the engine can apply it while it evaluates.
+    #[test]
+    fn a_route_reaches_the_engine_as_the_graphs_own_edge() {
+        let mut app = crate::app::App::new(None);
+        let a = app.state.modulation.add(ModSource::default());
+        let b = app.state.modulation.add(ModSource::default());
+        assert!(app.state.modulation.route(a, b, os_model::modulation::ModParam::Amount, 0.5));
+        let path = app.state.modulation.get(a).and_then(|m| m.targets.first()).map(|t| t.path).expect("the route");
+        let (t, _) = resolve_path(&app.state, &app.plugins, path).expect("a route needs no device");
+        assert_eq!(
+            target::decode(t),
+            target::Target::ModulatorParam(b.0, os_model::modulation::ModParam::Amount.code())
+        );
+        assert!(!unresolved(&app.state, &app.plugins).iter().any(|(_, p)| *p == path), "and it is not missing");
+        let label = path_label(&app.state, path);
+        assert!(label.ends_with(" - Amount"), "the row names the route: {label}");
+        let (spec, _) = engine_spec(&app.state, &app.plugins);
+        let driver = spec.iter().find(|m| m.id == a.0).expect("the driver is in the spec");
+        assert!(
+            driver.targets.iter().any(|t| matches!(t.target, target::Target::ModulatorParam(..))),
+            "the engine gets the edge: {:?}",
+            driver.targets
+        );
     }
 
     /// A stopped project with a modulator repaints the modulator strip from `tick` alone: its plot is a live sample,

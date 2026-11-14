@@ -1903,7 +1903,9 @@ impl Engine {
                 self.route_channel(usize::from(c), usize::from(os_model::target::mixer_track_of(v, last as u16)));
             }
             Target::ChannelOn(c) => self.switch_channel(usize::from(c), os_model::target::channel_on(v)),
-            Target::ChannelParam(..) | Target::SlotParam(..) | Target::Other(_) => {}
+            // A modulator's own parameter is driven inside the modulation graph (`Modulation::evaluate`), never
+            // through the automation path.
+            Target::ChannelParam(..) | Target::SlotParam(..) | Target::ModulatorParam(..) | Target::Other(_) => {}
         }
     }
 

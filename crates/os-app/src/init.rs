@@ -208,6 +208,15 @@ pub fn name(s: &State, t: u32) -> String {
             (None, Target::SlotParam(m, k, i)) => format!("{} - Slot {} - Parameter {}", mix(m), k + 1, i + 1),
             (None, _) => format!("{} - Parameter {}", channel((t >> 16) as u16), (t & 0x7FFF) + 1),
         },
+        // A modulator's own parameter: named after the modulator the graph holds, so a route into the graph reads as
+        // "LFO 2 - Rate".
+        Target::ModulatorParam(id, code) => {
+            let which = os_model::modulation::ModParam::of(code).map_or("parameter", |p| p.label());
+            match s.modulation.get(os_model::modulation::ModulatorId(id)) {
+                Some(m) => format!("{} - {which}", crate::modulation::name_of(m)),
+                None => format!("Modulator {id} - {which}"),
+            }
+        }
         Target::Other(_) => format!("Control {:#06X} at {:#06X}", t & 0xFFFF, t >> 16),
     }
 }

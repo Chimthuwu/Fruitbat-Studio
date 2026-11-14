@@ -63,6 +63,76 @@ pub enum ParameterKey {
     /// so on. Reuses the current channel/mixer parameter conventions; we must not invent a second
     /// set of host volume/pan/EQ/send identifiers.
     HostParameterCode(u16),
+    /// A modulator's own parameter, for a route *into* the modulation graph ([`ModParam`], [`ModGraph::route`]). The
+    /// path's owner is unused ([`PERSISTENT_NONE`]): a modulator is not a device and never moves, so its id is the
+    /// whole identity.
+    ModulatorParam(ModulatorId, ModParam),
+}
+
+/// A parameter of a modulator that another modulator can drive (the handoff's modulator-to-modulator routing).
+///
+/// Each one is a fraction of the source's own setting, exactly like a device parameter's normalized value, so a route
+/// keeps its depth and curve whichever source ends up on either end. Not every source has every parameter:
+/// [`ModParam::applies_to`] says which, and [`ModGraph::route`] refuses a route to one it does not have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ModParam {
+    /// How fast it cycles: an LFO's hertz, a random source's rate, a step sequence's step length.
+    Rate,
+    /// The source's own output gain.
+    Amount,
+    /// An LFO's start position in its cycle.
+    Phase,
+    /// An LFO's constant shift added to its output.
+    Offset,
+}
+
+impl ModParam {
+    /// Every parameter, in menu order.
+    pub const ALL: [ModParam; 4] = [ModParam::Rate, ModParam::Amount, ModParam::Phase, ModParam::Offset];
+
+    /// The byte a `.lemon` file stores for it.
+    pub fn code(self) -> u8 {
+        match self {
+            ModParam::Rate => 0,
+            ModParam::Amount => 1,
+            ModParam::Phase => 2,
+            ModParam::Offset => 3,
+        }
+    }
+
+    /// The parameter [`ModParam::code`] writes (`None` for a byte this version does not know).
+    pub fn of(code: u8) -> Option<ModParam> {
+        Some(match code {
+            0 => ModParam::Rate,
+            1 => ModParam::Amount,
+            2 => ModParam::Phase,
+            3 => ModParam::Offset,
+            _ => return None,
+        })
+    }
+
+    /// Its name in the interface.
+    pub fn label(self) -> &'static str {
+        match self {
+            ModParam::Rate => "Rate",
+            ModParam::Amount => "Amount",
+            ModParam::Phase => "Phase",
+            ModParam::Offset => "Offset",
+        }
+    }
+
+    /// Whether `source` has this parameter at all. A step sequence has a rate but no amount, phase or offset; a
+    /// one-shot envelope has none of the four (it follows the transport, not a period).
+    pub fn applies_to(self, source: &ModSource) -> bool {
+        match (self, source) {
+            (_, ModSource::Envelope(_)) => false,
+            (ModParam::Rate, _) => true,
+            (ModParam::Amount, ModSource::Steps(_)) => false,
+            (ModParam::Amount, _) => true,
+            (ModParam::Phase | ModParam::Offset, ModSource::Lfo(_)) => true,
+            (ModParam::Phase | ModParam::Offset, _) => false,
+        }
+    }
 }
 
 /// A persistent, project-wide parameter identity. This is what the modulation graph stores for each
@@ -71,6 +141,24 @@ pub enum ParameterKey {
 pub struct ParameterPath {
     pub owner: PersistentObjectId,
     pub parameter: ParameterKey,
+}
+
+impl ParameterPath {
+    /// The path to a parameter of modulator `id` (an edge inside the graph rather than a device parameter).
+    ///
+    /// The modulator is its own owner, so nothing here depends on the identity registry: a route into the graph cannot
+    /// be lost by a device move, and it cannot outlive the modulator it names ([`ModGraph::remove`] strips it).
+    pub fn on_modulator(id: ModulatorId, param: ModParam) -> ParameterPath {
+        ParameterPath { owner: PERSISTENT_NONE, parameter: ParameterKey::ModulatorParam(id, param) }
+    }
+
+    /// The modulator and its parameter this path names, if it is a route inside the graph.
+    pub fn modulator(&self) -> Option<(ModulatorId, ModParam)> {
+        match self.parameter {
+            ParameterKey::ModulatorParam(id, param) => Some((id, param)),
+            _ => None,
+        }
+    }
 }
 
 /// The result of mapping a parameter identity against the *current* plugin parameter metadata.
@@ -551,9 +639,105 @@ impl ModGraph {
     }
 
     /// Takes a modulator out (and its assignments with it). Ids are never reused, so `next` stays where it is.
+    ///
+    /// Every route *into* it goes too: a target naming a modulator that is gone would be an edge to nothing, and it
+    /// would keep the graph from being a DAG (the id is never minted again, so nothing could ever reach it).
     pub fn remove(&mut self, id: ModulatorId) -> Option<Modulator> {
         let at = self.modulators.iter().position(|m| m.id == id)?;
+        self.drop_routes_to(id);
         Some(self.modulators.remove(at))
+    }
+
+    /// Every assignment anywhere in the graph that drives modulator `gone` (or any modulator it names).
+    fn drop_routes_to(&mut self, gone: ModulatorId) {
+        for m in &mut self.modulators {
+            m.targets.retain(|t| !matches!(t.path.modulator(), Some((to, _)) if to == gone));
+        }
+    }
+
+    /// Routes modulator `from` into parameter `param` of modulator `to` at `depth`: the handoff's
+    /// modulator-to-modulator assignment.
+    ///
+    /// `false` and no change for: an unknown modulator at either end, a parameter `to`'s source does not have
+    /// ([`ModParam::applies_to`]), `from` driving itself, and any route that would close a loop (see
+    /// [`ModGraph::reaches`]). A modulator already driving that parameter is not changed either — one assignment per
+    /// parameter per modulator, as for a device parameter.
+    pub fn route(&mut self, from: ModulatorId, to: ModulatorId, param: ModParam, depth: f32) -> bool {
+        let Some(destination) = self.get(to) else { return false };
+        if self.get(from).is_none() || !param.applies_to(&destination.source) {
+            return false;
+        }
+        if from == to || self.reaches(to, from) {
+            return false;
+        }
+        self.assign(from, ModTarget::new(ParameterPath::on_modulator(to, param)).with_depth(depth))
+    }
+
+    /// Stops modulator `from` driving parameter `param` of modulator `to`.
+    pub fn unroute(&mut self, from: ModulatorId, to: ModulatorId, param: ModParam) -> bool {
+        self.unassign(from, ParameterPath::on_modulator(to, param))
+    }
+
+    /// Whether modulator `to` sits downstream of modulator `from`: some chain of routes runs from `from` to `to`. A new
+    /// route from `to` back into `from` (or up its own chain) would close a loop, which is what [`ModGraph::route`]
+    /// refuses. A modulator does not count as downstream of itself.
+    pub fn reaches(&self, from: ModulatorId, to: ModulatorId) -> bool {
+        if from == to {
+            return false;
+        }
+        let mut stack = vec![from];
+        let mut seen: Vec<ModulatorId> = Vec::new();
+        while let Some(x) = stack.pop() {
+            if seen.contains(&x) {
+                continue;
+            }
+            seen.push(x);
+            let Some(m) = self.get(x) else { continue };
+            for t in &m.targets {
+                let Some((down, _)) = t.path.modulator() else { continue };
+                if down == to {
+                    return true;
+                }
+                stack.push(down);
+            }
+        }
+        false
+    }
+
+    /// Every modulator in an order where each one comes after everything that drives it, so one evaluation pass gives
+    /// every modulator its driven value (the engine's [`ModGraph::evaluation_order`] is how it runs the graph).
+    ///
+    /// Modulators with nothing driving them keep graph order. [`ModGraph::route`] refuses loops, so a well-formed
+    /// graph is fully ordered; a modulator left over (a graph edited by hand, or data from a later version) is put at
+    /// the end rather than dropped, so nothing ever stops being evaluated.
+    pub fn evaluation_order(&self) -> Vec<ModulatorId> {
+        let mut order: Vec<ModulatorId> = Vec::with_capacity(self.modulators.len());
+        loop {
+            let mut progressed = false;
+            for m in &self.modulators {
+                if order.contains(&m.id) {
+                    continue;
+                }
+                let driven = self.modulators.iter().any(|o| {
+                    o.id != m.id
+                        && !order.contains(&o.id)
+                        && o.targets.iter().any(|t| matches!(t.path.modulator(), Some((down, _)) if down == m.id))
+                });
+                if !driven {
+                    order.push(m.id);
+                    progressed = true;
+                }
+            }
+            if !progressed {
+                break;
+            }
+        }
+        for m in &self.modulators {
+            if !order.contains(&m.id) {
+                order.push(m.id);
+            }
+        }
+        order
     }
 
     /// Assigns `target` to modulator `id`: `false` for an unknown modulator, or when it already drives that
@@ -889,5 +1073,60 @@ mod tests {
         assert_eq!(ModTarget::new(path).with_depth(f32::NAN).depth, 0.0);
         assert!(!g.assign(ModulatorId(99), ModTarget::new(path)), "an unknown modulator takes no assignment");
         assert!(!g.unassign(ModulatorId(99), path));
+    }
+
+    /// Modulator-to-modulator routing: a route is an ordinary assignment to another modulator's own parameter, and the
+    /// graph refuses the two shapes that cannot be evaluated — a modulator driving itself, and any route that would
+    /// close a loop.
+    #[test]
+    fn routes_into_the_graph_refuse_self_drives_and_loops() {
+        let mut g = ModGraph::default();
+        let a = g.add(ModSource::Lfo(Lfo::default()));
+        let b = g.add(ModSource::Lfo(Lfo::default()));
+        let c = g.add(ModSource::Lfo(Lfo::default()));
+        assert!(g.route(a, b, ModParam::Rate, 0.5), "a drives b's rate");
+        assert!(g.route(b, c, ModParam::Amount, -0.5), "b drives c's amount");
+        assert_eq!(g.get(a).unwrap().targets[0].path, ParameterPath::on_modulator(b, ModParam::Rate));
+        assert!(!g.route(c, a, ModParam::Rate, 0.5), "c back into a would close a loop");
+        assert!(!g.route(b, a, ModParam::Phase, 0.5), "and a loop is refused whichever parameter names it");
+        assert!(!g.route(a, a, ModParam::Rate, 0.5), "a modulator cannot drive itself");
+        assert!(!g.route(a, b, ModParam::Rate, 0.9), "one assignment per parameter per modulator");
+        assert!(g.route(a, b, ModParam::Offset, 0.5), "but another of its parameters is its own route");
+        assert_eq!(g.get(a).unwrap().targets.len(), 2, "a's rate and offset routes to b");
+        assert!(g.reaches(a, c) && !g.reaches(c, a), "downstream runs one way");
+        assert!(g.reaches(b, c) && !g.reaches(c, b));
+        // A source that has no such parameter takes no route to it.
+        let steps = g.add(ModSource::Steps(Steps::default()));
+        assert!(!g.route(a, steps, ModParam::Phase, 0.5), "a step sequence has no phase");
+        assert!(g.route(a, steps, ModParam::Rate, 0.5), "but it has a rate");
+        let envelope = g.add(ModSource::Envelope(Envelope::default()));
+        assert!(!g.route(a, envelope, ModParam::Rate, 0.5), "a one-shot envelope follows the transport, not a rate");
+    }
+
+    /// The evaluation order puts everything after what drives it, even when the driven modulator was created first;
+    /// removing a modulator takes the routes on both its sides with it.
+    #[test]
+    fn the_evaluation_order_follows_the_routes_and_removal_prunes_them() {
+        let mut g = ModGraph::default();
+        let driven = g.add(ModSource::Lfo(Lfo::default()));
+        let driver = g.add(ModSource::Lfo(Lfo::default()));
+        assert!(driver.0 > driven.0, "the driven modulator is the older one");
+        assert!(g.route(driver, driven, ModParam::Rate, 1.0));
+        assert_eq!(g.evaluation_order(), vec![driver, driven], "the driver comes first, not the older one");
+        assert!(g.remove(driver).is_some());
+        assert!(g.get(driven).unwrap().targets.is_empty(), "the route into it went with the driver");
+    }
+
+    /// A route is addressed in the engine's own space, in the range no legacy project target uses, and its path names
+    /// the modulator rather than a device.
+    #[test]
+    fn a_route_is_addressed_and_named_by_the_modulator() {
+        let t = target::modulator_param(7, ModParam::Phase.code());
+        assert_eq!(target::decode(t), target::Target::ModulatorParam(7, ModParam::Phase.code()));
+        assert_eq!(t >> 16, 0x6002, "the modulator parameter's own range, above the project's constants");
+        let path = ParameterPath::on_modulator(ModulatorId(7), ModParam::Phase);
+        assert_eq!(path.modulator(), Some((ModulatorId(7), ModParam::Phase)));
+        assert_eq!(path.owner, PERSISTENT_NONE, "a modulator is its own owner");
+        assert_eq!(track_path(0x0100).modulator(), None, "a device parameter is not a route");
     }
 }

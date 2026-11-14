@@ -466,6 +466,9 @@ fn project_rows(s: &State, root: &str, cat: u8, out: &mut Vec<Row>) {
                             os_model::modulation::ParameterKey::LegacyPluginIndex(i) => u32::from(i),
                             os_model::modulation::ParameterKey::PluginNativeId(n) => n,
                             os_model::modulation::ParameterKey::HostParameterCode(c) => u32::from(c),
+                            // A route into the graph: numbered by the modulator and its parameter, so two of them on
+                            // one modulator keep apart.
+                            os_model::modulation::ParameterKey::ModulatorParam(id, param) => id.0 << 8 | u32::from(param.code()),
                         };
                         out.push(Row {
                             key: format!("{gkey}/{}/{pk}", t.path.owner.0),

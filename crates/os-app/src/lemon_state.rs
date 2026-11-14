@@ -264,6 +264,11 @@ fn write_graph(g: &ModGraph) -> Vec<u8> {
                     b.push(HOST_CODE);
                     b.extend_from_slice(&c.to_le_bytes());
                 }
+                ParameterKey::ModulatorParam(id, param) => {
+                    b.push(MOD_PARAM);
+                    b.extend_from_slice(&id.0.to_le_bytes());
+                    b.push(param.code());
+                }
             }
             b.extend_from_slice(&t.depth.to_le_bytes());
             b.push(curve_code(t.curve));
@@ -292,6 +297,9 @@ const SYNC: u8 = 1;
 const NATIVE_ID: u8 = 0;
 const LEGACY_INDEX: u8 = 1;
 const HOST_CODE: u8 = 2;
+/// A route into the modulation graph (a modulator driving another's parameter). Only this version writes it; a reader
+/// that does not know it stops the graph there rather than misreading the bytes.
+const MOD_PARAM: u8 = 3;
 
 fn lfo_code(s: LfoShape) -> u8 {
     match s {
@@ -477,6 +485,7 @@ fn read_target(r: &mut Reader, layout: u8) -> Option<ModTarget> {
         NATIVE_ID => ParameterKey::PluginNativeId(r.u32()?),
         LEGACY_INDEX => ParameterKey::LegacyPluginIndex(r.u16()?),
         HOST_CODE => ParameterKey::HostParameterCode(r.u16()?),
+        MOD_PARAM => ParameterKey::ModulatorParam(ModulatorId(r.u32()?), os_model::modulation::ModParam::of(r.u8()?)?),
         _ => return None,
     };
     let depth = r.f32()?;
@@ -1542,6 +1551,23 @@ mod modulation_graph_tests {
 
     /// A layout-1 payload (before project slots, source amount/offset and per-routing enable) still loads: its
     /// modulators take slots by creation order, every routing is on, and the LFO gets the old defaults.
+    /// A route into the graph (one modulator driving another's parameter) is stored with the graph and read back
+    /// exactly: it is the graph's own edge, never a legacy project target.
+    #[test]
+    fn a_route_into_the_graph_round_trips() {
+        let mut g = ModGraph::default();
+        let a = g.add(ModSource::default());
+        let b = g.add(ModSource::default());
+        assert!(g.route(a, b, os_model::modulation::ModParam::Rate, 0.75));
+        let bytes = write_graph(&g);
+        let back = read_graph(&bytes).expect("a route reads back");
+        assert_eq!(back, g);
+        assert_eq!(
+            back.get(a).and_then(|m| m.targets.first()).and_then(|t| t.path.modulator()),
+            Some((b, os_model::modulation::ModParam::Rate))
+        );
+    }
+
     #[test]
     fn a_layout_one_graph_still_loads() {
         // A payload written by layout 1: no slot byte, and the LFO without amount, offset or polarity.

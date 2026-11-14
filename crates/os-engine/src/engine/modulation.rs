@@ -27,7 +27,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use os_model::modulation::{AudioFollower, Curve, Detection, Distribution, Envelope, Lfo, LfoShape, ModSource, Polarity, Random, Steps, Timebase};
+use os_model::modulation::{AudioFollower, Curve, Detection, Distribution, Envelope, Lfo, LfoShape, ModParam, ModSource, Polarity, Random, Steps, Timebase};
 use os_model::target::Target;
 
 use super::param_auto::{ParamAuto, PARAM_STEP};
@@ -200,8 +200,32 @@ pub(super) struct Modulation {
     last: Vec<(Target, f64, f64)>,
     /// The audio followers in the graph, by modulator id (rebuilt when the graph is installed).
     followers: Vec<Follower>,
+    /// The routes inside the graph (a modulator driving another's rate, amount, phase or offset), as indices into
+    /// `modulators`. Rebuilt when the graph is installed, never while it runs.
+    edges: Vec<Edge>,
+    /// The modulators in dependency order, by index: each comes after everything that drives it, so one pass gives
+    /// every modulator its driven value. Rebuilt when the graph is installed.
+    order: Vec<u32>,
+    /// Each modulator's `0..=1` output this evaluation, indexed like `modulators`. Reused every tick.
+    outputs: Vec<f32>,
+    /// Scratch so a tick never allocates: the offsets a parameter's drivers add up to, and the mixer path's.
+    by: Vec<(Target, f64)>,
+    host_by: Vec<(usize, HostParam, Target, f64)>,
     /// The live values the UI reads.
     pub(super) snapshot: Option<Arc<ModSnapshot>>,
+}
+
+/// One route inside the graph: modulator `from` drives parameter `param` of modulator `to` (indices into the graph's
+/// modulators), at `depth`, through its own `curve` and `polarity`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Edge {
+    from: u32,
+    to: u32,
+    param: ModParam,
+    depth: f32,
+    curve: Curve,
+    polarity: Polarity,
+    enabled: bool,
 }
 
 impl Modulation {
@@ -215,8 +239,24 @@ impl Modulation {
                 _ => None,
             })
             .collect();
+        // The graph's own edges: an assignment whose target is a modulator's parameter is not a project parameter at
+        // all, so it never reaches the parameter-event path.
+        self.edges.clear();
+        for (i, m) in modulators.iter().enumerate() {
+            for t in &m.targets {
+                let Target::ModulatorParam(id, code) = t.target else { continue };
+                let Some(param) = ModParam::of(code) else { continue };
+                let Some(to) = modulators.iter().position(|o| o.id == id) else { continue };
+                self.edges.push(Edge { from: i as u32, to: to as u32, param, depth: t.depth, curve: t.curve, polarity: t.polarity, enabled: t.enabled });
+            }
+        }
+        self.order = topological(&modulators, &self.edges);
+        self.outputs.clear();
+        self.outputs.resize(modulators.len(), 0.0);
         self.modulators = modulators;
         self.last.clear();
+        self.by.clear();
+        self.host_by.clear();
     }
 
     pub fn is_empty(&self) -> bool {
@@ -227,11 +267,41 @@ impl Modulation {
         self.followers.iter().find(|f| f.id == id)
     }
 
-    /// The source's value for modulator `m` at a position (`0..=1`; a follower reads its detector).
-    fn value(&self, m: &Modulator, beats: f64, secs: f64) -> f32 {
-        match &m.source {
-            ModSource::AudioFollower(_) => self.follower(m.id).map_or(0.0, |f| f.value()),
-            other => source_value(other, m.id, beats, secs),
+    /// The value of `source` (modulator `id`'s) at a position (`0..=1`; a follower reads its detector).
+    fn value_of(&self, source: &ModSource, id: u32, beats: f64, secs: f64) -> f32 {
+        match source {
+            ModSource::AudioFollower(_) => self.follower(id).map_or(0.0, |f| f.value()),
+            other => source_value(other, id, beats, secs),
+        }
+    }
+
+    /// Fills `outputs` in dependency order: each modulator's own source, moved by the routes driving it, is evaluated
+    /// after every modulator that drives it, so a chain (an LFO driving another's rate, which drives a third's depth)
+    /// settles in one pass and a modulator driving its own parameter never happens (`ModGraph::route` refuses those).
+    /// Allocates nothing: `order` and `outputs` were sized when the graph was installed.
+    pub(super) fn evaluate(&mut self, beats: f64, secs: f64) {
+        let snap = self.snapshot.clone();
+        for k in 0..self.order.len() {
+            let j = self.order[k] as usize;
+            let (id, mut source) = match self.modulators.get(j) {
+                Some(m) => (m.id, m.source),
+                None => continue,
+            };
+            for i in 0..self.edges.len() {
+                let e = self.edges[i];
+                if e.to as usize != j || e.from as usize == j || !e.enabled {
+                    continue;
+                }
+                let Some(&u) = self.outputs.get(e.from as usize) else { continue };
+                apply_param(&mut source, e.param, offset_values(e.depth, e.curve, e.polarity, u));
+            }
+            let u = self.value_of(&source, id, beats, secs);
+            if let Some(slot) = self.outputs.get_mut(j) {
+                *slot = u;
+            }
+            if let Some(snap) = &snap {
+                snap.write_output(j, u);
+            }
         }
     }
 
@@ -384,12 +454,93 @@ fn curved(curve: Curve, u: f32) -> f32 {
 /// The offset a target's depth makes of a `0..=1` source value: bipolar swings `-depth..depth` around the base,
 /// unipolar `0..depth` above it.
 fn offset(t: &ModTarget, u: f32) -> f64 {
-    let shaped = f64::from(curved(t.curve, u));
-    let signed = match t.polarity {
+    offset_values(t.depth, t.curve, t.polarity, u)
+}
+
+/// The same for a route's own numbers (the graph's edges carry them without a whole `ModTarget`).
+fn offset_values(depth: f32, curve: Curve, polarity: Polarity, u: f32) -> f64 {
+    let shaped = f64::from(curved(curve, u));
+    let signed = match polarity {
         Polarity::Bipolar => shaped * 2.0 - 1.0,
         Polarity::Unipolar => shaped,
     };
-    f64::from(t.depth) * signed
+    f64::from(depth) * signed
+}
+
+/// Moves one parameter of `source` by `by` (`-1..=1` of the parameter's own range; the route's depth already applied).
+///
+/// A rate is scaled rather than added: `by` multiplies the period by `2^(4 by)`, so a full-depth route on a slow
+/// modulator moves it by two octaves up or down in hertz and the motion is musically even. A sync period is a count of
+/// sixteenths, so it divides instead and never reaches zero. A parameter the source does not have is left alone — the
+/// graph refuses to route to one ([`os_model::modulation::ModGraph::route`]), so this only guards hand-made graphs.
+fn apply_param(source: &mut ModSource, param: ModParam, by: f64) {
+    let scale = 2f64.powf(4.0 * by);
+    let add = |own: f32| (f64::from(own) + by).clamp(-1.0, 1.0) as f32;
+    match source {
+        ModSource::Lfo(l) => match param {
+            ModParam::Rate => l.period = scale_period(l.period, scale),
+            ModParam::Amount => l.amount = add(l.amount).clamp(0.0, 1.0),
+            ModParam::Phase => l.phase = (f64::from(l.phase) + by).rem_euclid(1.0) as f32,
+            ModParam::Offset => l.offset = add(l.offset),
+        },
+        ModSource::Random(r) => match param {
+            ModParam::Rate => r.period = scale_period(r.period, scale),
+            ModParam::Amount => r.amount = add(r.amount).clamp(0.0, 1.0),
+            _ => {}
+        },
+        ModSource::Steps(s) => match param {
+            ModParam::Rate => s.period = scale_period(s.period, scale),
+            _ => {}
+        },
+        ModSource::AudioFollower(f) => match param {
+            ModParam::Amount => f.amount = add(f.amount).clamp(0.0, 1.0),
+            _ => {}
+        },
+        ModSource::Envelope(_) => {}
+    }
+}
+
+/// A period scaled by `scale`: free hertz multiply (clamped to an audible-to-slow buzzer range), synced sixteenths
+/// divide and round, never below one.
+fn scale_period(period: Timebase, scale: f64) -> Timebase {
+    match period {
+        Timebase::Free(hz) => Timebase::Free((f64::from(hz) * scale).clamp(0.001, 100.0) as f32),
+        Timebase::Sync(sixteenths) => {
+            Timebase::Sync(((f64::from(sixteenths) / scale).round() as i64).clamp(1, i64::from(u16::MAX)) as u16)
+        }
+    }
+}
+
+/// The modulators' indices in dependency order: each after every modulator that drives it. Kahn's algorithm over the
+/// graph's own edges, in graph order so the result is stable. A graph with a loop (only possible through hand-written
+/// data) leaves its members out of the ordered part; they are appended in graph order, so nothing stops evaluating.
+fn topological(modulators: &[Modulator], edges: &[Edge]) -> Vec<u32> {
+    let n = modulators.len();
+    let mut order = Vec::with_capacity(n);
+    let mut done = vec![false; n];
+    loop {
+        let mut progressed = false;
+        for j in 0..n {
+            if done[j] {
+                continue;
+            }
+            let driven = edges.iter().any(|e| e.to as usize == j && e.from as usize != j && !done[e.from as usize]);
+            if !driven {
+                done[j] = true;
+                order.push(j as u32);
+                progressed = true;
+            }
+        }
+        if !progressed {
+            break;
+        }
+    }
+    for (j, d) in done.iter().enumerate() {
+        if !d {
+            order.push(j as u32);
+        }
+    }
+    order
 }
 
 /// Adds one step's modulated values, after the clips' values of the same step: every parameter's base (what a clip
@@ -398,15 +549,21 @@ fn offset(t: &ModTarget, u: f32) -> f64 {
 /// no clip drives parameters at all.
 pub(super) fn step_values(params: &mut ParamAuto, mods: &mut Modulation, pos: f64, at: u32, secs_per_tick: f64, ppq: f64) {
     let (beats, secs) = (pos / ppq, pos * secs_per_tick);
+    // Every modulator's value, in dependency order: a route into another modulator is applied here, so the value of a
+    // driven modulator already includes what drives it.
+    mods.evaluate(beats, secs);
     let snap = mods.snapshot.clone();
-    // Every modulator's offset for a parameter adds up, then the parameter's own base carries them.
-    let mut offsets: Vec<(Target, f64)> = Vec::new();
+    // Every modulator's offset for a parameter adds up, then the parameter's own base carries them. The scratch is the
+    // graph's own: a tick allocates nothing.
+    let mut offsets = std::mem::take(&mut mods.by);
+    offsets.clear();
     for (i, m) in mods.modulators.iter().enumerate().filter(|(_, m)| m.enabled) {
-        let u = mods.value(m, beats, secs);
-        if let Some(snap) = &snap {
-            snap.write_output(i, u);
-        }
+        let u = mods.outputs.get(i).copied().unwrap_or(0.0);
         for t in m.targets.iter().filter(|t| t.enabled) {
+            // A route inside the graph is not a project parameter: the engine already applied it while evaluating.
+            if matches!(t.target, Target::ModulatorParam(..)) {
+                continue;
+            }
             let by = offset(t, u);
             match offsets.iter_mut().find(|(x, _)| *x == t.target) {
                 Some((_, v)) => *v += by,
@@ -414,7 +571,7 @@ pub(super) fn step_values(params: &mut ParamAuto, mods: &mut Modulation, pos: f6
             }
         }
     }
-    for (target, by) in offsets {
+    for &(target, by) in offsets.iter() {
         let base = params.base_of(target).unwrap_or(DEFAULT_BASE);
         let value = (base + by).clamp(0.0, 1.0);
         if let Some(snap) = &snap {
@@ -430,6 +587,7 @@ pub(super) fn step_values(params: &mut ParamAuto, mods: &mut Modulation, pos: f6
         }
         params.push(target, at, value);
     }
+    mods.by = offsets;
 }
 
 /// A mixer track's host parameters the mixer path drives.
@@ -494,13 +652,12 @@ impl Engine {
         let ppq = f64::from(self.ppq.max(1));
         let secs_per_tick = self.tick_len() as f64 / f64::from(self.rate.max(1));
         let (beats, secs) = (now / ppq, now * secs_per_tick);
+        self.mods.evaluate(beats, secs);
         let snap = self.mods.snapshot.clone();
-        let mut offsets: Vec<(usize, HostParam, Target, f64)> = Vec::new();
+        let mut offsets = std::mem::take(&mut self.mods.host_by);
+        offsets.clear();
         for (i, m) in self.mods.modulators.iter().enumerate().filter(|(_, m)| m.enabled) {
-            let u = self.mods.value(m, beats, secs);
-            if let Some(snap) = &snap {
-                snap.write_output(i, u);
-            }
+            let u = self.mods.outputs.get(i).copied().unwrap_or(0.0);
             for t in m.targets.iter().filter(|t| t.enabled) {
                 let Some((track, param)) = host_target(t.target) else { continue };
                 let by = offset(t, u);
@@ -607,6 +764,8 @@ impl Engine {
                 snap.write_value(target, (base + by).clamp(0.0, 1.0));
             }
         }
+        // The scratch goes back to the graph with its capacity: the next tick reuses it instead of allocating.
+        self.mods.host_by = offsets;
     }
 
     /// Samples every modulator over the `frames` frames of the tick starting now: the path when no clip drives a
@@ -786,6 +945,65 @@ mod tests {
         assert!((seen[0].2 - 0.5).abs() < 1e-6, "the sine starts in the middle: {}", seen[0].2);
         assert!((at(6000) - 1.0).abs() < 1e-3, "the top a quarter cycle in: {}", at(6000));
         assert!(at(18000) < 1e-3, "the bottom three quarters in: {}", at(18000));
+    }
+
+    /// A modulator drives another modulator's own parameter: a square LFO at the top lets the second LFO move the
+    /// parameter, and at the bottom takes its amount away, so the parameter swings for one half of the cycle and sits
+    /// still for the other. The driven modulator is listed *first*, so the pass has to follow the route rather than the
+    /// list, and without the route the second LFO's amount of zero keeps the parameter still all cycle.
+    #[test]
+    fn a_modulator_drives_another_modulators_parameter() {
+        fn values(route: bool) -> Vec<(u64, f64)> {
+            let p = project(0);
+            let mut e = Engine::new(&p, &mut SampleLibrary::new(None), 48000, PlayMode::Pattern(1));
+            let probe = Arc::new(Mutex::new(Probe::default()));
+            e.set_instrument(0, probe.clone());
+            let driven = Modulator {
+                id: 2,
+                source: ModSource::Lfo(Lfo { shape: LfoShape::Sine, period: Timebase::Sync(4), amount: 0.0, ..Lfo::default() }),
+                enabled: true,
+                targets: vec![ModTarget {
+                    target: Target::ChannelParam(0, 7),
+                    depth: 1.0,
+                    curve: Curve::Linear,
+                    polarity: Polarity::Bipolar,
+                    enabled: true,
+                }],
+            };
+            let driver = Modulator {
+                id: 1,
+                source: ModSource::Lfo(Lfo { shape: LfoShape::Square, period: Timebase::Sync(4), ..Lfo::default() }),
+                enabled: true,
+                targets: if route {
+                    vec![ModTarget {
+                        target: Target::ModulatorParam(2, ModParam::Amount.code()),
+                        depth: 1.0,
+                        curve: Curve::Linear,
+                        polarity: Polarity::Unipolar,
+                        enabled: true,
+                    }]
+                } else {
+                    Vec::new()
+                },
+            };
+            e.set_modulation(vec![driven, driver]);
+            run(&mut e, 24000, 1000);
+            let seen = probe.lock().unwrap().seen.clone();
+            seen.into_iter().map(|(f, _, v)| (f, v)).collect()
+        }
+        let routed = values(true);
+        let early: Vec<f64> = routed.iter().filter(|(f, _)| *f < 12000).map(|&(_, v)| v).collect();
+        assert!(early.iter().cloned().fold(0.0f64, f64::max) > 0.9, "the driven LFO swings up while its driver is: {:?}", early.iter().cloned().fold(0.0f64, f64::max));
+        assert!(
+            routed.iter().filter(|&&(f, _)| f >= 12000).all(|&(_, v)| (v - 0.5).abs() < 1e-6),
+            "and the driver's low half leaves it in the middle: {:?}",
+            routed.iter().filter(|&&(f, _)| f >= 12000).collect::<Vec<_>>()
+        );
+        let unrouted = values(false);
+        assert!(
+            unrouted.iter().all(|&(frame, v)| frame >= 12000 || (v - 0.5).abs() < 1e-6),
+            "without the route nothing moves at all: {unrouted:?}"
+        );
     }
 
     /// A modulator moves the value the clips hand the parameter, not a value of its own: a step sequence at its top,

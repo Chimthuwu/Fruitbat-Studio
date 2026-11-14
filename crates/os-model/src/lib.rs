@@ -2660,6 +2660,18 @@ pub mod target {
     pub const MEMBER_DRY: u16 = 2047;
     pub const MEMBER_IDS: u32 = 15;
 
+    /// A modulator's own parameter (the modulation graph's modulator-to-modulator routing): modulator `id` (the
+    /// graph's [`os_model::modulation::ModulatorId`]) and parameter `param` (its [`os_model::modulation::ModParam`]
+    /// code), in Lemon Studio's own `0x6000` range. Nothing legacy-project-compatible uses that range: channels are
+    /// below `0x4000`, the project's own constants at `0x4000`, mixer places from `0x7000` and plugin parameters from
+    /// `0x8000`, so a route into the graph never collides with one of them.
+    pub const MODULATOR_PARAM: u16 = 0x6000;
+
+    /// Parameter `param` of modulator `id`, as it is addressed inside the engine.
+    pub fn modulator_param(id: u32, param: u8) -> u32 {
+        u32::from(MODULATOR_PARAM + u16::from(param)) << 16 | (id & 0xFFFF)
+    }
+
     /// The container slot parameter of item `item` of member `id` (`None`: an id or item out of range).
     pub fn member_item(id: u32, item: u16) -> Option<u16> {
         ((1..=MEMBER_IDS).contains(&id) && item < MEMBER_ITEMS).then(|| id as u16 * MEMBER_ITEMS + item)
@@ -2778,6 +2790,9 @@ pub mod target {
         ChannelParam(u16, u16),
         /// Mixer track, slot, parameter index of the slot's plugin.
         SlotParam(u16, u8, u16),
+        /// Modulator (the graph's id), its parameter code ([`os_model::modulation::ModParam::code`]): a route inside
+        /// the modulation graph rather than a device parameter ([`modulator_param`]).
+        ModulatorParam(u32, u8),
         Other(u32),
     }
 
@@ -2793,6 +2808,11 @@ pub mod target {
         }
         let hi = (t >> 16) as u16;
         let lo = t as u16;
+        // A modulator's own parameter, from the modulation graph (`MODULATOR_PARAM`); checked before the mixer places,
+        // which start at 0x7000.
+        if (MODULATOR_PARAM..MODULATOR_PARAM + 16).contains(&hi) {
+            return Target::ModulatorParam(u32::from(lo), (hi - MODULATOR_PARAM) as u8);
+        }
         if (0x7000..0x7000 + 128 * 64).contains(&hi) && lo >= PLUGIN_PARAM {
             let loc = hi - 0x7000;
             if loc % 64 < 10 {

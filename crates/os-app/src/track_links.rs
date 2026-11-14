@@ -314,7 +314,12 @@ pub fn track_of_target(s: &State, tgt: u32) -> Option<usize> {
         | os_model::target::Target::SlotOn(m, _)
         | os_model::target::Target::SlotMix(m, _)
         | os_model::target::Target::SlotParam(m, ..) => at_strip(m),
-        os_model::target::Target::Tempo | os_model::target::Target::MainSwing | os_model::target::Target::MainPitch | os_model::target::Target::Other(_) => None,
+        // A modulator's own parameter belongs to the graph, not to a track.
+        os_model::target::Target::Tempo
+        | os_model::target::Target::MainSwing
+        | os_model::target::Target::MainPitch
+        | os_model::target::Target::ModulatorParam(..)
+        | os_model::target::Target::Other(_) => None,
     }
 }
 
