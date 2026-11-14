@@ -719,6 +719,10 @@ pub enum ModCmd {
     Rename(ModulatorId, String),
     /// Every assignment it has, removed.
     Clear(ModulatorId),
+    /// Modulator `.0` drives parameter `.2` of modulator `.1`, at `.3` (a route inside the graph).
+    Route(ModulatorId, ModulatorId, os_model::modulation::ModParam, f32),
+    /// That route, removed.
+    Unroute(ModulatorId, ModulatorId, os_model::modulation::ModParam),
 }
 
 /// Runs a [`ModCmd`] as one undo step (the graph and the identities it names are part of the project's undo), and hands
@@ -746,7 +750,9 @@ pub fn run(app: &mut crate::app::App, cmd: ModCmd) -> Option<String> {
             | ModCmd::SetKind(..)
             | ModCmd::RerollSeed(_)
             | ModCmd::Rename(..)
-            | ModCmd::Clear(_) => None,
+            | ModCmd::Clear(_)
+            | ModCmd::Route(..)
+            | ModCmd::Unroute(..) => None,
         };
         let msg = match cmd {
             ModCmd::New(_) => path.map(|path| {
@@ -859,6 +865,22 @@ pub fn run(app: &mut crate::app::App, cmd: ModCmd) -> Option<String> {
                 m.targets.clear();
                 (n > 0).then(|| format!("{n} routings removed"))
             }),
+            ModCmd::Route(from, to, param, depth) => {
+                if !s.modulation.route(from, to, param, depth) {
+                    return None;
+                }
+                let (driver, driven) = (s.modulation.get(from).map(name_of), s.modulation.get(to).map(name_of));
+                Some(format!(
+                    "{} drives {} {}",
+                    driver.unwrap_or_default(),
+                    param.label().to_lowercase(),
+                    driven.unwrap_or_default()
+                ))
+            }
+            ModCmd::Unroute(from, to, param) => s
+                .modulation
+                .unroute(from, to, param)
+                .then(|| format!("{} route removed", param.label())),
         };
         if msg.is_some() {
             s.piano.dirty = true;
@@ -1104,7 +1126,7 @@ pub fn paste_clipboard(app: &mut crate::app::App) -> bool {
 }
 
 /// The rows of a modulator's options menu: what the panel draws and the keyboard walks.
-pub fn menu_items(m: &Modulator) -> Vec<(String, ModAct)> {
+pub fn menu_items(s: &State, m: &Modulator) -> Vec<(String, ModAct)> {
     use os_model::modulation::ModSource;
     let mut v = vec![(
         if m.enabled { "Disable".to_string() } else { "Enable".to_string() },
@@ -1112,6 +1134,33 @@ pub fn menu_items(m: &Modulator) -> Vec<(String, ModAct)> {
     )];
     if matches!(m.source, ModSource::Random(_)) {
         v.push(("Reroll seed".into(), ModAct::RerollSeed(m.id)));
+    }
+    // With routing mode armed, this modulator's own parameters are the routing's destinations: the armed modulator can
+    // drive another modulator's rate, amount, phase or offset, which is how a route into the graph is made.
+    if let Some(from) = s.mod_routing.filter(|a| *a != m.id)
+        && let Some(driver) = s.modulation.get(from)
+    {
+        let name = name_of(driver);
+        // A new route from this modulator back into one that already drives it would close a loop, which the graph
+        // refuses; the menu does not offer what would be refused. A route that exists is still offered, because its row
+        // takes it away again.
+        let blocked = s.modulation.reaches(from, m.id);
+        for param in os_model::modulation::ModParam::ALL {
+            if !param.applies_to(&m.source) {
+                continue;
+            }
+            // The route lives on the driver, naming this modulator's parameter.
+            let driving = driver.targets.iter().any(|t| t.path.modulator() == Some((m.id, param)));
+            if blocked && !driving {
+                continue;
+            }
+            let label = if driving {
+                format!("Stop {name}: {}", param.label().to_lowercase())
+            } else {
+                format!("{name}: {}", param.label().to_lowercase())
+            };
+            v.push((label, ModAct::DriveParam(m.id, from, param)));
+        }
     }
     v.push(("Clear routings".into(), ModAct::Clear(m.id)));
     v.push(("Remove modulator".into(), ModAct::Remove(m.id)));
@@ -1130,7 +1179,7 @@ fn menu_key(app: &mut crate::app::App, key: &winit::keyboard::Key) -> bool {
     use winit::keyboard::{Key, NamedKey};
     let Some(id) = app.state.mod_menu else { return false };
     let Some(m) = app.state.modulation.get(id).cloned() else { return false };
-    let items = menu_items(&m);
+    let items = menu_items(&app.state, &m);
     if items.is_empty() {
         return false;
     }
@@ -1250,6 +1299,9 @@ pub enum ModAct {
     AddKind(u8, Kind),
     /// The patch-point button: enter / leave routing mode.
     Route(ModulatorId),
+    /// A route into the graph from the options menu: modulator `.1` drives parameter `.2` of modulator `.0`, or stops
+    /// driving it if it already does (the menu row is a switch).
+    DriveParam(ModulatorId, ModulatorId, os_model::modulation::ModParam),
     /// Open / close a slot's graphical editor.
     Open(ModulatorId),
     /// Start the inline name field at `(x, y)` (the rack editor's title or the browser's row).
@@ -1376,6 +1428,19 @@ pub fn act(app: &mut crate::app::App, a: ModAct) {
             }
             return;
         }
+        ModAct::DriveParam(to, from, param) => {
+            s.mod_menu = None;
+            let driving = s
+                .modulation
+                .get(from)
+                .is_some_and(|m| m.targets.iter().any(|t| t.path.modulator() == Some((to, param))));
+            if driving {
+                run(app, ModCmd::Unroute(from, to, param));
+            } else {
+                run(app, ModCmd::Route(from, to, param, os_model::modulation::ModTarget::DEPTH_DEFAULT));
+            }
+            return;
+        }
         ModAct::Route(id) => {
             select_one(s, id);
             s.mod_routing = if s.mod_routing == Some(id) { None } else { Some(id) };
@@ -1384,11 +1449,23 @@ pub fn act(app: &mut crate::app::App, a: ModAct) {
             s.mod_menu = None;
         }
         ModAct::Open(id) => {
-            select_one(s, id);
-            s.mod_editor = if s.mod_editor == Some(id) { None } else { Some(id) };
-            s.mod_routing = None;
-            s.mod_menu = None;
-            s.mod_add_slot = None;
+            // A click on another modulator's tile while routing mode is armed is the route's destination, not a request
+            // for its editor: its menu offers the parameters the armed modulator can drive into it.
+            if let Some(from) = s.mod_routing.filter(|a| *a != id)
+                && s.modulation.get(id).is_some()
+                && s.modulation.get(from).is_some()
+            {
+                select_one(s, id);
+                s.mod_editor = Some(id);
+                s.mod_menu = Some(id);
+                s.mod_add_slot = None;
+            } else {
+                select_one(s, id);
+                s.mod_editor = if s.mod_editor == Some(id) { None } else { Some(id) };
+                s.mod_routing = None;
+                s.mod_menu = None;
+                s.mod_add_slot = None;
+            }
         }
         ModAct::Rename(id, at) => {
             crate::playlist::start_edit(s, crate::playlist::EditTarget::ModulatorName(id), at);
@@ -1690,6 +1767,79 @@ mod tests {
         let (t, res) = target_for(OwnerLocator::Member(2, 0, 1), ParameterKey::PluginNativeId(50), Some(&[50, 60])).unwrap();
         assert_eq!(t, target::slot_param(2, 0, target::member_item(1, 0).unwrap()));
         assert_eq!(res, ParamResolution::Unique(0));
+    }
+
+    /// The options menu is how a route into the graph is made by hand: with routing mode armed on one modulator, another
+    /// modulator's menu lists the parameters the armed one can drive into it, and a row creates or removes that route.
+    #[test]
+    fn the_options_menu_routes_one_modulator_into_another() {
+        use os_model::modulation::ModParam;
+        let mut app = crate::app::App::new(None);
+        let a = app.state.modulation.add(ModSource::default());
+        let b = app.state.modulation.add(ModSource::default());
+        // Nothing is offered until routing mode is armed, and a modulator never offers itself.
+        let plain = menu_items(&app.state, app.state.modulation.get(b).unwrap());
+        assert!(!plain.iter().any(|(_, act)| matches!(act, ModAct::DriveParam(..))));
+        crate::modulation::act(&mut app, ModAct::Route(a));
+        assert!(!menu_items(&app.state, app.state.modulation.get(a).unwrap())
+            .iter()
+            .any(|(_, act)| matches!(act, ModAct::DriveParam(..))), "a modulator is not its own route");
+        // An LFO has all four of them, and the rows name the driver.
+        let rows: Vec<(String, ModAct)> = menu_items(&app.state, app.state.modulation.get(b).unwrap());
+        let offered: Vec<ModParam> = rows
+            .iter()
+            .filter_map(|(_, act)| match act {
+                ModAct::DriveParam(_, _, p) => Some(*p),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(offered, ModParam::ALL.to_vec(), "every parameter an LFO has");
+        assert!(rows.iter().any(|(label, _)| label.starts_with("LFO 1")), "the rows name the driver: {rows:?}");
+        // A row routes the armed modulator into that parameter of this one.
+        crate::modulation::act(&mut app, ModAct::DriveParam(b, a, ModParam::Rate));
+        let target = app.state.modulation.get(a).and_then(|m| m.targets.first()).copied().expect("the route");
+        assert_eq!(target.path.modulator(), Some((b, ModParam::Rate)));
+        assert_eq!(target.depth, os_model::modulation::ModTarget::DEPTH_DEFAULT, "a new route is audible");
+        // The menu now says so, and the same row takes the route away again.
+        let rows = menu_items(&app.state, app.state.modulation.get(b).unwrap());
+        assert!(
+            rows.iter().any(|(label, act)| *act == ModAct::DriveParam(b, a, ModParam::Rate) && label.starts_with("Stop ")),
+            "the row switches the route off: {rows:?}"
+        );
+        crate::modulation::act(&mut app, ModAct::DriveParam(b, a, ModParam::Rate));
+        assert!(app.state.modulation.get(a).unwrap().targets.is_empty(), "routed again: gone");
+    }
+
+    /// Only the parameters the destination actually has are offered, a route that would close a loop is not, and a
+    /// click on a modulator's tile with routing armed opens its menu rather than disarming the mode.
+    #[test]
+    fn routing_mode_offers_only_what_can_be_routed_and_keeps_itself_armed() {
+        use os_model::modulation::ModParam;
+        let mut app = crate::app::App::new(None);
+        let a = app.state.modulation.add(ModSource::default());
+        let steps = app.state.modulation.add(ModSource::Steps(os_model::modulation::Steps::default()));
+        crate::modulation::act(&mut app, ModAct::Route(a));
+        let offered = |app: &crate::app::App, id| -> Vec<ModParam> {
+            menu_items(&app.state, app.state.modulation.get(id).unwrap())
+                .into_iter()
+                .filter_map(|(_, act)| match act {
+                    ModAct::DriveParam(_, _, p) => Some(p),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(offered(&app, steps), vec![ModParam::Rate], "a step sequence has only a rate");
+        // The steps drive a's rate. With the steps armed, a's menu offers only that route's own switch: a new route back
+        // into them would close a loop, so the other three parameters are not offered at all.
+        assert!(app.state.modulation.route(steps, a, ModParam::Rate, 0.5));
+        crate::modulation::act(&mut app, ModAct::Route(steps));
+        assert_eq!(offered(&app, a), vec![ModParam::Rate], "the three that would close a loop are not offered");
+        // The tile's click, while armed, opens the other modulator's menu and keeps the mode.
+        crate::modulation::act(&mut app, ModAct::Route(a));
+        crate::modulation::act(&mut app, ModAct::Open(steps));
+        assert_eq!(app.state.mod_menu, Some(steps), "its menu opened");
+        assert_eq!(app.state.mod_editor, Some(steps), "with the always-on-top window the menu lives in");
+        assert_eq!(app.state.mod_routing, Some(a), "routing mode is still armed");
     }
 
     /// A route into the graph resolves from the graph itself (no device identity) and reaches the engine as the

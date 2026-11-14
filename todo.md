@@ -1,5 +1,33 @@
 # Lemon Studio — todo.md (roadmap reference)
 
+## ▶ NEXT — the modulation handoff (2026-11-14, in progress)
+- [x] **The graph is a DAG** (`5b2b7e8f`): a modulator's own rate/amount/phase/offset are parameters
+      (`ModParam`, `Target::ModulatorParam` in the reserved `0x6000` range), so a route into the graph is an
+      ordinary assignment with depth/curve/polarity/on-off, undo and its place in `.lemon`. `ModGraph::route`
+      refuses self-drives and any route that closes a loop, `remove` prunes both sides, and the engine evaluates
+      in `evaluation_order` (topological), applying each upstream modulator to the downstream source before it is
+      read. The per-tick `Vec` allocations in the modulation and mixer-path passes are gone (graph-owned scratch).
+- [x] **Routing from the interface**: with routing mode armed (a tile's patch point), another modulator's tile
+      click or right-click opens its options menu, which lists `LFO 1: rate / amount / phase / offset` rows for
+      the parameters that modulator actually has (a step sequence offers only its rate, a one-shot envelope none);
+      the row creates the route at the default 25 % depth and switches it off again once it exists. Routes that
+      would close a loop are not offered.
+- [ ] **Feedback for a route**: the ring on the driven modulator's knob does not light up yet (`ModSnapshot` has
+      the values; the editor's knobs need to draw the arc), and the browser should list a route with its depth
+      drag like a device parameter's row.
+- [ ] **More routable parameters**: only rate, amount, phase and offset are addressable today. Depth-shaping
+      a route (the assignment's depth as a destination), a follower's attack/release/gain, and a random source's
+      smoothness are the obvious next ones.
+- [ ] **Task 2, the modulator suite**: per-voice ADSR, velocity and key tracking, an MSEG, macros, an XY pad, and
+      the operator nodes (math, polynomial, quantize, map, slew) on top of the DAG. None of it exists yet.
+- [ ] **A `.lemon` layout for routes**: a route is written with a new parameter tag inside the existing graph
+      layout, because bumping the global layout would make every other event unreadable. A build from before this
+      change stops reading the graph at a route (unknowable tag length), so the graph events need their own layout
+      version next time the format opens up.
+- [ ] **Then the device handoff** (pasted 2026-11-14): FreqBat as an `os-dsp` polyphonic instrument with a
+      preallocated voice pool and a native rack panel, then Batshit's 60-second lock-free rolling sampler with
+      peak/RMS meters and its `tiny-skia` visualizer. FreqBat's per-voice modulators depend on Task 2 above.
+
 ## ✅ DONE 2026-11-14 — launcher correctness pass + follower DSP
 - [x] **Launcher multi-selection and bulk edits**: `Launcher::selected` / `anchor` / `clipboard`; plain,
       Ctrl+click and Shift+click selection (no launch on Ctrl/Shift), Ctrl+A, Ctrl+C / Ctrl+V (relative
@@ -23,9 +51,10 @@
       file holds no ids; opening or creating a project clears the previous launcher first. An FLP target drops
       it with the rest of `LMex` (no sidecar, no arrangement markers). Test:
       `the_launcher_round_trips_through_a_lemon_file`.
-- [ ] **Modulator strip compaction**: the fixed 21-slot row still shows many empty add tiles. The handoff
-      asks for the populated modulators plus exactly one add slot. Every populated tile now has a visible
-      `×` remove button (plus its menu and Delete).
+- [x] **Modulator strip compaction** (`ef826ad5`): the strip shows the populated modulators plus exactly one
+      add tile, wraps onto a new line when a line is full (the strip's height follows), and the separate
+      "add row" button is gone; a full strip grows another line when the add tile is used. Every populated tile
+      has a visible `×` remove button (plus its menu and Delete).
 - [ ] **FLP short-record writes** (`os_project::project::patch_bytes`) still skip silently when the stored
       payload is shorter than the record, so a truncated project event is not reported. Needs a warning
       path before writing.

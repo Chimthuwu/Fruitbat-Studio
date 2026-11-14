@@ -1381,7 +1381,7 @@ pub(crate) fn mod_editor_window(ui: &mut Ui, s: &State, m: &os_model::modulation
 /// The slot's options menu inside the always-on-top editor window, at its top-left.
 fn mod_menu_window(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator) {
     let r = Rect::new(0.0, 0.0, MOD_EDITOR_W, MOD_EDITOR_H);
-    let h = mod_menu_h(m);
+    let h = mod_menu_h(s, m);
     // `mod_menu_paint` places the panel just above its anchor: this one puts it at (4, 4).
     let anchor = Rect::new(4.0, 4.0 + h + 2.0, 0.0, 0.0);
     mod_menu_paint(ui, s, m, anchor, r);
@@ -1542,14 +1542,15 @@ fn mod_knob(ui: &mut Ui, s: &State, id: os_model::modulation::ModulatorId, field
 /// A slot's right-click menu: on / off, clear routings, reroll the seed, remove.
 fn mod_menu_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator, anchor: Rect, r: Rect) {
     let t = ui.t;
-    let w = 136.0;
-    let h = mod_menu_h(m);
+    // Wide enough for a routing row's name ("Stop LFO 2: amount"), which the menu grows when routing mode is armed.
+    let w = 168.0;
+    let h = mod_menu_h(s, m);
     let panel = Rect::new(anchor.x.min(r.right() - w - 2.0), (anchor.y - h - 2.0).max(2.0), w, h);
     ui.c.fill_rrect(panel, 3.0, t.s(0x26292c));
     ui.c.stroke_rrect(panel, 3.0, 1.0, t.splitter_dark);
     let mut y = panel.y + 2.0;
     // The rows come from `modulation::menu_items`, so the keyboard (Enter, then arrows) walks exactly what is drawn.
-    for (i, (label, action)) in crate::modulation::menu_items(m).into_iter().enumerate() {
+    for (i, (label, action)) in crate::modulation::menu_items(s, m).into_iter().enumerate() {
         let row = Rect::new(panel.x + 2.0, y, panel.w - 4.0, 20.0);
         let hov = ui.hit(row, Action::Mod(action), label.clone());
         if hov || (s.mod_menu == Some(m.id) && s.mod_menu_sel == i) {
@@ -1561,8 +1562,8 @@ fn mod_menu_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator, a
 }
 
 /// Height of the options menu: a 21 px row each, from the same list the rows are drawn from.
-fn mod_menu_h(m: &os_model::modulation::Modulator) -> f32 {
-    crate::modulation::menu_items(m).len() as f32 * 21.0 + 4.0
+fn mod_menu_h(s: &State, m: &os_model::modulation::Modulator) -> f32 {
+    crate::modulation::menu_items(s, m).len() as f32 * 21.0 + 4.0
 }
 
 /// An open device header menu, over the windows: Pop out (or Dock, per where the editor is now).
