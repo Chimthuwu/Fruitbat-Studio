@@ -1285,7 +1285,11 @@ fn mod_slot_paint(ui: &mut Ui, s: &State, r: Rect, slot: u8, m: &os_model::modul
             ui.c.polyline(&pts, 1.4, accent.with_alpha(if m.enabled { 235 } else { 90 }));
         }
     }
-    // The enable light, over the plot's top-right corner.
+    // The enable light, over the plot's top-right corner; the remove button sits just left of it, so a padded
+    // modulator is removable without opening a menu (Delete and the tile menu also remove it).
+    let close = Rect::new(r.right() - 31.0, r.y + 2.0, 13.0, 12.0);
+    let xhov = ui.hit(close, Action::Mod(crate::modulation::ModAct::Remove(id)), format!("Remove {}", crate::modulation::name_of(m)));
+    ui.c.text_center(fnt(11.0), close, if xhov { t.record } else { t.text_faint }, "×");
     let led = Rect::new(r.right() - 16.0, r.y + 2.0, 12.0, 12.0);
     let lhov = ui.hit(led, Action::Mod(crate::modulation::ModAct::Enable(id)), if m.enabled { "On: click to turn it off" } else { "Off: click to turn it on" });
     ui.c.fill_circle(led.cx(), led.cy(), 4.0, if m.enabled { accent.with_alpha(230) } else { t.s(0x30363a) });

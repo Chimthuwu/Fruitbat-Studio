@@ -153,13 +153,16 @@ keyboard cursor.
 | Status | Detail |
 |---|---|
 | ✅ | Bitwig-style scene columns + track rows; clips map to patterns; per-track and per-scene launch/stop; launch quantization, play mode, on-release, next action and ALT settings are modelled. |
-| ✅ | Audio clips in cells (`launcher::add_audio`), double-click empty cell creates a clip, double-click clip opens it in the piano roll / Tesla panel; record-into-cell. |
+| ✅ | Audio clips in cells (`launcher::add_audio`); double-click empty cell creates and selects a clip without opening an editor, double-click a filled cell opens it in the piano roll / clip editor; record-into-cell. |
+| ✅ | Multi-selection (plain / Ctrl+click / Shift+click / Ctrl+A) and bulk copy, paste, duplicate and delete (`duplicate_selection`, `copy_selection`, `paste_selection`, `clear_selection`), each one undo step through `history::Snap::Launcher`. Duplicate leaves the originals untouched and makes independent patterns. |
+| ✅ | Per-track Stop / Stop all and header mute/solo now rebuild the playing project (remaining clips, arrangement layer or silence); the master Stop stops every launcher clip and queued launch as well as the arrangement. |
 | ✅ | Clip/scene/track rename and colours; per-clip play/stop button; progress bar; queued/recording rings; drag-and-drop from OS to a cell has a code path (`App::drop_file`). |
-| ✅ | Keyboard navigation (new in this pass). |
+| ✅ | Keyboard navigation (new in this pass), including Ctrl+A/C/V/D and Delete for the selection. |
 | 🚧 | **Track headers are not at playlist parity:** no volume fader, no pan fader; only mute/solo LEDs, name, colour and stop. This is roadmap items F2–F4 and remains open. |
-| 🚧 | **Clips cannot be dragged between cells or from the arranger into the launcher** — there is no `Act` or drag state for it. Duplicate/move/copy in the launcher is missing. |
+| 🚧 | **Clips cannot be dragged between cells or from the arranger into the launcher.** Copy/paste and duplicate now work, but pointer drag is still missing. |
 | 🚧 | Drop-from-OS has a hit-test path but has repeatedly been reported as not landing in the live app (roadmap priority 2); this audit did not run a live DnD trace. |
 | 🚧 | Scene follow actions/next actions are modelled but there is no dedicated visual editor beyond cycling menu values. |
+| ❌ | **No launcher persistence:** the grid lives only in `State::launcher`, so saving and reopening loses it (`docs/clip-launcher.md` S6). |
 | ❌ | No launcher follow/legato mode beyond the implemented play-mode fields; no scene tempo/time-signature override. |
 
 ### 2.3 Modulation system
@@ -168,6 +171,7 @@ keyboard cursor.
 |---|---|
 | ✅ | Graph model (`os-model::modulation`), persistent parameter identity, `.lemon` persistence, 8 project slots expanded by rows, LFO/Random/Audio Follower sources. |
 | ✅ | Engine evaluation (`os-engine::engine::modulation`), host parameters (fader/pan/separation) and plugin parameters; live snapshot drives tiles and plots. |
+| ✅ | Audio Follower's low band is now real (2026-11-14): its two cascaded high-pass stages had shared one `prev` sample; each stage keeps its own history now. |
 | ✅ | Routing mode, drag-to-assign, depth arcs, fader ranges, browser Modulation section, multi-select (Shift+click, Ctrl+A, Delete), copy/cut/paste, editor window. |
 | ✅ | Modulation survives engine rebuilds (`transport.rs` re-installs graph + snapshot in `swap`); New Project clears the graph and selection. |
 | ✅ | Keyboard isolation of the strip (this pass). |
@@ -315,3 +319,38 @@ cargo build --release -p os-app --bin lemonstudio
 The release binary is `Z:\lemon-target\release\lemonstudio.exe`. The previous
 running instance had to be renamed aside because Windows locks the executable
 while it is open; close the app before rebuilding next time.
+
+---
+
+## 6. Addendum, 2026-11-14 (launcher correctness + follower DSP)
+
+This pass implemented and tested the following (working tree, not committed at the time of writing):
+
+- **Launcher selection**: `Launcher::selected` / `anchor` / `clipboard`; plain click selects one cell,
+  Ctrl+click toggles, Shift+click ranges, Ctrl+A selects every clip. Ctrl/Shift clicks do not launch.
+- **Bulk edits**: Ctrl+C / Ctrl+V (relative layout, independent patterns), Ctrl+D (copies one
+  selection-width to the right, originals untouched), Delete clears the selection. Each is one undo
+  step via `history::Snap::Launcher`; `App::undo_key` rebuilds the engine project when an undo changes
+  a playing grid.
+- **Engine sync**: `launcher::stop` / `stop_all` and the header mute/solo actions rebuild and push the
+  playing project. Stopping the last clip keeps the transport clock running (later launches still
+  quantise) and silences the launcher, or hands back to the arrangement when its layer is on. The
+  master Stop now stops every launcher clip and queued launch too (`master_stop_stops_launcher_clips`).
+- **Double-click**: an empty cell creates and selects a clip without opening the piano roll; the clip
+  menu's **Open clip** opens a pattern in the piano roll or an audio clip in the clip editor.
+- **Audio Follower**: the two cascaded high-pass stages shared one previous sample; each stage now has
+  its own (`hp_prev: [f32; 2]`), with a 5 Hz vs 100 Hz low-band regression test.
+- **Modulator tiles**: every populated tile now draws a visible `×` remove button beside its enable LED
+  (the menu and Delete already worked).
+
+Verified in this pass:
+
+```bash
+source ./env.sh
+cargo test -p os-app --bin lemonstudio            # 1248 passed, 0 failed, 62 ignored
+cargo test -p os-engine followers_low_band        # 1 passed
+```
+
+Still not done: launcher persistence (`docs/clip-launcher.md` S6), pointer drag between cells, full
+playlist-style headers, and a runtime DnD trace. The engine build/transport wiring was verified only
+through unit tests and the model's project snapshot; no audio device was run for this addendum.

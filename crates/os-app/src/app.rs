@@ -9422,31 +9422,28 @@ impl App {
             }
             Action::Stop => {
                 self.perf_transport();
-                if crate::launcher::live(&self.state) {
-                    // The master Stop cuts only the arrangement layer; the launcher's clips keep playing (Bitwig).
-                    self.state.arr_playing = false;
-                    let p = crate::rack::play_project(&self.state);
-                    self.transport.update(&p); // launcher-only (the arrangement is dropped)
-                    self.invalidate();
-                } else {
-                    self.transport.stop();
-                    self.record_stopped();
-                    // Stop rewinds to where playback started: the song position (or the piano roll's play-start marker)
-                    // stays where it was put, so the next start plays from there again; with a time selection, its start.
-                    let s = &mut self.state;
-                    if s.song_mode {
-                        if let Some((a, _)) = s.playlist.range {
-                            s.playlist.pos = a;
-                        }
-                        // A song position move: the initial values (spec: ui/settings-choices.md "Advanced: Initialize
-                        // controls automatically").
-                        crate::init::apply(s);
-                    } else if let Some((a, _)) = s.piano.range.filter(|_| s.shown(Win::PianoRoll)) {
-                        // spec: ui/recording.md §5: the piano roll's time selection, as in SONG mode.
-                        s.piano.marker = a;
+                // The master Stop stops everything: the arrangement, every launcher clip, the launches waiting for
+                // their grid line, and held notes. (Bitwig keeps the launcher running on its Stop; Fruitbat's global
+                // Stop is the panic stop the transport's square stands for.)
+                self.state.arr_playing = false;
+                crate::launcher::stop_all(self);
+                self.transport.stop();
+                self.record_stopped();
+                // Stop rewinds to where playback started: the song position (or the piano roll's play-start marker)
+                // stays where it was put, so the next start plays from there again; with a time selection, its start.
+                let s = &mut self.state;
+                if s.song_mode {
+                    if let Some((a, _)) = s.playlist.range {
+                        s.playlist.pos = a;
                     }
-                    self.invalidate();
+                    // A song position move: the initial values (spec: ui/settings-choices.md "Advanced: Initialize
+                    // controls automatically").
+                    crate::init::apply(s);
+                } else if let Some((a, _)) = s.piano.range.filter(|_| s.shown(Win::PianoRoll)) {
+                    // spec: ui/recording.md §5: the piano roll's time selection, as in SONG mode.
+                    s.piano.marker = a;
                 }
+                self.invalidate();
             }
             Action::ToggleLauncher => {
                 s.launcher_open = !s.launcher_open;
@@ -9885,9 +9882,15 @@ impl App {
     /// Ctrl+Z (`alt` = Ctrl+Alt+Z) and EDIT's entries: a move in the project's undo history (`crate::history`; spec:
     /// ui/settings-choices.md "Undo history: the four checks (2026-10-16)").
     pub(crate) fn undo_key(&mut self, alt: bool) {
+        let before = self.state.launcher.clips.clone();
         let s = &mut self.state;
         if let Some(m) = if alt { crate::history::ctrl_alt_z(s) } else { crate::history::ctrl_z(s) } {
             self.say(m);
+        }
+        // A launcher undo/redo that changed the grid is heard at once (the playing project follows the clips).
+        if self.transport.playing() && before != self.state.launcher.clips {
+            let p = crate::rack::play_project(&self.state);
+            self.transport.update(&p);
         }
         self.invalidate();
     }

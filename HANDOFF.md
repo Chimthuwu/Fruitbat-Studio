@@ -1,5 +1,9 @@
 # Handoff — Lemon Studio device rack
 
+> **2026-11-14 note:** the device-rack material below is still the reference for the rack/MIDI FX
+> path, but it is no longer the newest handoff. For the launcher correctness pass and the Audio
+> Follower fix, see `docs/audit-2026-11-14-fruitbat.md` §6 and `docs/clip-launcher.md`.
+
 Written 2026-11-08. Supersedes the earlier "tiles show no UI" handoff: **that bug is
 fixed**, by not using the native-window dock path at all. What remains is the MIDI FX
 signal path (§6).

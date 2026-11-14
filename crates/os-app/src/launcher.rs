@@ -35,7 +35,7 @@
 //!
 //! Tab flips the Playlist window between the arrangement and the launcher ([`crate::app::State::launcher_open`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use os_model::{Clip, ClipSource, Project};
 
@@ -409,9 +409,16 @@ pub fn rack_visible(s: &State) -> bool {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Launcher {
     pub clips: BTreeMap<(u32, usize), Slot>,
-    /// The cell a click selected (an audio clip cell: a double click opens it in the panel's clip editor, and the
-    /// selection then drives which sample the editor shows).
+    /// The cell a click focused (an audio clip cell: a double click opens it in the panel's clip editor, and the
+    /// selection then drives which sample the editor shows). It is always part of [`Launcher::selected`] when set.
     pub sel: Option<(u32, usize)>,
+    /// Every selected cell, by the stable pair (track id, scene). A plain click makes this one cell; Ctrl+click adds
+    /// or removes one; Shift+click selects a range. Bulk delete / duplicate / copy / paste read this, never indices.
+    pub selected: BTreeSet<(u32, usize)>,
+    /// The cell a Shift+click ranges from (the last plain or Ctrl click).
+    pub anchor: Option<(u32, usize)>,
+    /// Cells copied with Ctrl+C, with the origin they were copied from, so Ctrl+V keeps their relative layout.
+    pub clipboard: Vec<(u32, usize, Slot)>,
     /// The arrow keys' cell: (column, scene). The launcher takes the keyboard while it is out, so a cell can be picked
     /// and launched without the mouse (Bitwig's launcher navigation).
     pub cursor: (usize, usize),
@@ -457,6 +464,8 @@ pub enum Act {
     Launch(u32, usize),
     /// The ALT launch settings of the same clip (a controller's ALT gesture).
     LaunchAlt(u32, usize),
+    /// Open a clip for editing: a pattern clip in the piano roll, an audio clip in the panel's clip editor.
+    OpenClip(u32, usize),
     /// The press on a clip was released: `OnRelease` does its thing.
     Release(u32, usize),
     /// Stop one track's clip.
@@ -502,11 +511,32 @@ pub enum Act {
 }
 
 /// The launcher's keys while it is out (Bitwig's launcher navigation): the arrows walk the cells, Home / End jump to
-/// the first / last scene, Enter launches the cell and Delete clears it. Returns whether the key was taken.
+/// the first / last scene, Enter launches the cell and Delete clears it. Ctrl+A selects every clip, Ctrl+C / Ctrl+V
+/// copy and paste, Ctrl+D duplicates, and Delete clears every selected clip. Returns whether the key was taken.
 pub fn key(app: &mut App, key: &winit::keyboard::Key, ctrl: bool, alt: bool) -> bool {
     use winit::keyboard::{Key, NamedKey};
-    if !app.state.launcher_open || ctrl || alt {
+    if !app.state.launcher_open || alt || app.state.launcher.menu.is_some() {
         return false;
+    }
+    if ctrl {
+        let Key::Character(c) = key else { return false };
+        let message = match c.to_lowercase().as_str() {
+            "a" => {
+                select_all_clips(&mut app.state);
+                crate::views::launcher::reveal(&mut app.state);
+                app.invalidate();
+                return true;
+            }
+            "c" => copy_selection(&mut app.state),
+            "d" => duplicate_selection(app),
+            "v" => paste_selection(app),
+            _ => return false,
+        };
+        if let Some(m) = message {
+            app.state.message = Some(m);
+        }
+        app.invalidate();
+        return true;
     }
     let cols = columns(&app.state);
     if cols.is_empty() {
@@ -523,12 +553,16 @@ pub fn key(app: &mut App, key: &winit::keyboard::Key, ctrl: bool, alt: bool) -> 
         Key::Named(NamedKey::Home) => scene = 0,
         Key::Named(NamedKey::End) => scene = SCENES - 1,
         Key::Named(NamedKey::Enter) => {
-            app.state.launcher.sel = Some((cols[col].id, scene));
+            select_only(&mut app.state, cols[col].id, scene);
             crate::launcher::run(app, Act::Launch(cols[col].id, scene));
             return true;
         }
         Key::Named(NamedKey::Delete | NamedKey::Backspace) => {
-            if clip(&app.state, cols[col].id, scene).is_some() {
+            if !app.state.launcher.selected.is_empty() {
+                if let Some(m) = clear_selection(app) {
+                    app.state.message = Some(m);
+                }
+            } else if clip(&app.state, cols[col].id, scene).is_some() {
                 crate::launcher::run(app, Act::Clear(cols[col].id, scene));
             }
             return true;
@@ -536,7 +570,7 @@ pub fn key(app: &mut App, key: &winit::keyboard::Key, ctrl: bool, alt: bool) -> 
         _ => return false,
     }
     app.state.launcher.cursor = (col, scene);
-    app.state.launcher.sel = Some((cols[col].id, scene));
+    select_only(&mut app.state, cols[col].id, scene);
     crate::views::launcher::reveal(&mut app.state);
     app.invalidate();
     true
@@ -581,6 +615,77 @@ fn instrument_missing(s: &State, t: &os_model::Track) -> bool {
 /// The clip in (track, scene), when the slot holds one.
 pub fn clip(s: &State, track: u32, scene: usize) -> Option<Slot> {
     s.launcher.clips.get(&(track, scene)).cloned()
+}
+
+/// Whether a cell is part of the launcher's selection (a clip cell or an empty slot).
+pub fn is_selected(s: &State, track: u32, scene: usize) -> bool {
+    s.launcher.selected.contains(&(track, scene))
+}
+
+/// The selected cells that hold a clip, in grid order (track column, then scene).
+pub fn selected_clips(s: &State) -> Vec<(u32, usize)> {
+    let order: Vec<u32> = columns(s).iter().map(|c| c.id).collect();
+    let rank = |t: u32| order.iter().position(|x| *x == t).unwrap_or(usize::MAX);
+    let mut v: Vec<(u32, usize)> = s.launcher.selected.iter().copied().filter(|p| s.launcher.clips.contains_key(p)).collect();
+    v.sort_by_key(|(t, sc)| (rank(*t), *sc));
+    v
+}
+
+/// Makes `(track, scene)` the only selected cell, and the focused one.
+fn select_only(s: &mut State, track: u32, scene: usize) {
+    s.launcher.selected.clear();
+    s.launcher.selected.insert((track, scene));
+    s.launcher.sel = Some((track, scene));
+    s.launcher.anchor = Some((track, scene));
+}
+
+/// Ctrl+click: add the cell to the selection, or take it out when it is already there. The focused cell becomes the
+/// clicked one when it is added, and moves to another selected cell when it is removed.
+fn toggle_selected(s: &mut State, track: u32, scene: usize) {
+    let cell = (track, scene);
+    if s.launcher.selected.remove(&cell) {
+        if s.launcher.sel == Some(cell) {
+            s.launcher.sel = s.launcher.selected.iter().next().copied();
+        }
+    } else {
+        s.launcher.selected.insert(cell);
+        s.launcher.sel = Some(cell);
+    }
+    s.launcher.anchor = Some(cell);
+}
+
+/// Shift+click: every cell in the rectangle between the anchor and the clicked cell, in grid order. A click with no
+/// anchor behaves like a plain click.
+fn select_range(s: &mut State, track: u32, scene: usize) {
+    let Some(from) = s.launcher.anchor else {
+        select_only(s, track, scene);
+        return;
+    };
+    let cols = columns(s);
+    let Some(fi) = cols.iter().position(|c| c.id == from.0) else {
+        select_only(s, track, scene);
+        return;
+    };
+    let Some(ti) = cols.iter().position(|c| c.id == track) else {
+        select_only(s, track, scene);
+        return;
+    };
+    let (c0, c1) = (fi.min(ti), fi.max(ti));
+    let (s0, s1) = (from.1.min(scene), from.1.max(scene));
+    s.launcher.selected.clear();
+    for c in c0..=c1 {
+        for sc in s0..=s1 {
+            s.launcher.selected.insert((cols[c].id, sc));
+        }
+    }
+    s.launcher.sel = Some((track, scene));
+}
+
+/// Ctrl+A: every occupied cell in the grid.
+fn select_all_clips(s: &mut State) {
+    s.launcher.selected = s.launcher.clips.keys().copied().collect();
+    s.launcher.sel = selected_clips(s).first().copied().or_else(|| s.launcher.clips.keys().next().copied());
+    s.launcher.anchor = s.launcher.sel;
 }
 
 /// The track's playlist lane (`Track::playlist_lane`), by its id.
@@ -701,6 +806,7 @@ pub fn menu_items(s: &State, target: MenuTarget) -> Vec<(&'static str, String, A
                 ("ALT play mode", sl.alt.play.name().to_string(), Act::CycleLaunch(track, scene, 5)),
                 ("ALT on release", sl.alt.release.name().to_string(), Act::CycleLaunch(track, scene, 6)),
                 ("Rename...", String::new(), Act::RenameClip(track, scene)),
+                ("Open clip", String::new(), Act::OpenClip(track, scene)),
                 ("Clear clip", String::new(), Act::Clear(track, scene)),
             ]
         }
@@ -978,7 +1084,36 @@ pub fn stop(app: &mut App, track: u32) {
     }
     app.state.launcher.playing.remove(&track);
     app.state.launcher.pending.remove(&track);
+    sync_after_stop(app);
     app.invalidate();
+}
+
+/// Hands the engine the launcher's state after clips stopped: the remaining clips stay on the air. When the last one
+/// stops the arrangement takes over if it was playing; otherwise the clock keeps running (so later launches still
+/// quantize) but the stopped clips are silent. A paused transport stays paused; its position is held.
+fn sync_after_stop(app: &mut App) {
+    if !app.transport.playing() {
+        return;
+    }
+    if live(&app.state) {
+        let p = crate::rack::play_project(&app.state);
+        app.transport.update(&p);
+        return;
+    }
+    if app.state.arr_playing && !app.transport.paused() {
+        app.start_arrangement();
+        return;
+    }
+    // No launcher clip is left (and the arrangement layer is not playing): silence the project, keeping the
+    // transport's clock where it is.
+    let mut p = crate::rack::play_project(&app.state);
+    if !app.state.arr_playing {
+        let idx = p.arrangement_index();
+        if let Some(arr) = p.arrangements.get_mut(idx) {
+            arr.clips.clear();
+        }
+    }
+    app.transport.update(&p);
 }
 
 /// Brings back the clip a track played before the current one (the track stops when there was none).
@@ -1037,7 +1172,160 @@ pub fn stop_all(app: &mut App) {
     }
     app.state.launcher.playing.clear();
     app.state.launcher.pending.clear();
+    sync_after_stop(app);
     app.invalidate();
+}
+
+/// One undo step for a launcher edit: the grid and scene list, and — when the edit makes or removes patterns — the
+/// project's patterns too, so undoing a duplicate removes the patterns it added.
+fn snapshot(s: &mut State, name: &'static str, patterns: bool) {
+    let grid = crate::history::Snap::Launcher {
+        clips: s.launcher.clips.clone(),
+        scenes: s.launcher.scenes.clone(),
+    };
+    if patterns {
+        let pats = crate::history::Snap::Patterns { patterns: s.project.patterns.clone(), current: s.pattern };
+        crate::history::record(s, name, crate::history::Snap::Several(vec![grid, pats]));
+    } else {
+        crate::history::record(s, name, grid);
+    }
+}
+
+/// A copy of `slot` whose pattern is a new, independent pattern (notes, controls and length copied). Audio cells
+/// keep sharing their (immutable) audio asset, as audio clips do in the arranger. A cell with no pattern is copied
+/// as it is.
+fn independent(s: &mut State, mut slot: Slot) -> Slot {
+    if slot.pattern > 0
+        && let Some(src) = s.project.pattern(slot.pattern).cloned()
+    {
+        let no = next_pattern(s);
+        s.project.patterns.push(os_model::Pattern { number: no, ..src });
+        slot.pattern = no;
+    }
+    slot
+}
+
+/// Refuses a bulk edit whose targets would land on clips that are not moving with it, so a duplicate or paste never
+/// overwrites an unrelated clip by accident. Returns the message to show instead of editing.
+fn shifted(app: &App, moves: &[((u32, usize), (u32, usize))]) -> Option<String> {
+    let moving: BTreeSet<(u32, usize)> = moves.iter().map(|(from, _)| *from).collect();
+    if moves.iter().any(|(_, to)| app.state.launcher.clips.contains_key(to) && !moving.contains(to)) {
+        return Some("Not enough free cells to the right".into());
+    }
+    None
+}
+
+/// Ctrl+D: duplicate the selected clips one selection-width to the right, each with a pattern of its own. The
+/// originals stay put; the copies become the selection.
+pub fn duplicate_selection(app: &mut App) -> Option<String> {
+    let sel = selected_clips(&app.state);
+    if sel.is_empty() {
+        return None;
+    }
+    let min_scene = sel.iter().map(|(_, sc)| *sc).min().unwrap_or(0);
+    let max_scene = sel.iter().map(|(_, sc)| *sc).max().unwrap_or(0);
+    let offset = max_scene - min_scene + 1;
+    let mut moves: Vec<((u32, usize), (u32, usize))> = Vec::new();
+    for (track, scene) in &sel {
+        let target = scene + offset;
+        if target < SCENES && !app.state.launcher.clips.contains_key(&(*track, target)) {
+            moves.push(((*track, *scene), (*track, target)));
+        }
+    }
+    if let Some(message) = shifted(app, &moves) {
+        return Some(message);
+    }
+    snapshot(&mut app.state, "Duplicate clips", true);
+    for ((track, scene), target) in &moves {
+        if let Some(slot) = app.state.launcher.clips.get(&(*track, *scene)).cloned() {
+            let copy = independent(&mut app.state, slot);
+            app.state.launcher.clips.insert(*target, copy);
+        }
+    }
+    app.state.launcher.selected = moves.iter().map(|(_, to)| *to).collect();
+    app.state.launcher.sel = moves.first().map(|(_, to)| *to);
+    app.state.launcher.anchor = app.state.launcher.sel;
+    app.invalidate();
+    Some(format!("{} clip{} duplicated", moves.len(), if moves.len() == 1 { "" } else { "s" }))
+}
+
+/// Ctrl+C: remember the selected clips with the cells they came from.
+pub fn copy_selection(s: &mut State) -> Option<String> {
+    let sel = selected_clips(s);
+    if sel.is_empty() {
+        return None;
+    }
+    s.launcher.clipboard = sel
+        .iter()
+        .filter_map(|(track, scene)| s.launcher.clips.get(&(*track, *scene)).map(|slot| (*track, *scene, slot.clone())))
+        .collect();
+    let n = s.launcher.clipboard.len();
+    Some(format!("{n} clip{} copied", if n == 1 { "" } else { "s" }))
+}
+
+/// Ctrl+V: paste the copied clips with their relative layout, anchored on the focused cell's track and scene. Each
+/// pasted pattern is independent; cells already holding a clip are left alone.
+pub fn paste_selection(app: &mut App) -> Option<String> {
+    let copied = app.state.launcher.clipboard.clone();
+    if copied.is_empty() {
+        return None;
+    }
+    let cols = columns(&app.state);
+    let focus = app.state.launcher.sel.or_else(|| cols.first().map(|c| (c.id, 0)))?;
+    let min_track = copied.iter().map(|(t, _, _)| *t).min()?;
+    let min_scene = copied.iter().map(|(_, sc, _)| *sc).min().unwrap_or(0);
+    let from_col = cols.iter().position(|c| c.id == min_track).unwrap_or(0);
+    let to_col = cols.iter().position(|c| c.id == focus.0).unwrap_or(0);
+    let mut moves: Vec<((u32, usize), (u32, usize), Slot)> = Vec::new();
+    for (track, scene, slot) in copied {
+        let src_col = cols.iter().position(|c| c.id == track).unwrap_or(from_col);
+        let target_col = (to_col + src_col).saturating_sub(from_col);
+        let Some(col) = cols.get(target_col) else { continue };
+        let target_scene = focus.1 + scene.saturating_sub(min_scene);
+        if target_scene >= SCENES || app.state.launcher.clips.contains_key(&(col.id, target_scene)) {
+            continue;
+        }
+        moves.push(((track, scene), (col.id, target_scene), slot));
+    }
+    if moves.is_empty() {
+        return Some("Nothing pasted: those cells are full".into());
+    }
+    snapshot(&mut app.state, "Paste clips", true);
+    for (_, target, slot) in &moves {
+        let copy = independent(&mut app.state, slot.clone());
+        app.state.launcher.clips.insert(*target, copy);
+    }
+    app.state.launcher.selected = moves.iter().map(|(_, to, _)| *to).collect();
+    app.state.launcher.sel = moves.first().map(|(_, to, _)| *to);
+    app.state.launcher.anchor = app.state.launcher.sel;
+    app.invalidate();
+    Some(format!("{} clip{} pasted", moves.len(), if moves.len() == 1 { "" } else { "s" }))
+}
+
+/// Delete: clear every selected clip in one undo step (the focused cell when nothing is selected). This is the bulk
+/// counterpart of `Act::Clear`.
+pub fn clear_selection(app: &mut App) -> Option<String> {
+    let mut sel = selected_clips(&app.state);
+    if sel.is_empty() {
+        let (col, scene) = app.state.launcher.cursor;
+        if let Some(c) = columns(&app.state).get(col)
+            && clip(&app.state, c.id, scene).is_some()
+        {
+            sel.push((c.id, scene));
+        }
+    }
+    if sel.is_empty() {
+        return None;
+    }
+    snapshot(&mut app.state, "Clear clips", false);
+    for (track, scene) in &sel {
+        set(app, *track, *scene, None);
+    }
+    app.state.launcher.selected.clear();
+    app.state.launcher.sel = None;
+    app.state.launcher.anchor = None;
+    app.invalidate();
+    Some(format!("{} clip{} cleared", sel.len(), if sel.len() == 1 { "" } else { "s" }))
 }
 
 /// Applies the clips waiting for their grid line (called from `App::tick`). True when one went on the air.
@@ -1481,6 +1769,22 @@ pub fn run(app: &mut App, act: Act) {
     }
     match act {
         Act::Launch(track, scene) => {
+            // Ctrl+click adds or removes one cell (no launch); Shift+click selects a range from the anchor (no
+            // launch). Both are the grid's selection gestures, as in the arrangement.
+            if app.ctrl || app.shift {
+                app.launcher_click = None;
+                if app.ctrl {
+                    toggle_selected(&mut app.state, track, scene);
+                } else {
+                    select_range(&mut app.state, track, scene);
+                }
+                if let Some(i) = columns(&app.state).iter().position(|c| c.id == track) {
+                    app.state.launcher.cursor = (i, scene.min(SCENES - 1));
+                }
+                app.state.launcher.panel = Panel::DeviceRack;
+                app.invalidate();
+                return;
+            }
             // A second click on the same slot opens its clip in the piano roll; the first one launches it, as Bitwig's
             // press does.
             let now = std::time::Instant::now();
@@ -1488,9 +1792,9 @@ pub fn run(app: &mut App, act: Act) {
                 .launcher_click
                 .is_some_and(|((t, sc), at)| t == track && sc == scene && at.elapsed().as_millis() < 450);
             app.launcher_click = if double { None } else { Some(((track, scene), now)) };
-            // A click selects the cell: an audio clip's selection drives which sample the panel's clip editor
+            // A click selects only this cell; an audio clip's selection drives which sample the panel's clip editor
             // shows (and a single click on another audio clip retargets it).
-            app.state.launcher.sel = Some((track, scene));
+            select_only(&mut app.state, track, scene);
             if let Some(i) = columns(&app.state).iter().position(|c| c.id == track) {
                 app.state.launcher.cursor = (i, scene.min(SCENES - 1));
             }
@@ -1501,10 +1805,14 @@ pub fn run(app: &mut App, act: Act) {
                 if audio && open_audio_clip(app, track, scene) {
                     return;
                 }
-                // An empty slot gets its clip from the double click itself (Bitwig's way of making one), then
-                // opens in the piano roll to be filled.
                 if clip(&app.state, track, scene).is_none() {
+                    // An empty slot gets its clip from the double click itself (Bitwig's way of making one). It is
+                    // created and selected, not opened: the piano roll stays away until it is asked for.
                     make_clip(app, track, scene);
+                    select_only(&mut app.state, track, scene);
+                    app.state.launcher.pressed = None;
+                    app.invalidate();
+                    return;
                 }
                 if open(app, track, scene) {
                     return;
@@ -1514,6 +1822,13 @@ pub fn run(app: &mut App, act: Act) {
             launch(app, track, scene)
         }
         Act::LaunchAlt(track, scene) => launch_alt(app, track, scene),
+        Act::OpenClip(track, scene) => {
+            if clip(&app.state, track, scene).is_some_and(|sl| sl.audio.is_some()) {
+                open_audio_clip(app, track, scene);
+            } else {
+                open(app, track, scene);
+            }
+        }
         Act::Release(track, scene) => release(app, track, scene),
         Act::Stop(track) => stop(app, track),
         Act::LaunchScene(scene) => launch_scene(app, scene),
@@ -1521,6 +1836,7 @@ pub fn run(app: &mut App, act: Act) {
         Act::Set(track, scene) => {
             let current = app.state.pattern;
             let next = (clip(&app.state, track, scene).map(|c| c.pattern) != Some(current)).then_some(current);
+            snapshot(&mut app.state, "Set clip pattern", false);
             set(app, track, scene, next);
         }
         Act::SelectTrack(track) => {
@@ -1546,6 +1862,11 @@ pub fn run(app: &mut App, act: Act) {
             if let Some(lane) = lane_of(&app.state, track) {
                 crate::playlist::snapshot(&mut app.state);
                 crate::playlist::toggle_track(&mut app.state, lane);
+                // The running engine follows at once (the playlist's own mute does the same).
+                if app.transport.playing() {
+                    let p = crate::rack::play_project(&app.state);
+                    app.transport.update(&p);
+                }
             }
             app.invalidate();
         }
@@ -1553,6 +1874,10 @@ pub fn run(app: &mut App, act: Act) {
             if let Some(lane) = lane_of(&app.state, track) {
                 crate::playlist::snapshot(&mut app.state);
                 crate::playlist::toggle_solo(&mut app.state, lane);
+                if app.transport.playing() {
+                    let p = crate::rack::play_project(&app.state);
+                    app.transport.update(&p);
+                }
             }
             app.invalidate();
         }
@@ -1568,7 +1893,10 @@ pub fn run(app: &mut App, act: Act) {
             app.state.launcher.panel = Panel::DeviceRack;
             app.invalidate();
         }
-        Act::Clear(track, scene) => set(app, track, scene, None),
+        Act::Clear(track, scene) => {
+            snapshot(&mut app.state, "Clear clip", false);
+            set(app, track, scene, None);
+        }
         Act::Record(track, scene) => record(app, track, scene),
         Act::RenameClip(track, scene) => rename(app, crate::playlist::EditTarget::LauncherClip(track, scene)),
         Act::RenameScene(scene) => rename(app, crate::playlist::EditTarget::LauncherScene(scene)),
@@ -1655,16 +1983,16 @@ fn rename(app: &mut App, target: crate::playlist::EditTarget) {
     app.invalidate();
 }
 
-/// Opens (track, scene)'s clip in the piano roll: its pattern becomes the current one and the window comes up. False
-/// when the slot is empty.
 /// Makes an empty clip in a cell — a new pattern of its own — as a double click on an empty slot does, so the grid
 /// makes clips without the menu.
 pub fn make_clip(app: &mut App, track: u32, scene: usize) {
     let no = next_pattern(&app.state);
+    snapshot(&mut app.state, "New clip", true);
     if !app.state.project.patterns.iter().any(|p| p.number == no) {
         app.state.project.patterns.push(os_model::Pattern { number: no, ..Default::default() });
     }
     app.state.launcher.clips.insert((track, scene), Slot { pattern: no, ..Default::default() });
+    select_only(&mut app.state, track, scene);
     app.invalidate();
 }
 
@@ -1688,6 +2016,8 @@ pub fn add_audio(app: &mut App, path: &str, track: u32, scene: usize) -> String 
     format!("{name} in the launcher cell")
 }
 
+/// Opens (track, scene)'s clip in the piano roll: its pattern becomes the current one and the window comes up. False
+/// when the slot is empty or holds an audio clip (which has no pattern to edit).
 pub fn open(app: &mut App, track: u32, scene: usize) -> bool {
     // An audio clip has no pattern to edit (it plays on as it was).
     let Some(slot) = clip(&app.state, track, scene).filter(|sl| sl.pattern > 0) else { return false };
@@ -1852,21 +2182,21 @@ mod tests {
         assert!(app.transport.playing(), "the transport started");
     }
 
-    /// The master Stop cuts only the arrangement layer: the launcher's clips keep playing (Bitwig). Launching a clip
-    /// drives the engine on its own; the main transport does not stop it.
+    /// The master Stop stops everything: the launcher's clips, its queued launches and the arrangement. It is the
+    /// panic stop, not just a cut of the arrangement layer.
     #[test]
-    fn master_stop_keeps_launcher_clips_playing() {
+    fn master_stop_stops_launcher_clips() {
         let mut app = app();
         let col = columns(&app.state).first().cloned().expect("a track");
         set(&mut app, col.id, 1, Some(3));
         launch(&mut app, col.id, 1);
         assert!(app.transport.playing(), "the launcher started the engine");
         assert_eq!(playing(&app.state, col.id), Some(1));
-        // The master Stop leaves the launcher on the air: it only cuts the arrangement layer (none here yet).
         app.act(Action::Stop);
-        assert!(app.transport.playing(), "the launcher's clips keep playing after Stop");
-        assert_eq!(playing(&app.state, col.id), Some(1), "the clip is still on the air");
-        assert!(!app.state.arr_playing, "the arrangement layer is off");
+        assert!(!app.transport.playing(), "Stop stopped the engine");
+        assert_eq!(playing(&app.state, col.id), None, "the clip is off the air");
+        assert!(app.state.launcher.pending.is_empty(), "queued launches are dropped");
+        assert!(!app.state.arr_playing, "the arrangement is off too");
     }
 
     /// The master Play re-launches the arrangement over the running launcher (Bitwig): the two layers are audible
@@ -2113,6 +2443,7 @@ mod tests {
                 "ALT play mode",
                 "ALT on release",
                 "Rename...",
+                "Open clip",
                 "Clear clip"
             ]
         );
@@ -2408,7 +2739,8 @@ mod tests {
         assert_eq!(app.state.project.current_pattern, Some(5));
     }
 
-    /// An empty slot gets its clip from a double click (not the menu), and opens to be filled.
+    /// An empty slot gets its clip from a double click (not the menu), and is selected without opening the piano
+    /// roll: the editor stays away until it is asked for.
     #[test]
     fn a_double_click_on_an_empty_slot_makes_its_clip() {
         let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
@@ -2435,8 +2767,9 @@ mod tests {
         let sl = clip(&app.state, id, 3).expect("the double click made the clip");
         assert_eq!(app.state.project.patterns.len(), before + 1, "a pattern of its own");
         assert!(sl.pattern > 0 && app.state.project.patterns.iter().any(|p| p.number == sl.pattern));
-        assert!(app.state.shown(crate::app::Win::PianoRoll), "and it opens to be filled");
-        assert_eq!(app.state.pattern, sl.pattern);
+        assert!(!app.state.shown(crate::app::Win::PianoRoll), "it does not open the piano roll");
+        assert!(is_selected(&app.state, id, 3), "the new clip is selected");
+        assert_eq!(app.state.launcher.sel, Some((id, 3)), "and focused");
     }
 
     /// A sample dropped on a cell becomes an audio clip there: it plays from the cell's lane, looped at the sample's
@@ -2556,6 +2889,96 @@ mod tests {
         assert_eq!(app.state.launcher.sel, Some((id, 3)));
         assert_eq!(app.state.launcher.panel, Panel::DeviceRack);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Ctrl+click builds a selection without launching, Shift+click takes a rectangle from the anchor, and Ctrl+A
+    /// takes every occupied cell (empty slots stay out of the bulk edits).
+    #[test]
+    fn ctrl_click_builds_a_selection_and_ctrl_a_takes_every_clip() {
+        let mut app = app();
+        let cols = columns(&app.state);
+        assert!(cols.len() >= 2, "two tracks to select across");
+        let (a, b) = (cols[0].id, cols[1].id);
+        set(&mut app, a, 0, Some(1));
+        set(&mut app, a, 1, Some(2));
+        set(&mut app, b, 0, Some(3));
+        run(&mut app, Act::Launch(a, 0));
+        assert_eq!(selected_clips(&app.state), vec![(a, 0)], "a plain click selects one cell");
+        // Ctrl+click adds a cell, and does not launch it.
+        app.ctrl = true;
+        run(&mut app, Act::Launch(b, 0));
+        app.ctrl = false;
+        assert!(is_selected(&app.state, a, 0) && is_selected(&app.state, b, 0), "both selected");
+        assert_eq!(playing(&app.state, b), None, "Ctrl+click did not launch it");
+        // Ctrl+click again removes it.
+        app.ctrl = true;
+        run(&mut app, Act::Launch(a, 0));
+        app.ctrl = false;
+        assert!(!is_selected(&app.state, a, 0), "Ctrl+click removed it");
+        // Shift+click takes the rectangle between the anchor (a, 0, from the click that removed it) and the cell
+        // clicked; here that is the two scenes of the first column.
+        app.shift = true;
+        run(&mut app, Act::Launch(a, 1));
+        app.shift = false;
+        for cell in [(a, 0), (a, 1)] {
+            assert!(is_selected(&app.state, cell.0, cell.1), "{cell:?} is in the range");
+        }
+        assert!(!is_selected(&app.state, b, 0), "outside the range");
+        // Ctrl+A: the three clips, not the empty cells around them.
+        app.state.launcher_open = true;
+        crate::launcher::run(&mut app, Act::Launch(a, 0));
+        assert!(key(&mut app, &Key::Character("a".into()), true, false), "Ctrl+A was taken");
+        assert_eq!(selected_clips(&app.state), vec![(a, 0), (a, 1), (b, 0)], "every clip, in grid order");
+        assert!(!is_selected(&app.state, b, 2), "an empty cell is not selected");
+    }
+
+    /// The launcher's bulk keys: Ctrl+D duplicates the selection (originals untouched, copies with patterns of their
+    /// own), Ctrl+C / Ctrl+V copy and paste, Delete clears every selected clip. Each edit is one undo step.
+    #[test]
+    fn the_bulk_keys_duplicate_copy_paste_and_clear_with_undo() {
+        let mut app = app();
+        app.state.launcher_open = true;
+        let a = columns(&app.state)[0].id;
+        set(&mut app, a, 0, Some(1));
+        set(&mut app, a, 1, Some(2));
+        let patterns = app.state.project.patterns.len();
+        // Ctrl+D on both cells: two scenes to the right, with independent patterns.
+        run(&mut app, Act::Launch(a, 0));
+        app.ctrl = true;
+        run(&mut app, Act::Launch(a, 1));
+        app.ctrl = false;
+        assert!(key(&mut app, &Key::Character("d".into()), true, false), "Ctrl+D was taken");
+        assert_eq!(clip(&app.state, a, 0).map(|c| c.pattern), Some(1), "the original is untouched");
+        assert_eq!(clip(&app.state, a, 1).map(|c| c.pattern), Some(2));
+        let (c2, c3) = (clip(&app.state, a, 2).expect("a copy"), clip(&app.state, a, 3).expect("a copy"));
+        assert!(c2.pattern > 0 && c2.pattern != 1, "the copy has a pattern of its own");
+        assert!(c3.pattern > 0 && c3.pattern != 2);
+        assert_eq!(app.state.project.patterns.len(), patterns + 2, "two patterns were made");
+        assert_eq!(selected_clips(&app.state), vec![(a, 2), (a, 3)], "the copies became the selection");
+        assert_eq!(crate::history::undo(&mut app.state).as_deref(), Some("Duplicate clips"));
+        assert!(clip(&app.state, a, 2).is_none() && clip(&app.state, a, 3).is_none(), "one undo removed them");
+        assert_eq!(app.state.project.patterns.len(), patterns, "and their patterns");
+        assert_eq!(crate::history::redo(&mut app.state).as_deref(), Some("Duplicate clips"), "redo brings them back");
+        assert!(clip(&app.state, a, 2).is_some() && clip(&app.state, a, 3).is_some());
+        assert_eq!(app.state.project.patterns.len(), patterns + 2, "with their patterns");
+        // Ctrl+C / Ctrl+V: paste beside the original, as a new independent pattern.
+        run(&mut app, Act::Launch(a, 0));
+        assert!(key(&mut app, &Key::Character("c".into()), true, false), "Ctrl+C was taken");
+        assert_eq!(app.state.launcher.clipboard.len(), 1, "one cell copied");
+        run(&mut app, Act::Launch(a, 5));
+        assert!(key(&mut app, &Key::Character("v".into()), true, false), "Ctrl+V was taken");
+        let pasted = clip(&app.state, a, 5).expect("the paste made a clip");
+        assert_ne!(pasted.pattern, 1, "the pasted pattern is independent");
+        assert_eq!(clip(&app.state, a, 0).map(|c| c.pattern), Some(1), "the source is unchanged");
+        assert_eq!(crate::history::undo(&mut app.state).as_deref(), Some("Paste clips"));
+        assert!(clip(&app.state, a, 5).is_none(), "undo removed the pasted clip");
+        // Ctrl+A then Delete clears every clip as one step.
+        assert!(key(&mut app, &Key::Character("a".into()), true, false));
+        assert!(key(&mut app, &Key::Named(NamedKey::Delete), false, false), "Delete was taken");
+        assert!(selected_clips(&app.state).is_empty() && clip(&app.state, a, 0).is_none() && clip(&app.state, a, 1).is_none());
+        assert_eq!(crate::history::undo(&mut app.state).as_deref(), Some("Clear clips"));
+        assert_eq!(clip(&app.state, a, 0).map(|c| c.pattern), Some(1), "undo brought the clips back");
+        assert_eq!(clip(&app.state, a, 1).map(|c| c.pattern), Some(2));
     }
 
     /// Clicking a track (header or row) gives the device rack its panel back: the clip editor stands only for an

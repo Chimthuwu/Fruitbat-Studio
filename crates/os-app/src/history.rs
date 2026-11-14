@@ -79,6 +79,8 @@ pub enum Snap {
     Patterns { patterns: Vec<os_model::Pattern>, current: u16 },
     /// What ADD > Audio clip / Automation clip changes in the rack (`RackSide`).
     Rack(Box<RackSide>),
+    /// The clip launcher's grid and scene list (creating, clearing, moving, duplicating and pasting clips).
+    Launcher { clips: std::collections::BTreeMap<(u32, usize), crate::launcher::Slot>, scenes: Vec<crate::launcher::Scene> },
     /// Several of these in one step, put back last first ("Create automation clip": the playlist and the initial
     /// value).
     Several(Vec<Snap>),
@@ -174,6 +176,10 @@ impl Snap {
             Snap::Init(t, _) => Snap::Init(*t, crate::init::entry(s, *t)),
             Snap::Patterns { .. } => Snap::Patterns { patterns: s.project.patterns.clone(), current: s.pattern },
             Snap::Rack(r) => Snap::Rack(Box::new(RackSide::now(s, r.row))),
+            Snap::Launcher { .. } => Snap::Launcher {
+                clips: s.launcher.clips.clone(),
+                scenes: s.launcher.scenes.clone(),
+            },
             Snap::Several(v) => Snap::Several(v.iter().map(|x| x.now(s)).collect()),
             // What each command would put back, as it is now (`swap` applies them).
             Snap::Commands(v) => Snap::Commands(v.iter().map(|c| c.now(s)).collect()),
@@ -212,8 +218,9 @@ impl Snap {
             }
             Snap::Several(v) => v.iter_mut().for_each(|x| x.rescale(from, to)),
             Snap::Commands(v) => v.iter_mut().for_each(|c| c.rescale(from, to)),
-            // A channel or an initial value holds no ticks; a timebase step's are at its own timebase.
-            Snap::Knob(..) | Snap::TrackIo(..) | Snap::Sample { .. } | Snap::Channel { .. } | Snap::Init(..) | Snap::Rack(_) | Snap::Timebase(_) => {}
+            // A channel or an initial value holds no ticks; a timebase step's are at its own timebase. Launcher cells
+            // hold no absolute ticks either (their lengths follow their patterns / samples).
+            Snap::Knob(..) | Snap::TrackIo(..) | Snap::Sample { .. } | Snap::Channel { .. } | Snap::Init(..) | Snap::Rack(_) | Snap::Launcher { .. } | Snap::Timebase(_) => {}
         }
     }
 
@@ -255,6 +262,16 @@ impl Snap {
                 s.piano.clear_selection();
             }
             Snap::Rack(r) => put_rack(s, *r),
+            Snap::Launcher { clips, scenes } => {
+                s.launcher.clips = clips;
+                s.launcher.scenes = scenes;
+                s.launcher.sel = None;
+                s.launcher.selected.clear();
+                s.launcher.anchor = None;
+                // A playing cell the step removed cannot stay on the air; unrelated tracks keep playing.
+                s.launcher.playing.retain(|t, p| s.launcher.clips.contains_key(&(*t, p.scene)));
+                s.launcher.pending.retain(|t, p| s.launcher.clips.contains_key(&(*t, p.scene)));
+            }
             Snap::Several(v) => v.into_iter().rev().for_each(|x| x.put(s)),
             Snap::Commands(v) => {
                 crate::control::take_back(s, v);

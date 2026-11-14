@@ -1764,6 +1764,23 @@ mod tests {
         );
     }
 
+    /// A populated modulator tile carries its own remove button, so it can be deleted without opening a menu.
+    #[test]
+    fn a_modulator_tile_has_a_remove_button() {
+        let Ok(mut c) = os_ui::Canvas::new(1600, 900, 1.0) else { return };
+        let mut app = app();
+        app.state.screen = (1600.0, 900.0);
+        crate::modulation::act(&mut app, crate::modulation::ModAct::AddKind(0, crate::modulation::Kind::Lfo));
+        let id = app.state.modulation.modulator_at_slot(0).expect("the modulator").id;
+        app.paint(&mut c, None);
+        assert!(
+            app.hits.iter().any(|h| h.action == Action::Mod(crate::modulation::ModAct::Remove(id))),
+            "the tile paints a remove button"
+        );
+        crate::modulation::act(&mut app, crate::modulation::ModAct::Remove(id));
+        assert!(app.state.modulation.get(id).is_none(), "the button's action removes it");
+    }
+
     /// The strip's "＋" after the last slot is its own button: it grows the strip by a row of slots, which are drawn
     /// on the new row and can hold modulators (a slot beyond the first row's last gets its own add menu).
     #[test]

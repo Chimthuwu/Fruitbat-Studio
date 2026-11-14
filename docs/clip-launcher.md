@@ -53,13 +53,21 @@ the window's own frame, so it sits exactly where the arrangement was.
   loops at that length like any other. Stopping the track (`launcher::stop`) or the transport ends
   the take, and a take that recorded nothing leaves the cell as it was.
 - **Left-click** a filled cell: that track lights up for the scene and the pattern starts.
-  An empty cell stops the track. **Double-click** an empty cell: it gets a clip of its own (a new
-  pattern, `launcher::make_clip`) and opens in the Piano Roll to be filled — a double click makes
-  clips, as in Bitwig, rather than the menu. **Double-click** a filled cell: that clip's pattern
-  opens in the Piano Roll (the first click launched it; the second opens it, as a double-click on
-  a playlist MIDI clip does). **Right-click** a cell: its menu — launch settings, next action,
-  rename, colour, `Set current pattern` (the current pattern goes in, or out if it is already
-  there), `Clear clip`.
+  An empty cell stops the track. A click selects the cell too; **Ctrl+click** adds or removes one
+  cell and **Shift+click** selects a rectangle from the last plain/Ctrl click (both select without
+  launching), and **Ctrl+A** selects every clip. **Ctrl+C / Ctrl+V** copy and paste the selection
+  (relative layout kept, each pasted pattern independent), **Ctrl+D** duplicates it one
+  selection-width to the right (originals untouched, copies with patterns of their own), and
+  **Delete** clears every selected clip — each bulk edit is one undo step. **Double-click** an
+  empty cell: it gets a clip of its own (a new pattern, `launcher::make_clip`) and becomes the
+  selection, without opening the Piano Roll (the menu's **Open clip** does that). **Double-click**
+  a filled cell: that clip's pattern opens in the Piano Roll (the first click launched it; the
+  second opens it, as a double-click on a playlist MIDI clip does); an audio clip opens in the
+  panel's clip editor. **Right-click** a cell: its menu — launch settings, next action, rename,
+  colour, `Set current pattern` (the current pattern goes in, or out if it is already there),
+  `Open clip`, `Clear clip`.
+- **Mute and solo** on a track header flip the same track state the playlist's LEDs do and push the
+  new project to a playing engine at once, so the audio follows without a restart.
 - **Launches are quantised** (S1, finished): every clip and every scene has its own
   `LaunchQ` — Off, 1/16, 1/8, 1/4, 1/2, 1 bar, 2, 4 or 8 bars — and `Q to Loop`. While the
   transport runs a click queues the clip for the next line of *its own* grid
@@ -101,7 +109,11 @@ set never runs out. A cell holding a sample (`Slot::audio`) needs no copy: its l
   clip. Independent playback with no re-alignment is the engine work S2 describes — worth doing
   when something else needs the engine touched anyway.
 - Tracks with no clip playing keep their arrangement clips in the shadow, so stopping a track
-  (its **■** button) is Bitwig's "Stop clips": it returns to the arrangement.
+  (its **■** button) is Bitwig's "Stop clips": the engine is rebuilt with only the remaining
+  clips (or the arrangement layer when it is playing). Stopping the last clip leaves the transport
+  clock running — later launches still quantise — but silences the launcher (and, unless the
+  arrangement layer is on, the arrangement). The **master Stop** is the panic stop: it clears every
+  launcher clip and queued launch, turns the arrangement layer off and stops the transport.
 
 ---
 
@@ -113,11 +125,11 @@ Each step should land on its own, green, with tests. `cargo test -p os-app` is c
 ### S0 — Editing from the launcher (done)
 
 Double-clicking a filled cell opens the clip's pattern in the Piano Roll (`launcher::open`,
-`Act::Launch` twice within 450 ms, tracked by `App::launcher_click`), and a double click on an
-empty cell makes the clip first (`launcher::make_clip`) and opens it — the grid's own gesture
-for making clips. The rest is the slot menu (rename, colour, `Set current pattern`, `Clear
-clip`, the launch sets, the next action), plus a drop of an audio file on a cell
-(`launcher::add_audio`).
+`Act::Launch` twice within 450 ms, tracked by `App::launcher_click`); a double click on an empty
+cell makes the clip and selects it (`launcher::make_clip`) without opening an editor. The menu's
+**Open clip** opens either kind (piano roll or audio clip editor). The rest is the slot menu
+(rename, colour, `Set current pattern`, `Clear clip`, the launch sets, the next action), plus a
+drop of an audio file on a cell (`launcher::add_audio`).
 
 ### S1 — Quantised launch (done)
 
@@ -219,7 +231,7 @@ whichever storage wins.
 
 | file | what |
 |---|---|
-| `crates/os-app/src/launcher.rs` | `Launcher` (clips, playing, pending, scenes), `Slot` (pattern or `audio`), `Scene`, `Launch`, `LaunchQ`, `PlayFrom`, `OnRelease`, `NextAction`, `NextTiming`, `Act`, `columns`, `clip`, `playing`, `set`, `make_clip`, `add_audio`, `slot_len`, `launch`, `release`, `stop`, `launch_scene`, `stop_all`, `advance`, `shadow`, `window`, `run` |
+| `crates/os-app/src/launcher.rs` | `Launcher` (clips, selected, clipboard, playing, pending, scenes), `Slot` (pattern or `audio`), `Scene`, `Launch`, `LaunchQ`, `PlayFrom`, `OnRelease`, `NextAction`, `NextTiming`, `Act`, `columns`, `clip`, `playing`, `set`, `make_clip`, `add_audio`, `slot_len`, `launch`, `release`, `stop`, `launch_scene`, `stop_all`, `advance`, `shadow`, `window`, `duplicate_selection`, `copy_selection`, `paste_selection`, `clear_selection`, `run` |
 | `crates/os-app/src/views/launcher.rs` | the grid: frame + title "Clip Launcher", track headers, scene buttons, cells (and a sample's peaks in one), the hint, and its layout and scroll (`geom`, `wheel`) |
 | `crates/os-app/src/app.rs` | `Action::Launcher(Act)`, `Action::ToggleLauncher`, the **Tab** key, `State::launcher` / `State::launcher_open`, the right-click → `Act::Menu` route in `mouse_down_right` |
 | `crates/os-app/src/record.rs` | `Rec::slot` and the take's `slot` / `created` / `start`: a launcher cell's take records into the cell's pattern from its own start, and ends with the cell's clip (`finish_slot_take`) |
@@ -227,7 +239,7 @@ whichever storage wins.
 
 ## 4. Testing habits this code base expects
 
-- Model/unit tests live at the bottom of the module they test (`launcher.rs` has twenty-four).
+- Model/unit tests live at the bottom of the module they test (`launcher.rs` has thirty-five).
 - Paint tests make a `os_ui::Canvas`, call `app.paint(&mut c, None)` and read `app.hits` — that is
   how "a slot per track and scene" is asserted, and how a click is simulated
   (`mouse_move` → `mouse_down`).

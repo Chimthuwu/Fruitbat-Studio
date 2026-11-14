@@ -303,7 +303,7 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
 
     // How the cells are filled, along the bottom of the window — and how to reach the ones that do not fit.
     let mut hint = String::from(
-        "Double-click an empty cell to make a clip (drop a sample on one to play it) - Shift+click a track to select a range - right-click a clip, scene or track to rename and colour it",
+        "Double-click an empty cell to make a clip (drop a sample on one to play it) - click selects, Ctrl+click adds, Shift+click ranges - Ctrl+A/C/V/D, Delete - right-click for the menu",
     );
     if g.scrolls() {
         hint.push_str(" - wheel scrolls, Shift for the scenes");
@@ -385,11 +385,6 @@ fn slot_paint(ui: &mut Ui, s: &State, c: &launcher::Column, scene: usize, cell: 
             if queued {
                 ui.c.stroke_rrect(cell, 3.0, 2.0, t.accent);
             }
-            // The cell a click selected (the panel's clip editor shows its sample): a thin mark, under the
-            // playing and queued rings (`launcher::Panel`).
-            if s.launcher.sel == Some((c.id, scene)) && !playing && !queued {
-                ui.c.stroke_rrect(cell, 3.0, 1.0, t.text_dim);
-            }
         }
         None => {
             ui.c.fill_rrect(cell, 2.0, if hov { t.s(0x242a2d) } else { t.s(0x1b1f21) });
@@ -398,6 +393,11 @@ fn slot_paint(ui: &mut Ui, s: &State, c: &launcher::Column, scene: usize, cell: 
                 ui.c.text(fnt(13.0), cell.cx() - 4.0, cell.cy() - 9.0, t.text_dim, "+");
             }
         }
+    }
+    // The cells a click, Ctrl+click or Shift+click selected: one thin ring inside each, over the cell's own colours
+    // and under the keyboard cursor.
+    if launcher::is_selected(s, c.id, scene) {
+        ui.c.stroke_rrect(cell.inset(3.0), 2.0, 1.0, t.glyph);
     }
     // The arrow keys' cell: a bright inner ring, so keyboard navigation is visible even over a playing or queued
     // cell's own rings.

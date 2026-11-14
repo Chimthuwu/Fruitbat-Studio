@@ -1,5 +1,34 @@
 # Lemon Studio — todo.md (roadmap reference)
 
+## ✅ DONE 2026-11-14 — launcher correctness pass + follower DSP
+- [x] **Launcher multi-selection and bulk edits**: `Launcher::selected` / `anchor` / `clipboard`; plain,
+      Ctrl+click and Shift+click selection (no launch on Ctrl/Shift), Ctrl+A, Ctrl+C / Ctrl+V (relative
+      layout, independent patterns), Ctrl+D (originals untouched), Delete clears the selection. One undo
+      step each through the new `history::Snap::Launcher`; a launcher undo while playing rebuilds the
+      engine project.
+- [x] **Launcher engine sync**: per-track Stop / Stop all rebuild the playing project (remaining clips, or
+      the arrangement layer, or a silent project while the clock keeps running); header Mute / Solo push
+      the new project to a playing engine. The **master Stop** now stops every launcher clip and queued
+      launch as well as the arrangement (`master_stop_stops_launcher_clips`; it replaced the old
+      "keeps clips playing" test).
+- [x] **Double-click an empty cell** makes and selects its clip without opening the Piano Roll; the menu
+      has an explicit **Open clip** (piano roll for a pattern, clip editor for audio). Clip creation,
+      `Set current pattern` and `Clear clip` are undo steps.
+- [x] **Audio Follower DSP**: the two cascaded high-pass stages shared one `prev` sample, so the low band
+      leaked; each stage now keeps its own history (`hp_prev: [f32; 2]`) with a 5 Hz vs 100 Hz regression
+      test (`a_followers_low_band_rejects_what_is_below_it`).
+- [ ] **Launcher persistence is still open** (S6 in `docs/clip-launcher.md`): the grid lives only in
+      `State::launcher`, so saving and reopening a project loses it. Decide sidecar vs arrangement encoding
+      before writing it.
+- [ ] **Modulator strip compaction**: the fixed 21-slot row still shows many empty add tiles. The handoff
+      asks for the populated modulators plus exactly one add slot. Every populated tile now has a visible
+      `×` remove button (plus its menu and Delete).
+- [ ] **FLP short-record writes** (`os_flp::project::patch_bytes`) still skip silently when the stored
+      payload is shorter than the record, so a truncated project event is not reported. Needs a warning
+      path before writing.
+- [ ] Launcher drag-and-drop, full playlist-style track headers, and the scene/automation polish remain in
+      the list below.
+
 ## ✅ DONE 2026-11-12 — the glitcher: a second strip style per track
 - [x] **The strip's de-esser is a Filtertable-style table** (`e8eb539b`): sixteen constant-Q band-passes summed over the
       dry signal, their gains a hand-drawn curve that drifts through the spectrum (12 s a cycle); the knob scales them
@@ -170,8 +199,8 @@ views/launcher.rs + launcher.rs) before executing — the F1 drop fix from wave 
       3. A volume fader on each launcher track, like playlist tracks.
 - [ ] **Pan fader on ALL tracks** (playlist and launcher tracks alike) — new control; audit the track model/mixer
       for where pan lives (os-model Track + mixer path) and both header layouts.
-- [ ] **Launcher track Mute / Solo buttons do nothing** (reported 2026-11-12): audit the launcher's track-header
-      hits and actions against the playlist's headers, then wire them.
+- [x] **Launcher track Mute / Solo buttons** (2026-11-14): the header hits flip the playlist's own track
+      state and now push the rebuilt project to a playing engine, so the audio follows.
 - [ ] **Launcher tracks must look identical to playlist tracks** — same colour fill, same header control set, same
       text: share the playlist's track-header drawing instead of keeping a parallel one in views/launcher.rs.
 

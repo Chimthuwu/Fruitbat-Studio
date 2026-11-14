@@ -95,13 +95,15 @@ pub(super) struct Follower {
     /// One-pole states: two cascaded low-passes and two cascaded high-passes on the mono sum.
     lp: [f32; 2],
     hp: [f32; 2],
-    prev: f32,
+    /// Each high-pass stage's previous **input**. A one-pole high-pass is `y[n] = a * (y[n-1] + x[n] - x[n-1])`,
+    /// so the second stage must remember the first stage's output, not the raw sample the first stage saw.
+    hp_prev: [f32; 2],
     level: f32,
 }
 
 impl Follower {
     fn new(id: u32, source: AudioFollower) -> Follower {
-        Follower { id, source, lp: [0.0; 2], hp: [0.0; 2], prev: 0.0, level: 0.0 }
+        Follower { id, source, lp: [0.0; 2], hp: [0.0; 2], hp_prev: [0.0; 2], level: 0.0 }
     }
 
     /// Detects the band-filtered level of `samples` (interleaved stereo) and moves the smoothed level toward it.
@@ -125,9 +127,15 @@ impl Follower {
             // High-pass first, then low-pass: the detection band, before any level is measured.
             let mut y = x;
             if low > 0.0 {
-                for s in &mut self.hp {
-                    *s = hp_a * (*s + y - self.prev);
-                    y = *s;
+                for k in 0..2 {
+                    // Each stage keeps its own previous input: feeding stage 2 the same raw-sample history as
+                    // stage 1 leaks the unfiltered signal into the detector (the two stages stop being a
+                    // cascade) and makes the band's low edge far weaker than its cutoff says.
+                    let x_prev = self.hp_prev[k];
+                    let y_prev = self.hp[k];
+                    self.hp_prev[k] = y;
+                    self.hp[k] = hp_a * (y_prev + y - x_prev);
+                    y = self.hp[k];
                 }
             }
             if high > 0.0 {
@@ -136,7 +144,6 @@ impl Follower {
                     y = *s;
                 }
             }
-            self.prev = x;
             peak = peak.max(y.abs());
             sum_sq += f64::from(y) * f64::from(y);
             n += 1;
@@ -625,6 +632,44 @@ mod tests {
     use os_model::{AutoPoint, Automation, Channel, ChannelKind, Clip, ClipSource, Project};
 
     use crate::{Engine, Instrument, PlayMode, SampleLibrary};
+
+    /// The follower's band must actually reject signal below its low edge: a 100 Hz tone inside the 20–200 Hz low
+    /// band reads far higher than a 5 Hz tone the high-passes remove. Regression: both high-pass stages once shared
+    /// one previous-input value, so the second stage subtracted the raw sample history again and leaked unfiltered
+    /// signal past the band.
+    #[test]
+    fn a_followers_low_band_rejects_what_is_below_it() {
+        fn level(hz: f32) -> f32 {
+            let mut f = super::Follower::new(
+                1,
+                os_model::modulation::AudioFollower {
+                    band: os_model::modulation::Band::Low,
+                    attack: 0.0005,
+                    release: 0.0005,
+                    ..Default::default()
+                },
+            );
+            let rate = 48_000.0f32;
+            let mut phase = 0.0f32;
+            for _ in 0..200 {
+                let mut buf = Vec::with_capacity(512 * 2);
+                for _ in 0..512 {
+                    let s = 0.5 * (phase * std::f32::consts::TAU).sin();
+                    phase = (phase + hz / rate).fract();
+                    buf.push(s);
+                    buf.push(s);
+                }
+                f.feed(&buf, rate);
+            }
+            f.level
+        }
+        let low = level(5.0);
+        let mid = level(100.0);
+        assert!(
+            mid > low * 3.0,
+            "the low band must reject 5 Hz far more than 100 Hz (5 Hz {low:.4}, 100 Hz {mid:.4})"
+        );
+    }
 
     use super::*;
 
