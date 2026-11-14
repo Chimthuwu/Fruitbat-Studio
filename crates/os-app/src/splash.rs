@@ -3,12 +3,12 @@
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! The startup splash: General ▸ Miscellaneous "Show startup splash screen" (`prefs::SHOW_SPLASH`). With the check on,
-//! a borderless window centred on the primary monitor, above every other window, shows the full-colour logo as a
-//! loading gauge from launch until startup is done: the lemon fills round with startup's progress while light rakes
-//! round the record's grooves, and a status line under the disc names the step. Once the main window shows and the
-//! opened project has loaded (and the splash has shown for a moment, however quick that was), the lemon tops up, the
-//! light fades, the mark pops and the splash fades away. With the check off there is none. A program setting, read
-//! once at start (`main`); `--screenshot`, the helper processes and tests never open it.
+//! a borderless window centred on the primary monitor, above every other window, shows the Fruitbat wordmark on a
+//! dark disc from launch until startup is done, with a status line under the disc naming the step and the startup
+//! percentage. Once the main window shows and the opened project has loaded (and the splash has shown for a moment,
+//! however quick that was), the percentage tops up to "Ready", the mark pops and the splash fades away. With the check
+//! off there is none. A program setting, read once at start (`main`); `--screenshot`, the helper processes and tests
+//! never open it.
 //!
 //! The window has no background of its own: only the disc, its soft (Gaussian) shadow and the status line show, over
 //! whatever is behind, and clicks go through it. It is animated on a thread of its own (on macOS in a process of its
@@ -437,8 +437,9 @@ impl Painter {
             let smooth = PixmapPaint { quality: FilterQuality::Bilinear, ..PixmapPaint::default() };
             px.draw_pixmap(0, 0, self.shadow.as_ref(), &smooth, about, None);
         }
-        // Logo units to device px, the disc's outer edge on the disc.
-        let k = DISC.2 * s * look.scale / (2.0 * R);
+        // Logo units to device px, the disc's outer edge just inside the new disc: the old artwork is covered by it,
+        // so its gold rim must not peek through the badge's round edge.
+        let k = (DISC.2 * look.scale - OLD_ART_INSET) * s / (2.0 * R);
         let t = Transform::from_translate(cx, cy).pre_scale(k, k).pre_translate(-C.0, -C.1);
         let fill = |px: &mut Pixmap, path: &Path, c: u32, mask: Option<&Mask>| px.fill_path(path, &solid(c), FillRule::Winding, t, mask);
         // The record half: the label and the shimmer seen through its cut-outs, the record, the spindle.
@@ -492,7 +493,9 @@ impl Painter {
         if let Some(circle) = disc.finish() {
             self.frame.pixmap.fill_path(&circle, &solid(0x0b0b0d), FillRule::Winding, Transform::identity(), None);
         }
-        crate::brand::draw_mark(&mut self.frame, cx / s, cy / s, DISC.2 * look.scale);
+        // The whole wordmark across the disc: the square mark it used to stamp here is cropped through its own
+        // letters, so any size of it looked like artwork cut off by the circle.
+        crate::brand::draw_full(&mut self.frame, DISC.0, DISC.1, DISC.2 * WORDMARK * look.scale);
         let at = (((DISC.0 - DISC.2 / 2.0) * s).round() as i32, ((DISC.1 + DISC.2 / 2.0 + CAPTION_GAP) * s).round() as i32);
         self.frame.pixmap.draw_pixmap(at.0, at.1, self.caption.pixmap.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
         &self.frame.pixmap
@@ -523,6 +526,13 @@ impl Painter {
         c.text(font, ((DISC.2 - w) / 2.0).round(), y, Color::rgb(CAPTION_INK), text);
     }
 }
+
+/// How far inside the disc the old logo's artwork is scaled, logical px: covered by the disc, and clear of the
+/// antialiasing that would otherwise leave its gold rim showing round the badge.
+const OLD_ART_INSET: f32 = 6.0;
+
+/// How much of the disc's width the wordmark takes, leaving a margin of the disc either side.
+const WORDMARK: f32 = 0.94;
 
 /// The disc's shadow, `w` x `h` device px at `scale`: a black disc under it, blurred with a Gaussian.
 fn shadow(w: u32, h: u32, scale: f32) -> Option<Pixmap> {
@@ -1256,11 +1266,18 @@ mod tests {
             let (below, above) = (rgba(cx, cy + r + gap).3, rgba(cx, cy - r - gap).3);
             assert!(below > above && above > 0, "a soft shadow falling down, scale {scale}: {below} vs {above}");
             assert_eq!(rgba(w - 1, cy).3, 0, "it fades out before the window's edge, scale {scale}");
-            // The badge: an opaque disc, with the artwork's lime wordmark at its centre rather than the old lemon.
+            // The badge: an opaque disc, the wordmark's lime letters across its middle, and nothing of the artwork
+            // outside the circle (the square mark used to stick out past the disc's rim).
             assert_eq!(rgba(cx, cy).3, 0xff, "the badge's disc, scale {scale}");
-            let (mx, my) = (((DISC.0 - DISC.2 / 2.0) * scale + 430.0 / 576.0 * DISC.2 * scale) as usize, ((DISC.1 - DISC.2 / 2.0) * scale + 300.0 / 576.0 * DISC.2 * scale) as usize);
-            let m = rgba(mx, my);
-            assert!(m.3 == 0xff && m.1 > 180 && m.0 > 150, "the Fruitbat wordmark, scale {scale}: {m:?}");
+            let band = (cy as i32 - (28.0 * scale) as i32) as usize..(cy as i32 + (28.0 * scale) as i32) as usize;
+            let lime = band.flat_map(|y| (cx - (100.0 * scale) as usize..cx + (100.0 * scale) as usize).map(move |x| (x, y)))
+                .filter(|&(x, y)| { let c = rgba(x, y); c.3 == 0xff && c.1 > 170 && c.0 > 140 })
+                .count();
+            assert!(lime > 100, "the Fruitbat wordmark across the disc, scale {scale}: {lime} lime pixels");
+            let inside = rgba(cx + (0.66 * r as f32) as usize, cy + (0.66 * r as f32) as usize);
+            assert!(inside.3 == 0xff && inside.0 < 40 && inside.1 < 40, "clear disc inside the rim, scale {scale}: {inside:?}");
+            let corner = rgba(cx - (0.94 * r as f32) as usize, cy - (0.94 * r as f32) as usize);
+            assert_eq!(corner.3, 0, "nothing of the artwork past the disc, scale {scale}");
             // The status line: an opaque pill centred under the disc, no wider than its text needs.
             let ty = cy + r + ((CAPTION_GAP + CAPTION_H / 2.0) * scale) as usize;
             assert_eq!(rgba(cx, ty).3, 0xff, "the status line, scale {scale}");
