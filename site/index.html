@@ -13,7 +13,7 @@
 <meta property="og:site_name" content="FruitBat Studio">
 <meta property="og:url" content="https://fruitbat.pages.dev/">
 <meta property="og:title" content="FruitBat Studio — a hybrid pattern-based &amp; modular DAW, built in Rust">
-<meta property="og:description" content="Fast pattern sequencing, a clip launcher, cable-routed modulation and FL Studio project support in one native Rust workstation. Pre-alpha, open source.">
+<meta property="og:description" content="Fast pattern sequencing, a clip launcher, cable-routed modulation and multi-DAW project interchange in one native Rust workstation. Pre-alpha, open source.">
 <meta property="og:image" content="https://fruitbat.pages.dev/assets/og.png">
 <meta property="og:image:secure_url" content="https://fruitbat.pages.dev/assets/og.png">
 <meta property="og:image:type" content="image/png">
@@ -160,6 +160,7 @@
     <span class="brand">FruitBat <span>Studio</span></span>
     <nav class="nav-links">
       <a href="#features">Features</a>
+      <a href="#projects">Projects</a>
       <a href="#screenshots">Screenshots</a>
       <a href="#build">Build</a>
       <a href="#status">Status</a>
@@ -215,8 +216,8 @@
         <p>Scenes, clips, launch quantisation, follow actions, per-track stop, mute and solo, and keyboard navigation alongside the classic playlist.</p>
       </article>
       <article class="card">
-        <h3><span>◆</span>FL Studio projects</h3>
-        <p>Opens and saves <code class="inline">.flp</code> files, alongside FruitBat's own <code class="inline">.lemon</code> project format. FLP support is still young — work on copies and keep backups.</p>
+        <h3><span>◆</span>Multi-DAW project support</h3>
+        <p>Built for interchange rather than lock-in: <strong>DAWproject</strong>, the open XML-based project format from Bitwig and PreSonus, plus other DAWs' save formats, alongside FruitBat's own lossless <code class="inline">.lemon</code> file.</p>
       </article>
       <article class="card">
         <h3><span>◆</span>Plugin hosting</h3>
@@ -236,6 +237,46 @@
       <div class="stat"><b>3</b><span>Platforms</span></div>
       <div class="stat"><b>CLAP · VST3 · VST2</b><span>Plugins</span></div>
       <div class="stat"><b>GPL-3.0</b><span>License</span></div>
+    </div>
+  </section>
+
+  <section id="projects" class="wrap">
+    <h2>Multi-DAW project support</h2>
+    <p class="section-lede">
+      A project should not be trapped in the workstation that made it. FruitBat's project layer is being built around
+      open, documented interchange rather than a single vendor's save file.
+    </p>
+    <div class="grid">
+      <article class="card">
+        <h3><span>◆</span>DAWproject</h3>
+        <p>
+          <strong>DAWproject</strong> is the open, XML-based project format from Bitwig and PreSonus: a single
+          <code class="inline">.dawproject</code> bundle holding the arrangement — tracks, clips, notes, automation,
+          device parameters and the audio the project references — readable by any host that implements the spec.
+          Tracks, musical data and mixer state stay editable on the other side, not flattened to audio.
+        </p>
+      </article>
+      <article class="card">
+        <h3><span>◆</span>Other DAW save formats</h3>
+        <p>
+          Alongside DAWproject, the goal is to read and write the save formats other workstations actually produce, and
+          to fall back to Standard MIDI Files plus rendered stems where a format cannot be mapped losslessly. Projects
+          move between tools without a rebuild by hand.
+        </p>
+      </article>
+      <article class="card">
+        <h3><span>◆</span>Native <code class="inline">.lemon</code></h3>
+        <p>
+          FruitBat's own project file stays the lossless save for everything unique to it — launcher scenes and clips,
+          modulators and their routings, skins, track state — with nothing silently dropped. An interchange format is
+          for moving projects; the native file is for keeping them.
+        </p>
+      </article>
+    </div>
+    <div class="note" style="margin-top:1.5rem">
+      <strong>In development.</strong> Pre-alpha builds save the native <code class="inline">.lemon</code> project file.
+      DAWproject read/write and the per-format importers are the next milestones, tracked in the
+      <a href="https://github.com/Chimthuwu/Fruitbat-Studio/blob/main/docs/AUDIT-2026-11-14-fruitbat.md">status audit</a>.
     </div>
   </section>
 

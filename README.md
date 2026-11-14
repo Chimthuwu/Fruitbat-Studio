@@ -45,8 +45,9 @@
   ALSA and Core Audio.
 - **Modular patching:** connect LFOs, random sources and audio followers to instrument, effect and mixer parameters on
   the fly.
-- **FL Studio projects:** opens and saves `.flp` files, although that support is still young — work on copies and keep
-  backups.
+- **Multi-DAW project support:** the project layer is aimed at interchange rather than lock-in — **DAWproject**, the
+  open XML-based project format from Bitwig and PreSonus, plus other DAWs' save formats, with FruitBat's own lossless
+  `.lemon` file as the native save. Interchange is still landing in the pre-alpha; the audit below tracks what is live.
 - **Clip launcher:** scenes, clips, launch quantisation and keyboard navigation, alongside the classic playlist.
 - **Custom UI aesthetic:** deep botanical greens, passionfruit purples and midnight obsidian styling, with Meridian,
   Lemon, Lemon Industrial and Citrus skins.
@@ -101,7 +102,8 @@ macOS needs the Xcode Command Line Tools (`xcode-select --install`). More platfo
 - **Language:** Rust 2024 edition.
 - **Application:** `os-app` — windows, editors, transport and the CPU-rendered UI.
 - **Audio Engine:** `os-engine` / `os-dsp` — sampler, mixer, routing, effects, envelopes and automation.
-- **Project files:** `os-flp` — a lossless FL Studio `.flp` event-stream reader/writer.
+- **Project files:** a lossless event-stream project reader/writer behind the interchangeable project formats, with
+  `os-model` holding the format-independent project model and `.lemon` as the native save.
 - **Plugin hosting:** `os-host`, `os-clap`, `os-vst3`, `os-vst2`.
 - **Interface:** `os-ui` — canvas, text rendering and the shared widget kit; `os-theme` for skins and themes.
 - **Bundled instruments and effects:** Lemon Sampler, Lemon Trio, Citrus, Lemon Drum Sampler, Lemon Slicer, Tesla and
@@ -155,8 +157,8 @@ that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warra
 PARTICULAR PURPOSE.
 
 Third-party components keep their authors' copyright and licences; their notices are in
-[THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt). FL Studio is a trademark of Image-Line Software. FruitBat Studio is
-an independent project and is not affiliated with, sponsored by or endorsed by Image-Line.
+[THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt). FruitBat Studio is an independent project and is not affiliated
+with, sponsored by or endorsed by any other digital audio workstation vendor.
 
 <div align="center">
 <br>
