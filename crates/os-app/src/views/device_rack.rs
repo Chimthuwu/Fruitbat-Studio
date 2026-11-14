@@ -32,42 +32,48 @@ pub(crate) const MOD_H: f32 = 92.0;
 /// Height of a slot row, the gap between rows, and the trailing "＋" that asks for another row.
 const MOD_SLOT_H: f32 = 72.0;
 const MOD_ROW_GAP: f32 = 6.0;
-const MOD_ADD_W: f32 = 26.0;
 
-/// The strip's height for the current state: one row, plus another row's worth for each extra row (none while the
-/// rack is collapsed).
+/// The strip's height for the current state: one line, plus another line's worth for each one after it (none while
+/// the rack is collapsed).
 pub(crate) fn mod_row_h(s: &State) -> f32 {
     if s.device_rack_collapsed {
         0.0
     } else {
-        MOD_H + (s.modulation.rows() as f32 - 1.0) * (MOD_SLOT_H + MOD_ROW_GAP)
+        MOD_H + (strip_lines(s) as f32 - 1.0) * (MOD_SLOT_H + MOD_ROW_GAP)
     }
 }
 
-/// The project-modulator slot rects in a strip `r` wide, in reading order (row by row), and the add/editor overlays'
-/// anchor. The slots shrink to fit a narrow window rather than overflowing the rack, and the last one leaves the
-/// column for the "＋" that adds a row.
-pub(crate) fn mod_slots(s: &State, r: Rect) -> Vec<Rect> {
+/// The lines the strip takes: a tile for every modulator, then the one add tile, [`PROJECT_SLOTS`] to a line.
+fn strip_lines(s: &State) -> usize {
+    (s.modulation.modulators.len() + 1).div_ceil(os_model::modulation::PROJECT_SLOTS).max(1)
+}
+
+/// The strip's tiles in a strip `r` wide, in reading order (line by line): every modulator's project slot and rect,
+/// then exactly one add tile in the first free slot. There is no grid of empty slots to scroll past. The tiles shrink
+/// to fit a narrow window rather than overflowing the rack.
+pub(crate) fn mod_slots(s: &State, r: Rect) -> Vec<(u8, Rect)> {
     if s.device_rack_collapsed {
         return Vec::new();
     }
     let row = mod_row_rect(s, r);
     let gap = 5.0;
     let n = os_model::modulation::PROJECT_SLOTS;
-    let w = ((row.w - 14.0 - gap * (n as f32 - 1.0) - MOD_ADD_W - gap) / n as f32).clamp(24.0, 84.0);
-    (0..s.modulation.slots())
-        .map(|i| {
+    let mut slots: Vec<u8> = s.modulation.modulators.iter().map(|m| m.slot).filter(|&s| s != os_model::modulation::NO_SLOT).collect();
+    slots.sort_unstable();
+    // Exactly one empty slot: the one the next modulator would take (NO_SLOT once the strip is full, where adding
+    // grows another line).
+    slots.push(s.modulation.free_slot().unwrap_or(os_model::modulation::NO_SLOT));
+    let cols = slots.len().clamp(1, n);
+    let w = ((row.w - 14.0 - gap * (cols as f32 - 1.0)) / cols as f32).clamp(24.0, 84.0);
+    slots
+        .into_iter()
+        .enumerate()
+        .map(|(i, slot)| {
             let (col, line) = (i % n, i / n);
             let y = row.y + 16.0 + line as f32 * (MOD_SLOT_H + MOD_ROW_GAP);
-            Rect::new(row.x + 7.0 + col as f32 * (w + gap), y, w, MOD_SLOT_H)
+            (slot, Rect::new(row.x + 7.0 + col as f32 * (w + gap), y, w, MOD_SLOT_H))
         })
         .collect()
-}
-
-/// The "＋" after the last slot of the last row: another row of slots (`ModAct::AddRow`).
-pub(crate) fn mod_add_row_rect(s: &State, r: Rect) -> Option<Rect> {
-    let last = mod_slots(s, r).last().copied()?;
-    Some(Rect::new(last.right() + 5.0, last.y + (last.h - 30.0) / 2.0, MOD_ADD_W, 30.0))
 }
 
 /// The modulator strip's rect, immediately above the rack panel `r` (none while the rack is collapsed).
@@ -1225,17 +1231,14 @@ pub(crate) fn mod_row_paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
     // The plots follow the snapshot; sampling once a frame at ~30 Hz is what the handoff asks for.
     s.mod_hist.borrow_mut().sample(s, f.playing, f.tempo);
     ui.c.push_clip(row);
-    for (i, slot) in mod_slots(s, r).into_iter().enumerate() {
-        if slot.x + slot.w > row.right() - 2.0 {
+    for (slot, at) in mod_slots(s, r) {
+        if at.x + at.w > row.right() - 2.0 {
             break;
         }
-        match s.modulation.modulator_at_slot(i as u8) {
-            Some(m) => mod_slot_paint(ui, s, slot, i as u8, m),
-            None => mod_empty_slot(ui, s, slot, i as u8),
+        match s.modulation.modulator_at_slot(slot) {
+            Some(m) => mod_slot_paint(ui, s, at, slot, m),
+            None => mod_empty_slot(ui, s, at, slot),
         }
-    }
-    if let Some(plus) = mod_add_row_rect(s, r).filter(|p| p.right() <= row.right() - 2.0) {
-        mod_add_row_button(ui, s, plus);
     }
     ui.c.pop_clip();
 }
@@ -1311,20 +1314,6 @@ fn mod_slot_paint(ui: &mut Ui, s: &State, r: Rect, slot: u8, m: &os_model::modul
     let _ = slot;
 }
 
-/// The "＋" after the last slot: not an empty slot, but the strip's growth — another row of slots. It reads apart
-/// from the empty slots' plain "+": a framed button with a bar under the plus, in the modulation accent.
-fn mod_add_row_button(ui: &mut Ui, _s: &State, r: Rect) {
-    let t = ui.t;
-    let hov = ui.hit(r, Action::Mod(crate::modulation::ModAct::AddRow), "Add another row of modulator slots");
-    // A row control, not a slot: its face is tinted with the modulation colour, its frame and its plus are accent, and
-    // the bar under the plus reads as "another row" rather than "one more modulator here".
-    let face = t.s(0x1b1f21).mix(t.modulation, if hov { 0.18 } else { 0.10 });
-    ui.c.fill_rrect(r, 3.0, face);
-    ui.c.stroke_rrect(r, 3.0, 1.0, t.modulation.with_alpha(if hov { 230 } else { 150 }));
-    ui.c.text_center(fnt(15.0), Rect::new(r.x, r.cy() - 10.0, r.w, 16.0), t.modulation.with_alpha(220), "+");
-    ui.c.fill_rect(Rect::new(r.cx() - 6.0, r.cy() + 4.0, 12.0, 2.0), t.modulation.with_alpha(if hov { 250 } else { 190 }));
-}
-
 /// An empty slot's "+" (the add menu opens from it).
 fn mod_empty_slot(ui: &mut Ui, s: &State, r: Rect, slot: u8) {
     let t = ui.t;
@@ -1340,7 +1329,7 @@ fn mod_empty_slot(ui: &mut Ui, s: &State, r: Rect, slot: u8) {
 pub(crate) fn mod_add_menu_paint(ui: &mut Ui, s: &State, r: Rect) {
     let slots = mod_slots(s, r);
     if let Some(slot) = s.mod_add_slot {
-        if let Some(&anchor) = slots.get(usize::from(slot)) {
+        if let Some((_, anchor)) = slots.iter().find(|(at, _)| *at == slot).copied() {
             let w = 148.0;
             let h = 3.0 * 21.0 + 55.0;
             let m = Rect::new(anchor.x.min(r.right() - w - 2.0), (anchor.y - h - 2.0).max(2.0), w, h);

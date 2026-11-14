@@ -1230,8 +1230,6 @@ pub enum ModAct {
     FocusStrip,
     /// The empty slot's "+" (or a click elsewhere closes it).
     AddMenu(u8),
-    /// The "＋" after the last slot: another row of modulator slots.
-    AddRow,
     CloseAdd,
     /// A type from the add menu.
     AddKind(u8, Kind),
@@ -1345,19 +1343,17 @@ pub fn act(app: &mut crate::app::App, a: ModAct) {
             s.mod_menu = None;
             s.mod_editor = None;
         }
-        ModAct::AddRow => {
-            if !s.modulation.add_row() {
-                s.message = Some(format!("The modulator strip holds at most {} rows", os_model::modulation::MAX_ROWS));
-            }
-            s.mod_add_slot = None;
-            s.mod_menu = None;
-            app.invalidate();
-            return;
-        }
         ModAct::CloseAdd => s.mod_add_slot = None,
         ModAct::AddKind(slot, kind) => {
             s.mod_add_slot = None;
             let source = set_kind(ModSource::default(), kind);
+            // The strip's add tile sits in the first free slot; with every row taken it grows another line first.
+            let slot = if slot == os_model::modulation::NO_SLOT {
+                s.modulation.add_row();
+                s.modulation.free_slot().unwrap_or(os_model::modulation::NO_SLOT)
+            } else {
+                slot
+            };
             run(app, ModCmd::AddInSlot(slot, source));
             if let Some(id) = app.state.modulation.modulator_at_slot(slot).map(|m| m.id) {
                 select_one(&mut app.state, id);

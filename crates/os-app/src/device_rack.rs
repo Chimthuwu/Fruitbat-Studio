@@ -1737,31 +1737,55 @@ mod tests {
         assert_eq!(height(&app.state), 0.0);
     }
 
-    /// The strip carries all twenty-one project-modulator slots in one row, the last one inside the panel and
-    /// clickable even at the narrowest usual window.
+    /// The strip shows one add tile while it is empty, not a grid of empty slots: the handoff's "populated
+    /// modulators plus exactly one add row".
     #[test]
-    fn the_modulator_strip_shows_every_slot() {
+    fn the_modulator_strip_shows_one_add_tile() {
         let Ok(mut c) = os_ui::Canvas::new(1229, 900, 1.0) else { return };
         let mut app = app();
         app.state.screen = (1229.0, 900.0);
         crate::playlist::run(&mut app, Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi));
         let r = crate::views::device_rack::panel_rect(&app.state, 1229.0, 900.0);
         let slots = crate::views::device_rack::mod_slots(&app.state, r);
-        assert_eq!(slots.len(), os_model::modulation::PROJECT_SLOTS);
-        assert!(slots.last().is_some_and(|s| s.right() <= r.right() - 2.0), "the last slot is on the panel");
-        assert!(slots.windows(2).all(|w| w[0].right() <= w[1].x), "the slots do not overlap");
+        assert_eq!(slots.len(), 1, "one add tile, no empty grid");
+        assert!(slots[0].1.right() <= r.right() - 2.0, "the tile is on the panel");
         app.paint(&mut c, None);
-        let last = os_model::modulation::PROJECT_SLOTS as u8 - 1;
         assert!(
-            app.hits
-                .iter()
-                .any(|h| h.action == Action::Mod(crate::modulation::ModAct::AddMenu(last))),
-            "slot {last} paints its add button"
+            app.hits.iter().any(|h| h.action == Action::Mod(crate::modulation::ModAct::AddMenu(0))),
+            "the add tile opens the add menu for the first free slot"
         );
-        assert!(
-            app.hits.iter().any(|h| h.action == Action::Mod(crate::modulation::ModAct::AddRow)),
-            "the strip ends with the add-row button, apart from the slots' own +"
-        );
+    }
+
+    /// Every populated modulator gets a tile and the strip still ends with exactly one add tile; a full line wraps
+    /// onto another one and the strip grows to hold it.
+    #[test]
+    fn the_strip_shows_every_modulator_and_one_add_tile() {
+        let Ok(mut c) = os_ui::Canvas::new(1600, 900, 1.0) else { return };
+        let mut app = app();
+        app.state.screen = (1600.0, 900.0);
+        for kind in [crate::modulation::Kind::Lfo, crate::modulation::Kind::Random, crate::modulation::Kind::Lfo] {
+            let slot = app.state.modulation.free_slot().expect("a free slot");
+            crate::modulation::act(&mut app, crate::modulation::ModAct::AddKind(slot, kind));
+        }
+        let panel = crate::views::device_rack::panel_rect(&app.state, 1600.0, 900.0);
+        let slots = crate::views::device_rack::mod_slots(&app.state, panel);
+        assert_eq!(slots.len(), app.state.modulation.modulators.len() + 1, "every modulator, then the one add tile");
+        assert!(slots.windows(2).all(|w| w[0].1.right() <= w[1].1.x || w[1].1.y > w[0].1.y), "no tile overlaps another");
+        let free = app.state.modulation.free_slot().expect("a free slot");
+        assert_eq!(slots.last().map(|(s, _)| *s), Some(free), "the add tile is the first free slot");
+        app.paint(&mut c, None);
+        assert!(app.hits.iter().any(|h| h.action == Action::Mod(crate::modulation::ModAct::AddMenu(free))));
+        // A full line wraps: twenty-one modulators take two lines, and the strip is taller for it.
+        let one_line = crate::views::device_rack::mod_row_h(&app.state);
+        for _ in app.state.modulation.modulators.len()..os_model::modulation::PROJECT_SLOTS {
+            let slot = app.state.modulation.free_slot().unwrap_or(0);
+            crate::modulation::act(&mut app, crate::modulation::ModAct::AddKind(slot, crate::modulation::Kind::Lfo));
+        }
+        assert!(crate::views::device_rack::mod_row_h(&app.state) > one_line, "the strip grew a line");
+        let panel = crate::views::device_rack::panel_rect(&app.state, 1600.0, 900.0);
+        let slots = crate::views::device_rack::mod_slots(&app.state, panel);
+        let n = os_model::modulation::PROJECT_SLOTS;
+        assert!(slots[n].1.y > slots[0].1.bottom(), "the wrapped tiles sit on a new line");
     }
 
     /// A populated modulator tile carries its own remove button, so it can be deleted without opening a menu.
@@ -1779,37 +1803,6 @@ mod tests {
         );
         crate::modulation::act(&mut app, crate::modulation::ModAct::Remove(id));
         assert!(app.state.modulation.get(id).is_none(), "the button's action removes it");
-    }
-
-    /// The strip's "＋" after the last slot is its own button: it grows the strip by a row of slots, which are drawn
-    /// on the new row and can hold modulators (a slot beyond the first row's last gets its own add menu).
-    #[test]
-    fn the_add_row_button_gives_another_row_of_slots() {
-        let Ok(mut c) = os_ui::Canvas::new(1600, 900, 1.0) else { return };
-        let mut app = app();
-        app.state.screen = (1600.0, 900.0);
-        let panel = crate::views::device_rack::panel_rect(&app.state, 1600.0, 900.0);
-        let one_row = crate::views::device_rack::mod_row_h(&app.state);
-        assert_eq!(crate::views::device_rack::mod_slots(&app.state, panel).len(), os_model::modulation::PROJECT_SLOTS);
-        crate::modulation::act(&mut app, crate::modulation::ModAct::AddRow);
-        assert_eq!(app.state.modulation.rows(), 2);
-        assert!(crate::views::device_rack::mod_row_h(&app.state) > one_row, "the strip grew a row");
-        let panel = crate::views::device_rack::panel_rect(&app.state, 1600.0, 900.0);
-        let slots = crate::views::device_rack::mod_slots(&app.state, panel);
-        assert_eq!(slots.len(), os_model::modulation::PROJECT_SLOTS * 2);
-        assert!(slots[os_model::modulation::PROJECT_SLOTS].y > slots[0].bottom(), "the new slots sit on a new row");
-        assert!(slots.windows(2).all(|w| w[0].right() <= w[1].x || w[1].y > w[0].y), "no slot overlaps another");
-        app.paint(&mut c, None);
-        let last_row_two = (os_model::modulation::PROJECT_SLOTS * 2 - 1) as u8;
-        assert!(
-            app.hits.iter().any(|h| h.action == Action::Mod(crate::modulation::ModAct::AddMenu(last_row_two))),
-            "the new row's last slot paints its add button"
-        );
-        assert!(app.hits.iter().any(|h| h.action == Action::Mod(crate::modulation::ModAct::AddRow)));
-        // A slot in the new row holds a modulator.
-        let slot = os_model::modulation::PROJECT_SLOTS as u8 + 2;
-        crate::modulation::act(&mut app, crate::modulation::ModAct::AddKind(slot, crate::modulation::Kind::Lfo));
-        assert!(app.state.modulation.modulator_at_slot(slot).is_some(), "the new row's slot takes a modulator");
     }
 
     /// A device tile's header is shorter than the rack's, and every control in it — LED, name, channel knobs, menu
@@ -1861,7 +1854,7 @@ mod tests {
         let id = app.state.modulation.add(os_model::modulation::ModSource::default());
         app.state.mod_editor = Some(id);
         let panel = crate::views::device_rack::panel_rect(&app.state, app.state.screen.0, app.state.screen.1);
-        let slot = crate::views::device_rack::mod_slots(&app.state, panel)[0];
+        let (_, slot) = crate::views::device_rack::mod_slots(&app.state, panel)[0];
         let o = app.detached_origin(crate::app::Win::ModEditor).expect("the editor has a place");
         assert!((o.x - slot.x.max(8.0)).abs() < 0.01, "the editor starts at the slot: {:?} vs {:?}", o, slot);
         assert!((slot.y - o.bottom() - 8.0).abs() < 1.0, "the editor sits just above the slot: {:?} vs {:?}", o, slot);

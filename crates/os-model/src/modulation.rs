@@ -479,6 +479,10 @@ impl ModGraph {
     /// Adds a modulator with a fresh id, the lowest free project slot (or [`NO_SLOT`] when all slots are taken) and
     /// no targets yet.
     pub fn add(&mut self, source: ModSource) -> ModulatorId {
+        // The strip shows one add tile, so a full row grows another rather than leaving nowhere to put one.
+        if self.free_slot().is_none() {
+            self.add_row();
+        }
         let slot = self.free_slot().unwrap_or(NO_SLOT);
         self.add_with_slot(source, slot)
     }
@@ -802,8 +806,9 @@ mod tests {
         assert_eq!(g.targets_on(path).len(), 1);
     }
 
-    /// The project slots are fixed places: a modulator takes one, removing it leaves the slot empty, and a
-    /// modulator beyond the slots has none. Switching tracks cannot move them because the graph is project state.
+    /// The project slots are fixed places: a modulator takes one, removing it leaves the slot empty, and the strip
+    /// grows another line rather than running out of places. Switching tracks cannot move them because the graph is
+    /// project state.
     #[test]
     fn project_slots_are_fixed_places() {
         assert_eq!(PROJECT_SLOTS, 21);
@@ -819,8 +824,10 @@ mod tests {
             g.add(ModSource::default());
         }
         assert_eq!(g.free_slot(), None);
+        // The strip has no "add row" button any more: a full line grows another one for the next modulator.
         let overflow = g.add(ModSource::default());
-        assert_eq!(g.get(overflow).map(|m| m.slot), Some(NO_SLOT), "a modulator beyond the slots has no slot");
+        assert_eq!(g.rows(), 2, "the graph grew a line");
+        assert_eq!(g.get(overflow).map(|m| m.slot), Some(PROJECT_SLOTS as u8), "the first slot of the new line");
         // Removing frees exactly that slot, and no other modulator moves.
         g.remove(a);
         assert_eq!(g.free_slot(), Some(3));

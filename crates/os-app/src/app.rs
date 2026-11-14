@@ -4673,7 +4673,7 @@ impl App {
                 let id = s.mod_editor.or(s.mod_menu)?;
                 let slot = s.modulation.get(id)?.slot;
                 let panel = views::device_rack::panel_rect(s, s.screen.0, s.screen.1);
-                let r = *views::device_rack::mod_slots(s, panel).get(usize::from(slot))?;
+                let r = views::device_rack::mod_slots(s, panel).into_iter().find(|(at, _)| *at == slot)?.1;
                 let (w, h) = (views::device_rack::MOD_EDITOR_W, views::device_rack::MOD_EDITOR_H);
                 Some(Rect::new(r.x.max(8.0), r.y - 8.0 - h, w, h))
             }
