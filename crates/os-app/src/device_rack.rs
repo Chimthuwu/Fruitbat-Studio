@@ -3484,4 +3484,5 @@ mod tests {
         hold_modulated(&app.state, key, &mut free, std::slice::from_ref(&other));
         assert_eq!(free[0].value, moved, "a control nothing drives follows the instance");
     }
+
 }

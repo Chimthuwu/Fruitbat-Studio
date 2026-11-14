@@ -39,11 +39,12 @@
       under a running source moves the whole swing. A clip or control point that drives the parameter still wins inside
       the engine. `a_modulated_parameter_moves_from_its_own_value`: a tenth above a base of 0.8 is 0.9, and 0.6 without
       one. Mixer and track controls already moved from their authored values and are unchanged.
-- [ ] **The lag when a graph runs**: measured on the engine side first — a four-second render with an LFO on a plugin
-      parameter costs 1.11 ms against 0.88 ms without it (1.27×, ~0.03 % of real time), so the mixer path is not the
-      cost. What is left to check in a real session: the per-frame work the graph turns on (the strip's 60 Hz repaint,
-      the 30 Hz plot sampling, `params_tick`'s per-tick lock of every hosted instance) and a big hosted instrument's own
-      parameter traffic.
+- [ ] **The lag when a graph runs**: two probes, both on a real chain (built-in devices) — a four-second render with
+      an LFO on a plugin parameter costs 1.11 ms against 0.88 ms without it (1.27×, ~0.03 % of real time), and a whole
+      frame (`tick` + a full 1920×1080 paint) is 4.04 ms against 4.16 ms (0.97×, within noise). Neither path shows the
+      lag, so what is left is the one thing a headless probe cannot model: a *hosted* plugin taking the modulated
+      parameter traffic, and `params_tick` locking every host instance each tick while it reports the moves. Next probe:
+      time `params_tick` and a `rack_controls` read against a real VST while a source drives one of its parameters.
 - [ ] **More routable parameters**: only rate, amount, phase and offset are addressable today. Depth-shaping
       a route (the assignment's depth as a destination), a follower's attack/release/gain, and a random source's
       smoothness are the obvious next ones.
