@@ -179,7 +179,10 @@ mod tests {
         assert_eq!(info(&app.state, key1).map(|i| i.name), Some(crate::note_fx::LEMON_ARP.to_string()), "the arp moved");
         assert_eq!(info(&app.state, key0).map(|i| i.name), Some(crate::note_fx::LEMON_TRANSPOSE.to_string()), "the other took slot 0");
         assert_eq!(app.plugins.param_value(key1, id), Some(0.25), "the moved plugin kept its value");
-        assert!(!app.plugins.rack_controls(key0, &[]).is_empty(), "the other plugin still shows its controls");
-        assert!(!app.plugins.rack_controls(key1, &[]).is_empty(), "and so does the moved one");
+        let mut rows = Vec::new();
+        app.plugins.rack_controls(key0, &mut rows, true, &[]);
+        assert!(!rows.is_empty(), "the other plugin still shows its controls");
+        app.plugins.rack_controls(key1, &mut rows, true, &[]);
+        assert!(!rows.is_empty(), "and so does the moved one");
     }
 }

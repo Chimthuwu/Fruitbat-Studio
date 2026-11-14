@@ -64,6 +64,8 @@ pub struct Hosted {
     infos: std::sync::OnceLock<Vec<os_host::ParamInfo>>,
     /// When a tile last re-read its values (`Hosted::rack_due`).
     rack_seen: Look,
+    /// When a tile last read its *whole* parameter list (`Hosted::rack_due`).
+    rack_whole: Look,
     /// The count and time `idle` last looked at it (`Hosted::due`).
     seen: Look,
     /// Its window opens detached: set when the user adds it while "Open new plugin windows floating" is on (`Plugins::added`),
@@ -111,9 +113,23 @@ impl Look {
 
 /// An instance whose count did not move is still looked at this often (anything a plugin did not report).
 const LOOK_EVERY: Duration = Duration::from_millis(250);
-/// How often a device rack tile re-reads its instance's values when the instance reports nothing (25 a second: smooth
-/// enough to watch a knob move, far from the 60 a second that cost big instruments their lock).
+/// How often a device rack tile reads the parameters its instance reports as moved (25 a second: smooth enough to
+/// watch a knob move, far from the 60 a second that cost big instruments their lock).
 const RACK_EVERY: Duration = Duration::from_millis(40);
+/// How often a tile reads the *whole* parameter list: a plugin that moves a value by itself (its own LFOs, a knob in an
+/// editor it reports nothing about) names no ids, and this is where that shows up.
+const RACK_WHOLE_EVERY: Duration = Duration::from_millis(400);
+
+/// What a device rack tile should do on this tick (`Hosted::rack_due`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RackDue {
+    /// Nothing moved: the tile keeps the rows it has.
+    No,
+    /// The parameters the instance reports as moved are read; the rest of the rows stay.
+    Changes,
+    /// The whole parameter list is read again.
+    Whole,
+}
 
 
 /// How long a whole-state read waits for its moment (`lock_between_blocks`): two blocks of 256 frames and more.
@@ -184,6 +200,7 @@ impl Hosted {
             attention,
             infos: std::sync::OnceLock::new(),
             rack_seen: Look::never(),
+            rack_whole: Look::never(),
             seen: Look::never(),
             detached: false,
             #[cfg(plugin_windows)]
@@ -219,17 +236,24 @@ impl Hosted {
         self.infos.get_or_init(|| (0..p.param_count()).filter_map(|i| p.param_info(i)).collect())
     }
 
-    /// Whether a device rack tile should re-read this instance's values now: it asked for attention (a parameter moved
-    /// in its own window) since the last read, or [`RACK_EVERY`] passed. Not every tick: a tile mirrors the plugin, and
-    /// reading a big instrument's ~900 values 60 times a second kept its lock from the audio thread (Vital).
-    fn rack_due(&mut self) -> bool {
+    /// What a device rack tile should read now: every [`RACK_EVERY`] the parameters the instance reports as moved (a
+    /// modulated parameter costs its own id, not the instrument's whole list), the whole list when the instance asked
+    /// for attention (a parameter moved in its own window) or every [`RACK_WHOLE_EVERY`] (a value it moved by itself
+    /// goes unreported). Not every tick: a tile mirrors the plugin, and reading a big instrument's ~900 values 60 times a
+    /// second kept its lock from the audio thread (Vital).
+    fn rack_due(&mut self) -> RackDue {
         let now = Instant::now();
         let count = self.attention.as_ref().map_or(0, |a| a.count());
-        if count == self.rack_seen.count && now.duration_since(self.rack_seen.at) < RACK_EVERY {
-            return false;
+        let news = count != self.rack_seen.count;
+        if !news && now.duration_since(self.rack_seen.at) < RACK_EVERY {
+            return RackDue::No;
         }
         self.rack_seen = Look { count, at: now };
-        true
+        if news || now.duration_since(self.rack_whole.at) >= RACK_WHOLE_EVERY {
+            self.rack_whole = Look { count, at: now };
+            return RackDue::Whole;
+        }
+        RackDue::Changes
     }
 
     /// Whether a per-tick job last done at `last` should lock the instance now, and the look to remember if it does:
@@ -1118,47 +1142,99 @@ impl Plugins {
     }
 
     /// The normalized value of parameter `id` of the instance under `key`.
-    /// The controls a device tile draws, in the plugin's own parameter order: every parameter it shows and the user
-    /// can set, with the plugin's own text for the current value (the previous refresh `prev` supplies the text of a
-    /// value that did not move, so a steady parameter costs no text call). One lock for the whole tile.
-    pub fn rack_controls(&self, key: usize, prev: &[crate::device_rack::RackParam]) -> Vec<crate::device_rack::RackParam> {
+    /// Updates the controls a device tile draws, in the plugin's own parameter order: every parameter it shows and the
+    /// user can set, with the plugin's own text for the current value. `rows` is the read before this one and is
+    /// updated in place, so a big instrument's tile costs its values and not a new list of names and texts.
+    ///
+    /// `whole` reads every value; otherwise only the ids the instance reports as moved are read (`take_param_changes`),
+    /// which is what makes a modulated parameter cost one value call rather than a synth's two thousand. A format that
+    /// reports nothing reads none here and waits for its next whole read (`RackDue`). `held` are the ids the app draws
+    /// itself (a modulated control shows its base): their rows are left to it.
+    pub fn rack_controls(&self, key: usize, rows: &mut Vec<crate::device_rack::RackParam>, whole: bool, held: &[u32]) {
         use crate::device_rack::RackParam;
-        let Some(h) = self.hosted.get(&key) else { return Vec::new() };
+        let Some(h) = self.hosted.get(&key) else {
+            rows.clear();
+            return;
+        };
         // Read between two of the instance's blocks, and skip the tick when it is busy: making a playing instrument
-        // wait for its own lock (what the plain `lock()` did) distorted its audio while the rack showed its tile.
-        // `prev` keeps the tile showing what it had until the next tick gets through.
-        let Some(mut p) = h.lock_for_tick() else { return prev.to_vec() };
-        // `prev` came from this same list, so its rows line up with the parameters one for one: matching by position
+        // wait for its own lock (what the plain `lock()` did) distorted its audio while the rack showed its tile. The
+        // tile keeps showing what it had until the next tick gets through.
+        let Some(mut p) = h.lock_for_tick() else { return };
+        let mut moved = Vec::new();
+        p.take_param_changes(&mut moved);
+        let infos = h.param_infos(&mut p);
+        let shown = |i: &&os_host::ParamInfo| !i.read_only && !i.bypass && !i.hidden;
+        // The rows come from this same list, so they line up with the parameters one for one: matching by position
         // keeps a big instrument's read linear (searching the list for every parameter made it quadratic).
-        let mut at = 0usize;
-        h.param_infos(&mut p)
-            .iter()
-            .filter(|i| !i.read_only && !i.bypass && !i.hidden)
-            .map(|i| {
-                let value = p.param_value(i.id).unwrap_or(i.default);
-                let old = prev.get(at).filter(|r| r.id == i.id);
-                at += 1;
-                let text = match old {
-                    Some(r) if r.value == value => r.text.clone(),
-                    _ => p
-                        .param_text(i.id, value)
-                        .filter(|t| !t.is_empty())
-                        .unwrap_or_else(|| format!("{:.0}%", value * 100.0)),
-                };
-                let plain = i.min + (i.max - i.min) * value;
-                RackParam {
-                    id: i.id,
-                    name: i.name.clone(),
-                    group: i.group.clone(),
-                    value,
-                    plain,
-                    min: i.min,
-                    max: i.max,
-                    text,
-                    toggle: i.steps == 1,
+        let aligned = rows.len() == infos.iter().filter(shown).count()
+            && rows.iter().zip(infos.iter().filter(shown)).all(|(r, i)| r.id == i.id);
+        if !whole && aligned && !moved.is_empty() {
+            for id in moved.iter().copied() {
+                if held.contains(&id) {
+                    continue;
                 }
-            })
-            .collect()
+                let Some(info) = infos.iter().find(|i| i.id == id) else { continue };
+                if !shown(&info) {
+                    continue;
+                }
+                let Some(r) = rows.iter_mut().find(|r| r.id == id) else { continue };
+                let value = p.param_value(id).unwrap_or(info.default);
+                if r.value == value {
+                    continue;
+                }
+                r.value = value;
+                r.plain = info.min + (info.max - info.min) * value;
+                r.text = p
+                    .param_text(id, value)
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or_else(|| format!("{:.0}%", value * 100.0));
+            }
+            return;
+        }
+        if !whole && aligned {
+            // Nothing reported as moved: the rows stand until the next whole read.
+            return;
+        }
+        // A whole read keeps every row of a parameter that did not move (its name, its group, its text): only the
+        // values and the texts of the ones that did are read.
+        let mut old = std::mem::take(rows).into_iter();
+        let mut reuse = true;
+        for i in infos.iter().filter(shown) {
+            let value = p.param_value(i.id).unwrap_or(i.default);
+            let plain = i.min + (i.max - i.min) * value;
+            let reused = if reuse {
+                match old.next() {
+                    Some(r) if r.id == i.id => Some(r),
+                    _ => {
+                        reuse = false;
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let mut row = reused.unwrap_or_else(|| RackParam {
+                id: i.id,
+                name: i.name.clone(),
+                group: i.group.clone(),
+                value,
+                plain,
+                min: i.min,
+                max: i.max,
+                text: String::new(),
+                toggle: i.steps == 1,
+            });
+            // A held control is the app's to draw: its row keeps the value and text it has.
+            if !held.contains(&i.id) && (row.value != value || row.text.is_empty()) {
+                row.value = value;
+                row.plain = plain;
+                row.text = p
+                    .param_text(i.id, value)
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or_else(|| format!("{:.0}%", value * 100.0));
+            }
+            rows.push(row);
+        }
     }
 
     /// The plugin's text for parameter `id` at `value` ("-6.0 dB"): what a tile control the user just moved shows,
@@ -1170,8 +1246,8 @@ impl Plugins {
     }
 
     /// Whether the device rack tile of `key` should re-read its instance's values this tick (`Hosted::rack_due`).
-    pub fn rack_due(&mut self, key: usize) -> bool {
-        self.hosted.get_mut(&key).is_some_and(Hosted::rack_due)
+    pub fn rack_due(&mut self, key: usize) -> RackDue {
+        self.hosted.get_mut(&key).map_or(RackDue::No, Hosted::rack_due)
     }
 
     pub fn param_value(&self, key: usize, id: u32) -> Option<f64> {
@@ -4510,19 +4586,120 @@ mod tests {
         let plugin: SharedPlugin = Arc::new(Mutex::new(Listing(builtin()[0].desc.clone(), 8, reads.clone())));
         let mut pl = Plugins { scale: 1.0, rate: 48000, ..Plugins::default() };
         pl.hosted.insert(1, Hosted::new(plugin));
-        let first = pl.rack_controls(1, &[]);
-        assert_eq!(first.len(), 8, "every shown parameter is in the tile");
+        let mut rows = Vec::new();
+        pl.rack_controls(1, &mut rows, true, &[]);
+        assert_eq!(rows.len(), 8, "every shown parameter is in the tile");
         let once = reads.load(Ordering::Relaxed);
         assert_eq!(once, 8, "the list read once, parameter by parameter");
-        let again = pl.rack_controls(1, &first);
-        assert_eq!(again.len(), 8);
+        let text = rows[0].text.clone();
+        pl.rack_controls(1, &mut rows, true, &[]);
+        assert_eq!(rows.len(), 8);
         assert_eq!(reads.load(Ordering::Relaxed), once, "the list is kept between refreshes");
-        assert_eq!(again[0].text, first[0].text, "an unchanged value keeps the text it had");
-        // The tile is left alone between reads, then re-read once its interval passes.
-        assert!(pl.rack_due(1), "read at once with nothing yet");
-        assert!(!pl.rack_due(1), "left alone between reads");
+        assert_eq!(rows[0].text, text, "an unchanged value keeps the text it had");
+        // The tile is read whole at once, left alone until its interval passes, then reads only what moved (and
+        // everything again once the whole-read interval has passed).
+        assert_eq!(pl.rack_due(1), RackDue::Whole, "read at once with nothing yet");
+        assert_eq!(pl.rack_due(1), RackDue::No, "left alone between reads");
         std::thread::sleep(RACK_EVERY + Duration::from_millis(5));
-        assert!(pl.rack_due(1), "re-read after the interval");
+        assert_eq!(pl.rack_due(1), RackDue::Changes, "only what moved after the interval");
+    }
+
+    /// A hosted instance that names the parameters that moved and counts the values it is asked for.
+    struct Changing(os_host::Descriptor, usize, Arc<std::sync::atomic::AtomicUsize>, Arc<Mutex<Vec<u32>>>);
+    impl os_engine::Instrument for Changing {
+        fn note_on(&mut self, _: u32, _: u8, _: f32) {}
+        fn note_off(&mut self, _: u32, _: u8) {}
+        fn process(&mut self, _: u32, _: &mut [f32], _: &mut [f32]) {}
+    }
+    impl os_engine::HostedEffect for Changing {
+        fn process_fx(&mut self, _: u32, _: &mut [f32], _: &mut [f32]) {}
+    }
+    impl os_host::Plugin for Changing {
+        fn desc(&self) -> &os_host::Descriptor {
+            &self.0
+        }
+        fn activate(&mut self, _: u32) -> bool {
+            true
+        }
+        fn idle(&mut self) {}
+        fn has_editor(&self) -> bool {
+            false
+        }
+        fn editor_open(&self) -> bool {
+            false
+        }
+        fn open_editor(&mut self, _: *mut c_void, _: f32) -> Result<(u32, u32), String> {
+            Err(String::new())
+        }
+        fn editor_size(&self) -> Option<(u32, u32)> {
+            None
+        }
+        fn close_editor(&mut self) {}
+        fn save_state(&self) -> Option<Vec<u8>> {
+            None
+        }
+        fn load_state(&mut self, _: &[u8]) -> bool {
+            false
+        }
+        fn param_count(&self) -> usize {
+            self.1
+        }
+        fn param_info(&self, i: usize) -> Option<os_host::ParamInfo> {
+            (i < self.1).then(|| os_host::ParamInfo {
+                id: i as u32,
+                name: format!("P{i}"),
+                unit: String::new(),
+                group: String::new(),
+                min: 0.0,
+                max: 1.0,
+                default: 0.5,
+                steps: 0,
+                automatable: true,
+                read_only: false,
+                hidden: false,
+                bypass: false,
+                enumerated: false,
+            })
+        }
+        fn param_value(&self, id: u32) -> Option<f64> {
+            self.2.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Some(f64::from(id % 10) / 10.0)
+        }
+        fn param_text(&self, _: u32, value: f64) -> Option<String> {
+            Some(format!("{value:.2}"))
+        }
+        fn take_param_changes(&mut self, into: &mut Vec<u32>) {
+            if let Ok(mut q) = self.3.lock() {
+                into.append(&mut q);
+            }
+        }
+    }
+
+    /// A refresh that is not whole reads only the parameters the instance reports as moved: a two-hundred parameter
+    /// instrument costs the ids that moved and nothing else, and an id the app holds itself (a modulated control) costs
+    /// no read at all.
+    #[test]
+    fn a_refresh_reads_only_what_moved() {
+        use std::sync::atomic::Ordering;
+        let values = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let changes = Arc::new(Mutex::new(Vec::new()));
+        let plugin: SharedPlugin = Arc::new(Mutex::new(Changing(builtin()[0].desc.clone(), 200, values.clone(), changes.clone())));
+        let mut pl = Plugins { scale: 1.0, rate: 48000, ..Plugins::default() };
+        pl.hosted.insert(1, Hosted::new(plugin));
+        let mut rows = Vec::new();
+        pl.rack_controls(1, &mut rows, true, &[]);
+        assert_eq!(rows.len(), 200);
+        let all = values.load(Ordering::Relaxed);
+        assert_eq!(all, 200, "a whole read reads every value");
+        pl.rack_controls(1, &mut rows, false, &[]);
+        assert_eq!(values.load(Ordering::Relaxed), all, "nothing reported, nothing read");
+        changes.lock().unwrap().push(7);
+        pl.rack_controls(1, &mut rows, false, &[]);
+        assert_eq!(values.load(Ordering::Relaxed), all + 1, "one id moved, one value read");
+        assert!((rows[7].value - 0.7).abs() < 1e-9, "the row follows it: {:?}", rows[7]);
+        changes.lock().unwrap().push(7);
+        pl.rack_controls(1, &mut rows, false, &[7]);
+        assert_eq!(values.load(Ordering::Relaxed), all + 1, "a control the app holds costs no read");
     }
 
     /// A removed instance the engine still plays is destroyed on the UI thread once the engine lets go of it on its own

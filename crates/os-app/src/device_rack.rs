@@ -27,7 +27,7 @@ use std::sync::OnceLock;
 
 use crate::app::{App, Drag, State};
 use crate::history::ChannelControl;
-use crate::plugins::Plugins;
+use crate::plugins::{Plugins, RackDue};
 
 /// The shortest the rack may be, in logical px: below this its tiles are too short to read their editor in, and a
 /// splitter drag down to the workspace edge (which used to be allowed) left a sliver of a panel.
@@ -1475,29 +1475,20 @@ pub fn group_selected(app: &mut App) -> bool {
 /// the position being played, else the one the user set (`modulation::live_base`). So a clip still turns a driven knob
 /// and a source does not. Stopped, nothing is published and the rack keeps what it had. A control nothing drives
 /// follows its instance as before.
-fn hold_modulated(s: &State, playing: bool, plugins: &mut Plugins, key: usize, rows: &mut [RackParam], prev: &[RackParam]) {
-    for r in rows.iter_mut() {
-        let Some(old) = prev.iter().find(|p| p.id == r.id) else { continue };
+fn hold_modulated(s: &State, playing: bool, plugins: &mut Plugins, key: usize, rows: &mut [RackParam], held: &[u32]) {
+    for r in rows.iter_mut().filter(|r| held.contains(&r.id)) {
         let Some(target) = crate::params::target_of_id(s, key, r.id) else { continue };
-        if crate::modulation::routings_on(s, target).is_empty() {
+        // The base moved (a clip is driving the parameter): the control follows it, with the plugin's own text.
+        // Stopped, nothing is published and the row keeps what it showed: `rack_controls` never reads it.
+        let Some(base) = playing.then(|| crate::modulation::live_base(s, target)).flatten().map(f64::from) else { continue };
+        if (base - r.value).abs() <= 1e-9 {
             continue;
         }
-        let base = playing.then(|| crate::modulation::live_base(s, target)).flatten().map(f64::from);
-        match base {
-            // The base moved (a clip is driving the parameter): the control follows it, with the plugin's own text.
-            Some(base) if (base - old.value).abs() > 1e-9 => {
-                r.value = base;
-                r.plain = r.min + (r.max - r.min) * base;
-                r.text = plugins
-                    .param_text(key, r.id, base)
-                    .unwrap_or_else(|| format!("{:.0}%", base * 100.0));
-            }
-            _ => {
-                r.value = old.value;
-                r.plain = old.plain;
-                r.text = old.text.clone();
-            }
-        }
+        r.value = base;
+        r.plain = r.min + (r.max - r.min) * base;
+        r.text = plugins
+            .param_text(key, r.id, base)
+            .unwrap_or_else(|| format!("{:.0}%", base * 100.0));
     }
 }
 
@@ -1524,17 +1515,27 @@ pub fn sync_embed(app: &mut App) {
         }
         // The tile's rows are taken out of the map rather than copied: a big instrument's list is thousands of rows of
         // name, group and value text, and a copy a frame cost more than the read it was keeping for the next one.
-        let prev = app.state.device_rack_params.remove(&key).unwrap_or_default();
-        // A tile re-reads its instance when the instance has something to say (a value moved in its own window) or
-        // every 40 ms, not on every tick: reading a big instrument's ~900 values 60 times a second held the lock its
-        // audio thread wanted (Vital distorted while the rack showed its track). A tile with nothing yet is read now.
-        if !prev.is_empty() && !app.plugins.rack_due(key) {
-            params.insert(key, prev);
+        let mut rows = app.state.device_rack_params.remove(&key).unwrap_or_default();
+        // A tile reads what its instance reports as moved every 40 ms and the whole list less often, not every tick:
+        // reading a big instrument's ~900 values 60 times a second held the lock its audio thread wanted (Vital
+        // distorted while the rack showed its track). A tile with nothing yet is read whole at once.
+        let due = app.plugins.rack_due(key);
+        if due == RackDue::No && !rows.is_empty() {
+            params.insert(key, rows);
             continue;
         }
-        let mut rows = app.plugins.rack_controls(key, &prev);
+        // The ids the app holds itself: a control a modulation drives shows the engine's base, not the instance's value.
+        let held: Vec<u32> = rows
+            .iter()
+            .filter(|r| {
+                crate::params::target_of_id(&app.state, key, r.id)
+                    .is_some_and(|t| !crate::modulation::routings_on(&app.state, t).is_empty())
+            })
+            .map(|r| r.id)
+            .collect();
+        app.plugins.rack_controls(key, &mut rows, due == RackDue::Whole, &held);
         if !rows.is_empty() {
-            hold_modulated(&app.state, app.transport.playing(), &mut app.plugins, key, &mut rows, &prev);
+            hold_modulated(&app.state, app.transport.playing(), &mut app.plugins, key, &mut rows, &held);
             params.insert(key, rows);
         }
     }
@@ -2182,7 +2183,8 @@ mod tests {
         app.plugins.available.push(eq);
         let index = app.plugins.index_of("Lemon Parametric EQ").expect("offered now");
         app.plugins.create_with(0, index, None).expect("the EQ hosted");
-        let params = app.plugins.rack_controls(0, &[]);
+        let mut params = Vec::new();
+        app.plugins.rack_controls(0, &mut params, true, &[]);
         let param = |which: &str| {
             params
                 .iter()
@@ -3482,19 +3484,27 @@ mod tests {
             cutoff.name,
             cutoff.value
         );
-        // The modulation writes the parameter inside the instance, so what is read back is the modulated value: the rack
-        // keeps the control at the value the user set instead of drawing that. A control nothing drives follows its
-        // instance.
+        // The modulation writes the parameter inside the instance, so what is read back is the modulated value: the tile
+        // does not read a control it holds (the app draws it), so the knob keeps the value the user set. A control
+        // nothing drives follows its instance.
         let moved = if cutoff.value > 0.5 { cutoff.value - 0.4 } else { cutoff.value + 0.4 };
-        let mut read_back = vec![RackParam { value: moved, plain: moved, ..cutoff.clone() }];
-        hold_modulated(&app.state, false, &mut app.plugins, key, &mut read_back, std::slice::from_ref(&cutoff));
+        let mut rows = app.state.device_rack_params.get(&key).cloned().unwrap_or_default();
+        let at = rows.iter().position(|r| r.id == cutoff.id).expect("the cutoff's row");
+        app.plugins.set_param(key, cutoff.id, moved);
+        app.plugins.rack_controls(key, &mut rows, true, &[cutoff.id]);
         assert!(
-            (read_back[0].value - cutoff.value).abs() < 1e-9,
+            (rows[at].value - cutoff.value).abs() < 1e-9,
             "a modulated knob keeps its own value ({:?} at {} vs the read back {moved})",
             cutoff.name,
             cutoff.value
         );
-        assert_eq!(read_back[0].text, cutoff.text, "and its value text");
+        assert_eq!(rows[at].text, cutoff.text, "and its value text");
+        app.plugins.rack_controls(key, &mut rows, true, &[]);
+        assert!(
+            (rows[at].value - moved).abs() < 1e-3,
+            "an undriven control follows its instance: {:?} vs {moved}",
+            rows[at]
+        );
         // Playing, the engine also publishes what the modulation moves from. A clip driving the parameter moves that,
         // and the knob follows it — the modulation's own read-back still does not: without this, assigning a source
         // to a knob stopped its automation from showing at all.
@@ -3502,7 +3512,7 @@ mod tests {
         snap.write_base(os_model::target::decode(target), 0.9);
         app.state.mod_snapshot = std::sync::Arc::new(snap);
         let mut read_back = vec![RackParam { value: moved, plain: moved, ..cutoff.clone() }];
-        hold_modulated(&app.state, true, &mut app.plugins, key, &mut read_back, std::slice::from_ref(&cutoff));
+        hold_modulated(&app.state, true, &mut app.plugins, key, &mut read_back, &[cutoff.id]);
         assert!(
             (read_back[0].value - 0.9).abs() < 1e-6,
             "a driven knob follows its automation ({:?} at 0.9 vs {:?})",
@@ -3517,7 +3527,7 @@ mod tests {
         // Only its modulation status decides: an undriven control takes the instance's value.
         let other = RackParam { id: cutoff.id + 1, ..cutoff.clone() };
         let mut free = vec![RackParam { value: moved, plain: moved, ..other.clone() }];
-        hold_modulated(&app.state, true, &mut app.plugins, key, &mut free, std::slice::from_ref(&other));
+        hold_modulated(&app.state, true, &mut app.plugins, key, &mut free, &[cutoff.id]);
         assert_eq!(free[0].value, moved, "a control nothing drives follows the instance");
     }
 

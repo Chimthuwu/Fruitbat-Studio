@@ -288,6 +288,9 @@ impl<P: Plugin> Plugin for Guarded<P> {
     fn take_param_events(&mut self) -> Vec<ParamEvent> {
         self.run(Vec::new(), |p| p.take_param_events())
     }
+    fn take_param_changes(&mut self, into: &mut Vec<u32>) {
+        self.run((), |p| p.take_param_changes(into))
+    }
     fn take_automation_requests(&mut self) -> Vec<u32> {
         self.run(Vec::new(), |p| p.take_automation_requests())
     }

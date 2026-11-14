@@ -1495,7 +1495,8 @@ mod tests {
             .position(|a| a.desc.name == LEMON_TRIO)
             .expect("Lemon Trio bundled");
         app.plugins.create_with(0, idx, None).expect("the Trio hosted");
-        let params = app.plugins.rack_controls(0, &[]);
+        let mut params = Vec::new();
+        app.plugins.rack_controls(0, &mut params, true, &[]);
         assert!(!params.is_empty(), "the Trio names its parameters");
         let s = &app.state;
         let img = image(s, &app.plugins, 0, LEMON_TRIO, &params, 0.84, 472, 360).expect("the Trio's image");

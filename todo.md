@@ -59,6 +59,14 @@
       re-read on 1 of 300. The read itself halved, 2434 µs → **1034 µs**: `rack_controls` looked up each parameter's
       previous row by scanning the whole list (quadratic) and now matches by position, and `sync_embed` no longer copies
       every tile's rows every tick (257 µs for that instrument) — it moves them out of the map and back.
+- [x] **A tile reads only the parameters that moved**: `Plugin::take_param_changes` (a bounded, allocation-free id list
+      an instance fills from what the host's automation handed it and what it reported; VST3, CLAP, VST2 and the native
+      adapters) drives `rack_controls`' incremental read: every 40 ms a tile reads just those ids, and only every
+      400 ms — or when the instance asks for attention — the whole list, which is where a value the plugin moved by
+      itself shows up. A control the app holds (a modulated one) is skipped entirely, and the rows are updated in place
+      (`&mut Vec<RackControl>`) so a whole read re-reads only the values and texts that changed. On the same real VST3
+      (2120 parameters, one driven): **3.0 ms/s** of reading instead of 21.5 ms/s, a warm whole read 843 µs, a cold one
+      3.0 ms (`a_refresh_reads_only_what_moved`, `a_tiles_parameter_list_is_read_once`).
 - **A docked editor's knobs are the plugin's own**: a VST3/CLAP window draws its controls from its own state, so the app
       cannot make them show the base instead of the modulated value (and must not freeze them: that is the plugin's
       window). Every control the app draws itself — the device rack's tiles, which mirror an editor's parameters — does

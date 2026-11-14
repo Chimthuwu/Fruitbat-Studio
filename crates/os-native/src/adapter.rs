@@ -126,6 +126,9 @@ pub struct NativePlugin {
     sent: Vec<(u32, i32)>,
     /// Values the open editor's controls still have to show (interface thread, `idle`).
     follow: Vec<(u32, i32)>,
+    /// Parameter ids whose values may have moved since the UI last asked (`Plugin::take_param_changes`): the host's
+    /// automation and edits. Room is reserved, so the audio thread never allocates.
+    changed: Vec<u32>,
 }
 
 // SAFETY: the engine serialises all access behind a mutex; never two threads at once.
@@ -160,6 +163,7 @@ impl NativePlugin {
             editor: false,
             sent: Vec::new(),
             follow: Vec::new(),
+            changed: Vec::with_capacity(os_host::MAX_PARAM_CHANGES),
         }
     }
 
@@ -170,6 +174,8 @@ impl NativePlugin {
             return;
         }
         self.plugin.set_param_midi(index as i32, midi);
+        // The id is the index for a native plugin: the tile that shows it reads that one parameter, not all of them.
+        os_host::note_param_change(&mut self.changed, index);
         set_entry(&mut self.sent, index, midi);
         if self.editor {
             set_entry(&mut self.follow, index, midi);
@@ -735,6 +741,11 @@ impl os_host::Plugin for NativePlugin {
         }
         self.send_param(id, midi_value(value));
         true
+    }
+
+    fn take_param_changes(&mut self, into: &mut Vec<u32>) {
+        into.extend_from_slice(&self.changed);
+        self.changed.clear();
     }
 }
 

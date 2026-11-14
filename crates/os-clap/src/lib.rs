@@ -743,6 +743,9 @@ pub struct Plugin {
     pvals: Vec<clap_event_param_value>,
     /// Changes the plugin reported (its editor): gesture begin / end and values, plain.
     param_out: Vec<OutEv>,
+    /// Parameter ids whose values may have moved since the UI last asked (`Plugin::take_param_changes`): the host's
+    /// automation and edits and what the plugin reported. Room is reserved, so the audio thread never allocates.
+    changed: Vec<u32>,
     /// The controller outputs the plugin sent last, per MIDI channel: a pitch bend's bits and the CC's finer bits.
     controls: [Option<(u16, Option<u8>)>; 16],
     /// The notes it put out, kept while capturing (`os_host::Plugin::capture_notes`).
@@ -1019,6 +1022,7 @@ impl Plugin {
                 processed: false,
                 pvals: Vec::with_capacity(params::MAX_AUTO + 64),
                 param_out: Vec::new(),
+                changed: Vec::with_capacity(os_host::MAX_PARAM_CHANGES),
                 controls: [None; 16],
                 capture: false,
                 notes_out: Vec::new(),
@@ -1197,6 +1201,9 @@ impl Plugin {
                     }
                 }
                 e => {
+                    if let OutEv::Value(id, _) = e {
+                        os_host::note_param_change(&mut self.changed, id);
+                    }
                     self.param_out[w] = e;
                     w += 1;
                 }
@@ -2003,6 +2010,7 @@ impl os_host::Plugin for Plugin {
         let plain = self.plain(id, value);
         self.param_queue.retain(|q| q.0 != id);
         self.param_queue.push((id, plain));
+        os_host::note_param_change(&mut self.changed, id);
         self.host_data.attention.raise();
         os_host::wake();
         true
@@ -2035,6 +2043,12 @@ impl os_host::Plugin for Plugin {
                 OutEv::NoteEnd(..) | OutEv::Bend(..) | OutEv::Fine(..) | OutEv::Note(..) => None,
             })
             .collect()
+    }
+
+    fn take_param_changes(&mut self, into: &mut Vec<u32>) {
+        // Copied, not moved: the list keeps the room its audio-thread writer reserved.
+        into.extend_from_slice(&self.changed);
+        self.changed.clear();
     }
 
     fn attention(&self) -> Option<Arc<os_host::Attention>> {

@@ -515,6 +515,9 @@ pub struct Plugin {
     fx_in: (Vec<f32>, Vec<f32>),
     /// Values the processor reported, for the controller on the next idle.
     from_processor: Vec<(u32, f64)>,
+    /// Parameter ids whose values may have moved since the UI last asked (`Plugin::take_param_changes`): the host's
+    /// automation and edits and what the processor reported. Room is reserved, so the audio thread never allocates.
+    changed: Vec<u32>,
     /// Host / editor edits have waited for a `process` call since then (a flush is due without a stream).
     pending_since: Option<Instant>,
     /// (id, step count) of each parameter in list order: the position is the automation index. A parameter whose
@@ -626,6 +629,7 @@ impl Plugin {
                 note_ids: NoteIds { ids: [-1; 128], next: 0, chs: [0; 128] },
                 fx_in: (Vec::new(), Vec::new()),
                 from_processor: Vec::with_capacity(256),
+                changed: Vec::with_capacity(os_host::MAX_PARAM_CHANGES),
                 pending_since: None,
                 param_ids: Vec::new(),
                 midi_map: Vec::new(),
@@ -972,6 +976,8 @@ impl Plugin {
         // No attention raised: the host asked for this value itself, so the UI has no news to look for. Raising it
         // per value (750 times a second for a modulated parameter) made a device rack tile re-read its instance's whole
         // parameter list on every frame. An edit still waiting for a stream nudges on its own (`idle`, `pending_since`).
+        // The id is noted instead, so the tile that shows it reads that one parameter rather than all of them.
+        os_host::note_param_change(&mut self.changed, id);
         self.auto.push((offset, id, v));
     }
 
@@ -1000,16 +1006,19 @@ impl Plugin {
 
     /// Parameter values the processor reported, for the controller.
     fn take_outputs(&mut self) {
-        let out = &mut self.from_processor;
         let mut reported = false;
-        self.params_out.get().for_each_last(|id, v| {
-            reported = true;
-            if let Some(e) = out.iter_mut().find(|e| e.0 == id) {
-                e.1 = v;
-            } else if out.len() < out.capacity() {
-                out.push((id, v));
-            }
-        });
+        {
+            let Self { params_out, from_processor: out, changed, .. } = self;
+            params_out.get().for_each_last(|id, v| {
+                reported = true;
+                os_host::note_param_change(changed, id);
+                if let Some(e) = out.iter_mut().find(|e| e.0 == id) {
+                    e.1 = v;
+                } else if out.len() < out.capacity() {
+                    out.push((id, v));
+                }
+            });
+        }
         // The controller hears them on the UI thread — the processor's own reports, not the values the host's
         // automation put there (those are already its own doing, and nudging the UI for each of them made a device
         // rack tile re-read its instance on every frame while a modulation ran).
@@ -1477,12 +1486,19 @@ impl os_host::Plugin for Plugin {
         unsafe { c.set_param_normalized(id, v) };
         // The processor hears it in its next block (spec §7).
         self.shared.push_value(id, v);
+        os_host::note_param_change(&mut self.changed, id);
         os_host::wake();
         true
     }
 
     fn take_param_events(&mut self) -> Vec<os_host::ParamEvent> {
         self.shared.events.lock().map(|mut v| std::mem::take(&mut *v)).unwrap_or_default()
+    }
+
+    fn take_param_changes(&mut self, into: &mut Vec<u32>) {
+        // Copied, not moved: the list keeps the room its audio-thread writer reserved.
+        into.extend_from_slice(&self.changed);
+        self.changed.clear();
     }
 
     /// "Create automation clip" picked in a context menu, from the plug-in's own menu or the host's popup (spec §9).

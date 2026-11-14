@@ -419,6 +419,9 @@ pub struct Plugin {
     queue: Vec<Note>,
     /// Automation values (frame offset, parameter index, value) for the next process call.
     auto: Vec<(u32, u32, f32)>,
+    /// Parameter ids whose values may have moved since the UI last asked (`Plugin::take_param_changes`): the host's
+    /// automation and edits. Room is reserved, so the audio thread never allocates.
+    changed: Vec<u32>,
     /// The events of the current process call, and the list pointing at them.
     midi: Box<[MidiEvent; MAX_EVENTS]>,
     list: Box<Events<MAX_EVENTS>>,
@@ -482,6 +485,7 @@ impl Plugin {
             editor_scale: 1.0,
             queue: Vec::with_capacity(MAX_NOTES),
             auto: Vec::with_capacity(MAX_AUTO),
+            changed: Vec::with_capacity(os_host::MAX_PARAM_CHANGES),
             midi: Box::new([MidiEvent::default(); MAX_EVENTS]),
             list: Box::new(Events { count: 0, reserved: 0, events: [std::ptr::null_mut(); MAX_EVENTS] }),
             scratch: Vec::new(),
@@ -597,6 +601,8 @@ impl Plugin {
     /// Automation (audio thread): parameter `index` to `value`, `offset` frames into the next process call.
     fn automate(&mut self, offset: u32, index: u32, value: f64) {
         if index < self.inst.num_params() && self.auto.len() < MAX_AUTO {
+            // The id is noted (== the index), so the tile that shows it reads that one parameter, not all of them.
+            os_host::note_param_change(&mut self.changed, index);
             self.auto.push((offset, index, value.clamp(0.0, 1.0) as f32));
         }
     }
@@ -1034,8 +1040,14 @@ impl os_host::Plugin for Plugin {
             return false;
         }
         self.inst.set(id, value.clamp(0.0, 1.0) as f32);
+        os_host::note_param_change(&mut self.changed, id);
         os_host::wake();
         true
+    }
+
+    fn take_param_changes(&mut self, into: &mut Vec<u32>) {
+        into.extend_from_slice(&self.changed);
+        self.changed.clear();
     }
 
     fn take_param_events(&mut self) -> Vec<os_host::ParamEvent> {

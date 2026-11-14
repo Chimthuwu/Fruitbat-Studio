@@ -189,6 +189,18 @@ pub const NOTE_MOD_Y: [&str; 2] = ["Filter bandwidth (modulation Y)", "Mod B"];
 /// A plugin instance, whatever its format.
 ///
 /// Main-thread calls (everything except the `Instrument` / `HostedEffect` methods) come from the UI thread only.
+/// How many ids one [`Plugin::take_param_changes`] read may hold: the room a format reserves once, so recording a
+/// change on the audio thread never allocates.
+pub const MAX_PARAM_CHANGES: usize = 1024;
+
+/// Records `id` among the parameters that moved ([`Plugin::take_param_changes`]): once each, up to
+/// [`MAX_PARAM_CHANGES`], so an audio-thread call never allocates and a modulated parameter costs one entry.
+pub fn note_param_change(changed: &mut Vec<u32>, id: u32) {
+    if changed.len() < MAX_PARAM_CHANGES && !changed.contains(&id) {
+        changed.push(id);
+    }
+}
+
 pub trait Plugin: Instrument + HostedEffect + Send {
     fn desc(&self) -> &Descriptor;
 
@@ -299,6 +311,15 @@ pub trait Plugin: Instrument + HostedEffect + Send {
     /// Parameter changes the plugin made by itself since the last call (its editor), oldest first.
     fn take_param_events(&mut self) -> Vec<ParamEvent> {
         Vec::new()
+    }
+    /// The parameters whose values may have moved since the last call, added to `into` (once each): what the host's automation
+    /// handed the instance and what it reported back, plus what the host set. A device rack tile reads these and leaves
+    /// the rest of its rows alone, instead of reading a big instrument's whole parameter list every refresh. A format
+    /// that cannot say (it appends nothing) keeps the tile reading everything.
+    ///
+    /// Audio-thread safe: an implementation records ids in a Vec it reserved room for (`note_param_change`).
+    fn take_param_changes(&mut self, into: &mut Vec<u32>) {
+        let _ = into;
     }
     /// Parameters the plugin's own menus asked the host to automate since the last call ("Create automation clip",
     /// CLAP context-menu host entries, VST 3 context-menu host entries), by parameter id. Plugins without such menus

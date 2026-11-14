@@ -80,7 +80,9 @@ impl Plugin {
         self.auto.push((offset, id, plain));
         // A sleeping instance takes it in the UI thread's flush; a running one takes it at its next block, and the UI
         // has no news to look for — raising it per value (750 times a second for a modulated parameter) made a device
-        // rack tile re-read its instance's whole parameter list on every frame.
+        // rack tile re-read its instance's whole parameter list on every frame. The id is noted instead, so the tile
+        // that shows it reads that one parameter rather than all of them.
+        os_host::note_param_change(&mut self.changed, id);
         if !self.processing {
             self.host_data.attention.raise();
         }
