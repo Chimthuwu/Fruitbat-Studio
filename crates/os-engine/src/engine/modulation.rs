@@ -36,6 +36,9 @@ use super::Engine;
 /// Where a parameter sits when nothing has set it: halfway.
 pub const DEFAULT_BASE: f64 = 0.5;
 
+/// A target's published base before the engine has run a step for it (a NaN, which no clamped value can be).
+const NO_BASE: u32 = u32::MAX;
+
 /// The live modulation values the UI reads every frame (the handoff's lock-free snapshot). Preallocated by the app
 /// when it installs a graph; the audio thread only stores into it, and nothing here allocates or locks.
 #[derive(Debug, Default)]
@@ -46,6 +49,9 @@ pub struct ModSnapshot {
     targets: Vec<Target>,
     outputs: Box<[AtomicU32]>,
     values: Box<[AtomicU32]>,
+    /// What each target's modulation moves from at the last step: the value its automation hands it there, else its
+    /// own value ([`NO_BASE`] until the engine runs a step).
+    bases: Box<[AtomicU32]>,
 }
 
 impl ModSnapshot {
@@ -56,6 +62,7 @@ impl ModSnapshot {
             targets: targets.to_vec(),
             outputs: (0..ids.len()).map(|_| AtomicU32::new(0)).collect(),
             values: (0..targets.len()).map(|_| AtomicU32::new(0)).collect(),
+            bases: (0..targets.len()).map(|_| AtomicU32::new(NO_BASE)).collect(),
         }
     }
 
@@ -72,6 +79,16 @@ impl ModSnapshot {
         Some(f32::from_bits(self.values[i].load(Ordering::Relaxed)))
     }
 
+    /// What a target's modulation moves from at the last step: the value its automation hands it at that position, or
+    /// its own value. A knob the graph drives is drawn at this, so its automation still turns it while the modulation
+    /// does not. `None` until the engine has run a step (nothing playing).
+    pub fn base(&self, target: u32) -> Option<f32> {
+        let want = os_model::target::decode(target);
+        let i = self.targets.iter().position(|&x| x == want)?;
+        let bits = self.bases[i].load(Ordering::Relaxed);
+        (bits != NO_BASE).then(|| f32::from_bits(bits))
+    }
+
     fn write_output(&self, index: usize, v: f32) {
         if let Some(a) = self.outputs.get(index) {
             a.store(v.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
@@ -81,6 +98,15 @@ impl ModSnapshot {
     fn write_value(&self, target: Target, v: f64) {
         let Some(index) = self.targets.iter().position(|&x| x == target) else { return };
         if let Some(a) = self.values.get(index) {
+            a.store((v.clamp(0.0, 1.0) as f32).to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    /// The write half of [`ModSnapshot::base`], called from the audio thread's step pass. Public so a test can stand in
+    /// for the engine; the UI only reads.
+    pub fn write_base(&self, target: Target, v: f64) {
+        let Some(index) = self.targets.iter().position(|&x| x == target) else { return };
+        if let Some(a) = self.bases.get(index) {
             a.store((v.clamp(0.0, 1.0) as f32).to_bits(), Ordering::Relaxed);
         }
     }
@@ -549,9 +575,9 @@ fn topological(modulators: &[Modulator], edges: &[Edge]) -> Vec<u32> {
 }
 
 /// Adds one step's modulated values, after the clips' values of the same step: every parameter's base (what a clip
-/// last gave it, [`DEFAULT_BASE`] until then) carried by each enabled modulator's offset. Called from the automation
-/// pass so that a value and its modulation are the two halves of one step, and from [`Engine::run_modulation`] when
-/// no clip drives parameters at all.
+/// handed it at this step, else its own value — [`DEFAULT_BASE`] until one is set) carried by each enabled modulator's
+/// offset. Called from the automation pass so that a value and its modulation are the two halves of one step, and from
+/// [`Engine::run_modulation`] when no clip drives parameters at all.
 pub(super) fn step_values(params: &mut ParamAuto, mods: &mut Modulation, pos: f64, at: u32, secs_per_tick: f64, ppq: f64) {
     let (beats, secs) = (pos / ppq, pos * secs_per_tick);
     // Every modulator's value, in dependency order: a route into another modulator is applied here, so the value of a
@@ -581,6 +607,7 @@ pub(super) fn step_values(params: &mut ParamAuto, mods: &mut Modulation, pos: f6
         let value = (base + by).clamp(0.0, 1.0);
         if let Some(snap) = &snap {
             snap.write_value(target, value);
+            snap.write_base(target, base);
         }
         match mods.last.iter_mut().find(|(x, ..)| *x == target) {
             Some((_, last_value, last_base)) if (*last_value - value).abs() < 1e-7 && (*last_base - base).abs() < 1e-7 => continue,
@@ -1025,7 +1052,8 @@ mod tests {
     }
 
     /// A modulator moves the value the clips hand the parameter, not a value of its own: a step sequence at its top,
-    /// bipolar, a quarter of the range, sits a quarter above the ramp (and stops at the top).
+    /// bipolar, a quarter of the range, sits a quarter above the ramp (and stops at the top), and moves from the
+    /// parameter's own value again once the clip has passed it.
     #[test]
     fn modulation_moves_from_the_value_the_clips_hand_on() {
         let p = project(os_model::target::channel_param(0, 7));
@@ -1052,16 +1080,23 @@ mod tests {
                 _ => last_at.push((f, v)),
             }
         }
-        for &(f, v) in &last_at {
+        for &(f, v) in last_at.iter().filter(|&&(f, _)| f < 96000) {
             let base = ((f + 250) as f64 / 96000.0).min(1.0);
             let want = (base + 0.25).min(1.0);
             assert!((v - want).abs() < 1e-6, "frame {f}: {v} vs {want} (the ramp's {base})");
         }
-        // The ramp reaches 0.75 after three of its four beats: from there the parameter sits at its top (and, a value
-        // being sent only when it changes, at the top is where it stays).
-        assert!(last_at.iter().filter(|&&(f, _)| f > 72000).all(|&(_, v)| (v - 1.0).abs() < 1e-9));
-        assert!(last_at.iter().any(|&(f, v)| f > 72000 && (v - 1.0).abs() < 1e-9));
+        // The ramp reaches 0.75 after three of its four beats: from there the parameter sits at its top while the clip
+        // drives it.
+        assert!(last_at.iter().filter(|&&(f, _)| (72000..96000).contains(&f)).all(|&(_, v)| (v - 1.0).abs() < 1e-9));
+        assert!(last_at.iter().any(|&(f, v)| (72000..96000).contains(&f) && (v - 1.0).abs() < 1e-9));
         assert!(last_at.iter().filter(|&&(f, _)| f < 70000).all(|&(_, v)| v < 1.0), "the ramp's own headroom stays");
+        // Past the clip's end nothing drives the parameter, so the swing moves from its own value again: halfway, since
+        // no knob was handed over.
+        assert!(
+            last_at.iter().filter(|&&(f, _)| f >= 96000).all(|&(_, v)| (v - 0.75).abs() < 1e-9),
+            "the clip lets go: {:?}",
+            last_at.iter().filter(|&&(f, _)| f >= 96000).collect::<Vec<_>>()
+        );
     }
 
     /// A disabled modulator, and one whose target the engine does not drive yet (a host parameter), send nothing.

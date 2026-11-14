@@ -690,6 +690,13 @@ pub fn live_value(s: &State, target: u32) -> Option<f32> {
     s.mod_snapshot.value(target)
 }
 
+/// What a driven parameter's modulation moves from at the position being played: the value its automation hands it
+/// there, else its own value. The engine publishes it beside the modulated value, so a driven knob can follow its
+/// automation (a clip still turns it) without following the modulation (which only moves the cursor and the arcs).
+pub fn live_base(s: &State, target: u32) -> Option<f32> {
+    s.mod_snapshot.base(target)
+}
+
 /// What a knob's Modulation menu asks for.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ModCmd {

@@ -57,8 +57,13 @@ pub(super) struct ParamAuto {
     /// Pattern control points on plugin parameters due on the tick starting now: target, level 0..1. They act before
     /// the clips of the same tick (spec: audio/automation.md "Pattern control points").
     pub points: Vec<(Target, f64)>,
-    /// The value each parameter last had from a clip (or a control point): where modulation moves from.
+    /// The value each parameter has of its own: what the user set (the app hands it over with
+    /// `Engine::set_mod_bases`) or a control point last gave it. Where modulation moves from while no clip drives the
+    /// parameter.
     base: Vec<(Target, f64)>,
+    /// The value a clip handed the parameter on at the step being sampled: while one drives it, that is where
+    /// modulation moves from. Cleared every step, so a parameter the clips have passed moves from its own value again.
+    step: Vec<(Target, f64)>,
 }
 
 impl ParamAuto {
@@ -72,19 +77,35 @@ impl ParamAuto {
             last_tick: Vec::with_capacity(16),
             points: Vec::with_capacity(16),
             base: Vec::with_capacity(16),
+            step: Vec::with_capacity(16),
         }
     }
 
-    /// The value the clips (or a control point) last gave `target`, if any: the base modulation moves from.
+    /// The base modulation moves from at the step being sampled: the value a clip handed the parameter on, or its own
+    /// value when no clip drives it here.
     pub fn base_of(&self, target: Target) -> Option<f64> {
-        self.base.iter().find(|(t, _)| *t == target).map(|(_, v)| *v)
+        self.step_of(target).or_else(|| self.base.iter().find(|(t, _)| *t == target).map(|(_, v)| *v))
     }
 
-    /// Remembers `value` as `target`'s base (from a clip or a control point).
+    /// What a clip handed `target` on at this step, if one did.
+    fn step_of(&self, target: Target) -> Option<f64> {
+        self.step.iter().find(|(t, _)| *t == target).map(|(_, v)| *v)
+    }
+
+    /// Remembers `value` as `target`'s own value: the user's (a knob the app hands over) or a control point's. A clip
+    /// driving the parameter at a step still wins there (`set_step`) without overwriting this.
     pub fn set_base(&mut self, target: Target, value: f64) {
         match self.base.iter_mut().find(|(t, _)| *t == target) {
             Some((_, v)) => *v = value,
             None => self.base.push((target, value)),
+        }
+    }
+
+    /// Remembers `value` as what the clips handed `target` on at the step being sampled.
+    fn set_step(&mut self, target: Target, value: f64) {
+        match self.step.iter_mut().find(|(t, _)| *t == target) {
+            Some((_, v)) => *v = value,
+            None => self.step.push((target, value)),
         }
     }
 
@@ -228,6 +249,7 @@ impl Engine {
             // The position in ticks: the tick plus the share of it the step has reached.
             let f = now + step as f64 / len;
             pa.done.clear();
+            pa.step.clear();
             // Later clips win where clips on the same target overlap (as for the other targets).
             for a in self.autos.iter().rev() {
                 // The curve's value at the position last read, for the clip's targets that wait alike.
@@ -257,6 +279,9 @@ impl Engine {
                         }
                     };
                     let Some(v) = v else { continue };
+                    // The step's base, whatever the value turns out to be worth sending: a curve that holds still is
+                    // still what modulation moves from, and a knob moved under it (the app's base) stays out of it.
+                    pa.set_step(target, v);
                     match pa.last.iter_mut().find(|(t, _)| *t == target) {
                         Some((_, last)) if (*last - v).abs() < 1e-7 => continue,
                         Some((_, last)) => *last = v,
@@ -267,7 +292,6 @@ impl Engine {
                         Target::SlotParam(t, s, k) => (Dest::Slot(usize::from(t), usize::from(s)), k),
                         _ => continue,
                     };
-                    pa.set_base(target, v);
                     pa.events.push(ParamEvent { dest, offset: step as u32, index: u32::from(index), value: v });
                 }
             }
@@ -531,6 +555,66 @@ mod tests {
         }
         let last = seen.last().unwrap().0;
         assert!((96000..96500).contains(&last), "the clip ends two ticks later: {last}");
+    }
+
+    /// A parameter an automation clip drives *and* a modulator moves: the clip's value stays the base, so the clip still
+    /// moves the parameter. Turning the parameter's own knob under it (the app hands that value over with
+    /// `Engine::set_mod_bases`) must not take the clip's value away: the swing would otherwise leave the clip's curve
+    /// altogether and sit around the knob, which is what "automation stopped working" looks like.
+    #[test]
+    fn a_clip_still_moves_a_modulated_parameter() {
+        use os_model::modulation::{Curve, Lfo, LfoShape, ModSource, Polarity, Timebase};
+        use os_model::target::channel_param;
+
+        let target = channel_param(0, 7);
+        let mut p = project(target);
+        // A constant curve at 0.8: the clip hands the same value on all the way through, so nothing but this step's own
+        // reading keeps the base.
+        p.automations[0].points = vec![AutoPoint::new(0.0, 0.8), AutoPoint::new(4.0, 0.8)];
+        let mut e = Engine::new(&p, &mut SampleLibrary::new(None), 48000, PlayMode::Song);
+        let probe = Arc::new(Mutex::new(Probe::default()));
+        e.set_instrument(0, probe.clone());
+        // A tenth either side of the base, once a beat.
+        e.set_modulation(vec![crate::Modulator {
+            id: 1,
+            source: ModSource::Lfo(Lfo { shape: LfoShape::Sine, period: Timebase::Sync(4), ..Lfo::default() }),
+            enabled: true,
+            targets: vec![crate::ModTarget {
+                target: os_model::target::decode(target),
+                depth: 0.1,
+                curve: Curve::Linear,
+                polarity: Polarity::Bipolar,
+                enabled: true,
+            }],
+        }]);
+        run(&mut e, 24000, 1000);
+        // The knob under the clip is turned while it drives the parameter.
+        e.set_mod_bases(&[(target, 0.2)]);
+        run(&mut e, 24000, 1000);
+        let seen = probe.lock().unwrap().seen.clone();
+        assert!(seen.len() > 300, "{}", seen.len());
+        // The clip's own value is sent first and the composed one after it at the same frame: the last value a frame
+        // gets is the modulated one.
+        let mut last_at: Vec<(u64, f64)> = Vec::new();
+        for &(f, i, v) in &seen {
+            assert_eq!(i, 7);
+            match last_at.last_mut() {
+                Some((frame, val)) if *frame == f => *val = v,
+                _ => last_at.push((f, v)),
+            }
+        }
+        for &(f, v) in &last_at {
+            assert!((v - 0.8).abs() <= 0.1 + 1e-6, "frame {f}: {v} is not the clip's 0.8 and its swing");
+        }
+        // Before the knob moved as well as after it: the swing neither takes a while to come back nor stays away.
+        assert!(last_at.iter().any(|&(_, v)| (v - 0.9).abs() < 1e-3), "the swing reaches the clip's top: {last_at:?}");
+        // The clip is what the value moves from: the same swing, the same middle, after the knob was turned.
+        let after: Vec<f64> = last_at.iter().filter(|&&(f, _)| f >= 24000).map(|&(_, v)| v).collect();
+        let (top, bottom) = (
+            after.iter().cloned().fold(f64::MIN, f64::max),
+            after.iter().cloned().fold(f64::MAX, f64::min),
+        );
+        assert!(((top + bottom) / 2.0 - 0.8).abs() < 1e-3, "the swing is centred on the clip, not the knob: {top}..{bottom}");
     }
 
     /// A plugin that takes one value per tick gets the value the clip hands on for that tick, at the tick start, only

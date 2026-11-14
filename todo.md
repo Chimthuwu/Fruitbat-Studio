@@ -31,7 +31,8 @@
       that one's editor (`a_press_outside_the_modulator_editor_closes_it`).
 - [x] **A knob never moves with its modulation**: the rack holds a driven control at the value the user set instead of
       the value read back from the instance (which is the modulated one), so nothing dances while a source runs or notes
-      play.
+      play. What it shows is the base the engine publishes each step (`ModSnapshot::base`, `modulation::live_base`), so a
+      clip driving the same parameter still turns the knob — only the source does not (`an_lfo_routes_to_a_trio_knob`).
 - [x] **The modulation's base is the parameter's own value**: the app hands the engine the value each driven parameter
       has without its modulation (`modulation::mod_bases`, the value `ParamUi` keeps for a driven parameter because
       `params_tick` refuses the modulated read-back), as a `Transport::set_mod_bases` share applied by `Cmd::Modulation`
@@ -39,6 +40,13 @@
       under a running source moves the whole swing. A clip or control point that drives the parameter still wins inside
       the engine. `a_modulated_parameter_moves_from_its_own_value`: a tenth above a base of 0.8 is 0.9, and 0.6 without
       one. Mixer and track controls already moved from their authored values and are unchanged.
+- [x] **A clip still moves a parameter a source drives**: the base is now two things that cannot overwrite each other —
+      the parameter's own value (the app's knob handoff, a control point) and what a clip hands it on *at the step being
+      sampled* (`ParamAuto::step`, cleared every step). So the swing follows the clip while it drives the parameter and
+      the parameter's own value once the clip has passed it, and turning a driven knob no longer takes the clip's value
+      away (`a_clip_still_moves_a_modulated_parameter`: a constant clip at 0.8 with a knob handed over at 0.2 keeps
+      swinging around 0.8). Before, a clip's value stuck for good and any knob write replaced it, which is what
+      "automation stopped working" looked like on a driven parameter.
 - [ ] **The lag when a graph runs**: two probes, both on a real chain (built-in devices) — a four-second render with
       an LFO on a plugin parameter costs 1.11 ms against 0.88 ms without it (1.27×, ~0.03 % of real time), and a whole
       frame (`tick` + a full 1920×1080 paint) is 4.04 ms against 4.16 ms (0.97×, within noise). Neither path shows the
