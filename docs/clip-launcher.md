@@ -208,17 +208,26 @@ Bitwig's whole next-action list (`NextAction`, 21 functions) with `NextTiming`, 
 Still open: a scene's own tempo (`Scene::tempo_bpm`); the scene struct has name, colour, comment
 and the launch sets today.
 
-### S6 — Persistence (M)
+### S6 — Persistence (done, `.lemon` only)
 
-The launcher lives only in memory (`State::launcher`), like the MIDI FX slots. The `.flp` format
-has no launcher; two options, decide before writing code:
+The launcher is saved in the project's own `LMex` chunk (event 208, `lemon::LAUNCHER`), like the
+rest of Fruitbat's state: `lemon_state::launcher_state` writes every clip and scene, and
+`lemon_state::read_launcher` reads them back on open. The `.flp` format has no launcher, so an FLP
+target drops the clips with the rest of `LMex` — no arrangement markers or sidecar files, and the
+FLP round trip is unchanged.
 
-- store it as arrangement **markers + clips** (a launcher scene becomes a marker, a clip becomes a
-  normal clip placed after the arrangement's end) — lossless for FL round-tripping, ugly;
-- a sidecar file next to the project (`<project>.launcher.json`), keeping `.flp` untouched.
-
-Suhina's `Project.launcher` (`scenes`, `columns[].slots[].clip`, `mappings`) is the model to copy
-whichever storage wins.
+- A clip is stored by its **track's position** in `Project::tracks`, not by id: a file holds no ids
+  and `settle` hands out new ones on open, after the tracks are read (the same rule as
+  `LANE_BINDINGS`). A clip whose track, scene or audio channel is gone on open is left out.
+- Each clip keeps its pattern or audio channel, name, colour, MAIN and ALT launch settings, next
+  action and timing; each scene its name, colour, comment, Override Launch Settings flag and launch
+  settings. Playing and pending state are not saved — an opened launcher plays nothing.
+- The event is written only when the launcher has been used (a clip, or a scene a name, colour,
+  comment or launch setting was given), so a project that never opened it keeps no such event, and
+  a project that used it and cleared it again writes an empty one.
+- Opening a project (or starting a new one) clears the previous project's launcher first
+  (`App::open`, `App::empty_project`).
+- Still open: scenes' own tempo; launch-by-MIDI/key (S7).
 
 ### S7 — Launch by MIDI / key (S)
 

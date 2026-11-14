@@ -70,7 +70,17 @@ pub fn events(s: &State, plugins: &Plugins) -> Vec<Event> {
     }
     v.push(owner_ids(s));
     v.push(modulation(s));
+    // The clip launcher's clips and scenes only when it has any: a project that never opened it writes no such event.
+    if launcher_used(s) {
+        v.push(launcher_state(s));
+    }
     v
+}
+
+/// Whether the launcher holds anything worth saving: a clip, or a scene a name, colour, comment or launch setting was
+/// given.
+fn launcher_used(s: &State) -> bool {
+    !s.launcher.clips.is_empty() || s.launcher.scenes.iter().any(|sc| sc != &crate::launcher::Scene::default())
 }
 
 /// The bytes [`events`] would write: a change to them is an unsaved change, as an edit of the project is. Set keyboard
@@ -502,9 +512,15 @@ pub fn apply(s: &mut State, plugins: &mut Plugins, file: &FlpFile) {
     }
     if let Some(d) = read(lemon::TRACKS) {
         s.project.tracks = read_tracks(&d[1..]);
+        // Tracks are stored without ids; give them theirs now, before the launcher (which names its clips' tracks by
+        // the ids `settle` hands out) is read. The project's ids were settled before this, so these are new ones.
+        s.control.settle(&mut s.project);
     }
     if let Some(d) = read(lemon::LANE_BINDINGS) {
         s.project.auto_lanes = read_lane_bindings(&d[1..], &s.project.tracks);
+    }
+    if let Some(d) = read(lemon::LAUNCHER) {
+        read_launcher(s, &d[1..]);
     }
     if let Some(&flags) = read(lemon::MIXER).as_deref().and_then(|d| d.get(1)) {
         s.project.pdc_off = flags & PDC_AUTO == 0;
@@ -873,6 +889,156 @@ fn lane_bindings(s: &State) -> Event {
         b.push(u8::from(l.collapsed));
     }
     Event::new(lemon::LANE_BINDINGS, Value::var(b))
+}
+
+/// [`lemon::LAUNCHER`]: a u32 clip count, then per clip its track's position in [`os_model::Project::tracks`] (u32),
+/// scene (u32), pattern (u16, 0 for an audio cell), audio channel (u16, 0xFFFF = none), name, colour, MAIN and ALT
+/// launch settings, next action (u8) and its timing (u8 kind + u32); then a u32 scene count, then per scene its name,
+/// colour, comment, the Override Launch Settings flag (u8) and its MAIN and ALT launch settings. The track is stored
+/// by position because the file holds no ids; `apply` resolves it after the tracks were given theirs.
+fn launcher_state(s: &State) -> Event {
+    let mut b = start(s.launcher.clips.len());
+    for (&(track, scene), slot) in &s.launcher.clips {
+        let Some(at) = s.project.tracks.iter().position(|t| t.id.0 == track) else { continue };
+        b.extend_from_slice(&(at as u32).to_le_bytes());
+        b.extend_from_slice(&(scene as u32).to_le_bytes());
+        b.extend_from_slice(&slot.pattern.to_le_bytes());
+        b.extend_from_slice(&slot.audio.unwrap_or(u16::MAX).to_le_bytes());
+        put_text(&mut b, slot.name.as_deref().unwrap_or_default());
+        put_color(&mut b, slot.color);
+        put_launch(&mut b, slot.main);
+        put_launch(&mut b, slot.alt);
+        b.push(code(&crate::launcher::NextAction::ALL, slot.next));
+        match slot.next_timing {
+            crate::launcher::NextTiming::Loops(n) => {
+                b.push(0);
+                b.extend_from_slice(&n.to_le_bytes());
+            }
+            crate::launcher::NextTiming::After(t) => {
+                b.push(1);
+                b.extend_from_slice(&u32::try_from(t).unwrap_or(u32::MAX).to_le_bytes());
+            }
+        }
+    }
+    b.extend_from_slice(&(s.launcher.scenes.len() as u32).to_le_bytes());
+    for sc in &s.launcher.scenes {
+        put_text(&mut b, &sc.name);
+        put_color(&mut b, sc.color);
+        put_text(&mut b, &sc.comment);
+        b.push(u8::from(sc.override_launch));
+        put_launch(&mut b, sc.main);
+        put_launch(&mut b, sc.alt);
+    }
+    Event::new(lemon::LAUNCHER, Value::var(b))
+}
+
+/// Reads [`lemon::LAUNCHER`]'s payload after its layout byte into the launcher: the clips (a clip whose track
+/// position, scene, pattern or audio channel is not in the project is left out), then the scenes.
+fn read_launcher(s: &mut State, d: &[u8]) {
+    let mut r = Reader(d);
+    let clips = r.u32().unwrap_or(0);
+    let mut loaded = std::collections::BTreeMap::new();
+    for _ in 0..clips {
+        let (Some(at), Some(scene), Some(pattern), Some(audio)) = (r.u32(), r.u32(), r.u16(), r.u16()) else { break };
+        let (Some(name), Some(color), Some(main), Some(alt), Some(next), Some(kind), Some(value)) =
+            (read_text(&mut r), read_color(&mut r), read_launch(&mut r), read_launch(&mut r), r.u8(), r.u8(), r.u32())
+        else {
+            break;
+        };
+        let Some(&next) = crate::launcher::NextAction::ALL.get(usize::from(next)) else { continue };
+        let next_timing = match kind {
+            0 => crate::launcher::NextTiming::Loops(value),
+            1 => crate::launcher::NextTiming::After(u64::from(value)),
+            _ => continue,
+        };
+        let Some(track) = s.project.tracks.get(at as usize).map(|t| t.id.0) else { continue };
+        if usize::try_from(scene).map_or(true, |sc| sc >= crate::launcher::SCENES) {
+            continue;
+        }
+        if audio != u16::MAX && !s.project.channels.iter().any(|c| c.index == audio) {
+            continue;
+        }
+        let slot = crate::launcher::Slot {
+            pattern,
+            audio: (audio != u16::MAX).then_some(audio),
+            name: what_text(name),
+            color,
+            main,
+            alt,
+            next,
+            next_timing,
+        };
+        loaded.insert((track, scene as usize), slot);
+    }
+    s.launcher.clips = loaded;
+    let scenes = r.u32().unwrap_or(0) as usize;
+    let mut list: Vec<crate::launcher::Scene> = Vec::with_capacity(scenes.min(crate::launcher::SCENES));
+    for _ in 0..scenes {
+        let (Some(name), Some(color), Some(comment), Some(over), Some(main), Some(alt)) =
+            (read_text(&mut r), read_color(&mut r), read_text(&mut r), r.u8(), read_launch(&mut r), read_launch(&mut r))
+        else {
+            break;
+        };
+        list.push(crate::launcher::Scene { name: name.unwrap_or_default(), color, comment: comment.unwrap_or_default(), override_launch: over != 0, main, alt });
+    }
+    while list.len() < crate::launcher::SCENES {
+        list.push(crate::launcher::Scene::default());
+    }
+    s.launcher.scenes = list;
+}
+
+/// The index of `v` in an enum's `ALL` list (0 when it is not there: a value added later reads as the first).
+fn code<T: PartialEq>(all: &[T], v: T) -> u8 {
+    all.iter().position(|x| *x == v).unwrap_or(0) as u8
+}
+
+fn put_launch(b: &mut Vec<u8>, l: crate::launcher::Launch) {
+    b.push(code(&crate::launcher::LaunchQ::ALL, l.q));
+    b.push(code(&crate::launcher::PlayFrom::ALL, l.play));
+    b.push(code(&crate::launcher::OnRelease::ALL, l.release));
+    b.push(u8::from(l.q_to_loop));
+}
+
+fn read_launch(r: &mut Reader) -> Option<crate::launcher::Launch> {
+    let (q, play, release, loop_) = (r.u8()?, r.u8()?, r.u8()?, r.u8()?);
+    Some(crate::launcher::Launch {
+        q: *crate::launcher::LaunchQ::ALL.get(usize::from(q))?,
+        play: *crate::launcher::PlayFrom::ALL.get(usize::from(play))?,
+        release: *crate::launcher::OnRelease::ALL.get(usize::from(release))?,
+        q_to_loop: loop_ != 0,
+    })
+}
+
+/// A u16-length-prefixed UTF-8 string (an empty one reads as `None`, so "no name" and "the empty name" are one).
+fn put_text(b: &mut Vec<u8>, text: &str) {
+    let bytes = &text.as_bytes()[..text.len().min(usize::from(u16::MAX))];
+    b.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
+    b.extend_from_slice(bytes);
+}
+
+fn read_text(r: &mut Reader) -> Option<Option<String>> {
+    let len = r.u16()?;
+    let text = String::from_utf8_lossy(r.take(usize::from(len))?).into_owned();
+    Some(what_text(Some(text)))
+}
+
+fn what_text(text: Option<String>) -> Option<String> {
+    text.filter(|t| !t.is_empty())
+}
+
+fn put_color(b: &mut Vec<u8>, c: Option<os_model::Rgb>) {
+    match c {
+        Some(c) => b.extend_from_slice(&[1, c.r, c.g, c.b]),
+        None => b.push(0),
+    }
+}
+
+fn read_color(r: &mut Reader) -> Option<Option<os_model::Rgb>> {
+    if r.u8()? == 0 {
+        return Some(None);
+    }
+    let c = r.take(3)?;
+    Some(Some(os_model::Rgb::new(c[0], c[1], c[2])))
 }
 
 /// A payload's layout version and entry count.
@@ -1477,6 +1643,80 @@ mod modulation_graph_tests {
         let mut flp = App::new(None);
         flp.open(flp_path);
         assert!(flp.state.modulation.is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The launcher's clips and scenes go into a `.lemon` file and come back: the clips on the same tracks (by
+    /// position — a file stores no ids), with their pattern, sample channel, name, colour and launch settings, and the
+    /// scenes with their names. A project that never used the launcher writes no such event, and an FLP drops it.
+    #[test]
+    fn the_launcher_round_trips_through_a_lemon_file() {
+        use crate::launcher::{Launch, LaunchQ, NextAction, NextTiming, OnRelease, PlayFrom, Scene, Slot};
+        let d = dir("launcher");
+        let (lemon_path, flp_path) = (d.join("Clips.lemon"), d.join("Clips.flp"));
+        let mut app = App::new(None);
+        app.state.project = crate::app::test_project();
+        for (i, kind) in [os_model::TrackKind::Midi, os_model::TrackKind::Audio].into_iter().enumerate() {
+            app.state.project.tracks.push(os_model::Track::new(kind, i as u32 + 1, i as u16 + 1, Some(i as u16)));
+        }
+        app.state.control.settle(&mut app.state.project);
+        let (drums, bass) = (app.state.project.tracks[0].id.0, app.state.project.tracks[1].id.0);
+        app.state.launcher.clips.insert(
+            (drums, 0),
+            Slot {
+                pattern: 1,
+                audio: None,
+                name: Some("Beat ✓".into()),
+                color: Some(os_model::Rgb::new(200, 40, 60)),
+                main: Launch { q: LaunchQ::Bars2, play: PlayFrom::LegatoProject, release: OnRelease::Return, q_to_loop: true },
+                alt: Launch { q: LaunchQ::Off, play: PlayFrom::Start, release: OnRelease::Stop, q_to_loop: false },
+                next: NextAction::RoundRobin,
+                next_timing: NextTiming::After(384),
+            },
+        );
+        app.state.launcher.clips.insert((bass, 3), Slot { audio: Some(1), name: None, next_timing: NextTiming::Loops(4), ..Default::default() });
+        while app.state.launcher.scenes.len() < crate::launcher::SCENES {
+            app.state.launcher.scenes.push(Scene::default());
+        }
+        app.state.launcher.scenes[2] = Scene { name: "Break".into(), comment: "drop out".into(), override_launch: true, ..Default::default() };
+        app.save_to(lemon_path.clone());
+        app.save_to(flp_path.clone());
+        let file = os_flp::FlpFile::parse(&std::fs::read(&lemon_path).unwrap()).unwrap();
+        assert!(lemon::data(&file, lemon::LAUNCHER).is_some(), "a launcher that was used is written");
+        assert_eq!(lemon::data(&file, lemon::LAUNCHER).as_deref().map(|p| p[0]), Some(LAYOUT));
+        assert!(!app.unsaved());
+
+        let mut back = App::new(None);
+        back.open(lemon_path.clone());
+        assert!(!back.unsaved(), "the launcher read back is the saved one");
+        let s = &back.state;
+        let (drums, bass) = (s.project.tracks[0].id.0, s.project.tracks[1].id.0);
+        let beat = s.launcher.clips.get(&(drums, 0)).expect("the pattern clip came back");
+        assert_eq!((beat.pattern, beat.audio), (1, None));
+        assert_eq!(beat.name.as_deref(), Some("Beat ✓"));
+        assert_eq!(beat.color, Some(os_model::Rgb::new(200, 40, 60)));
+        assert_eq!(beat.main, Launch { q: LaunchQ::Bars2, play: PlayFrom::LegatoProject, release: OnRelease::Return, q_to_loop: true });
+        assert_eq!(beat.alt, Launch { q: LaunchQ::Off, play: PlayFrom::Start, release: OnRelease::Stop, q_to_loop: false });
+        assert_eq!((beat.next, beat.next_timing), (NextAction::RoundRobin, NextTiming::After(384)));
+        let audio = s.launcher.clips.get(&(bass, 3)).expect("the audio clip came back");
+        assert_eq!((audio.pattern, audio.audio), (0, Some(1)));
+        assert_eq!(audio.next_timing, NextTiming::Loops(4));
+        assert_eq!(s.launcher.scenes.len(), crate::launcher::SCENES);
+        assert_eq!((s.launcher.scenes[2].name.as_str(), s.launcher.scenes[2].comment.as_str()), ("Break", "drop out"));
+        assert!(s.launcher.scenes[2].override_launch);
+        assert!(s.launcher.playing.is_empty() && s.launcher.pending.is_empty(), "an opened launcher plays nothing");
+
+        // Clearing a clip is an unsaved change, and saving again writes the launcher without it.
+        back.state.launcher.clips.remove(&(drums, 0));
+        assert!(back.unsaved());
+        back.save_to(lemon_path.clone());
+        let mut again = App::new(None);
+        again.open(lemon_path);
+        assert_eq!(again.state.launcher.clips.len(), 1);
+        // An FLP has no place for the launcher.
+        let mut flp = App::new(None);
+        flp.open(flp_path);
+        assert!(flp.state.launcher.clips.is_empty());
         let _ = std::fs::remove_dir_all(&d);
     }
 

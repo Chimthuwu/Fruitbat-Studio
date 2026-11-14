@@ -1996,6 +1996,8 @@ impl App {
                 s.path = Some(path);
                 s.piano.reset();
                 s.playlist.reset();
+                // The previous project's launcher clips are not this one's: `lemon_state::apply` reads this file's.
+                s.launcher = Default::default();
                 s.history.reset();
                 s.control.reset();
                 s.control.event(&crate::control::By::User, "opened", s.path.as_ref().map_or(String::new(), |p| p.display().to_string()), Vec::new());
@@ -2604,6 +2606,7 @@ impl App {
         s.song_mode = false;
         s.piano.reset();
         s.playlist.reset();
+        s.launcher = Default::default();
         s.history.reset();
         s.control.reset();
         // A new project has no modulators: the graph, its selection and its open windows go with the old project.

@@ -213,11 +213,15 @@ selector rows `RackAct::ParamTap`. Tile widths follow each editor (`device_rack:
   makes the take write into the cell's own pattern from the take's start, an empty cell gets its
   pattern and clip as the first note comes, and the clip loops at its pattern's length (notes
   only — audio, across-loop takes and comping are open).
-  **A double click** on an empty cell makes its clip (a new pattern, `launcher::make_clip`) and
-  opens it in the piano roll. **A sample dropped on a cell** (`App::drop_file` →
+  **A double click** on an empty cell makes and selects its clip (a new pattern, `launcher::make_clip`)
+  and stays in the launcher; the cell's menu **Open clip** edits it (piano roll for a pattern, clip
+  editor for audio). **A sample dropped on a cell** (`App::drop_file` →
   `launcher::add_audio`) becomes that clip: an `AudioClip` channel (`playlist::audio_channel`,
   shared with the arranger's drop) whose sample plays from the cell's lane, looped at the
   sample's own length (`Slot::audio`, `pattern` 0, peaks drawn behind the name).
+  **The grid is saved** in the project's `LMex` chunk (event 208, `lemon::LAUNCHER`): clips and
+  scenes, with the clips stored by their track's position (`lemon_state::launcher_state` /
+  `read_launcher`); an FLP target drops it like the rest of the Lemon-only state.
 
 - Audio FX chain already works (`crates/os-engine/src/engine/mix.rs:31`, insert effects in
   slot order before the fader).

@@ -57,6 +57,11 @@ pub const OWNER_IDS: u8 = 206;
 /// parameters it drives with their depth, curve and polarity. Lemon Studio's design, like `OWNER_IDS`: it refers to
 /// parameters by their persistent identity and is never written into an FLP target (audit K.1/K.3).
 pub const MODULATION: u8 = 207;
+/// `LMex` event: the clip launcher — its clips (by the owning track's position, the scene, the pattern or audio
+/// channel, name, colour and launch settings) and its scenes (name, colour, comment and launch settings). Written only
+/// when the launcher has been used, so a project that never opened it keeps no such event. Lemon Studio's design: the
+/// original has no launcher, so an FLP has no place for it and the clips go with the rest of `LMex`.
+pub const LAUNCHER: u8 = 208;
 
 /// Whether `file` is a `.lemon` file (its first chunk is `LMhd`).
 pub fn is_lemon(file: &FlpFile) -> bool {

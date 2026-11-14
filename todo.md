@@ -17,9 +17,12 @@
 - [x] **Audio Follower DSP**: the two cascaded high-pass stages shared one `prev` sample, so the low band
       leaked; each stage now keeps its own history (`hp_prev: [f32; 2]`) with a 5 Hz vs 100 Hz regression
       test (`a_followers_low_band_rejects_what_is_below_it`).
-- [ ] **Launcher persistence is still open** (S6 in `docs/clip-launcher.md`): the grid lives only in
-      `State::launcher`, so saving and reopening a project loses it. Decide sidecar vs arrangement encoding
-      before writing it.
+- [x] **Launcher persistence** (S6 in `docs/clip-launcher.md`, 2026-11-14): the clips and scenes are saved
+      in the project's own `LMex` chunk (event 208, `lemon::LAUNCHER`, written by `lemon_state::launcher_state`
+      and read by `read_launcher`). Clips are stored by their track's position, like `LANE_BINDINGS`, since a
+      file holds no ids; opening or creating a project clears the previous launcher first. An FLP target drops
+      it with the rest of `LMex` (no sidecar, no arrangement markers). Test:
+      `the_launcher_round_trips_through_a_lemon_file`.
 - [ ] **Modulator strip compaction**: the fixed 21-slot row still shows many empty add tiles. The handoff
       asks for the populated modulators plus exactly one add slot. Every populated tile now has a visible
       `×` remove button (plus its menu and Delete).
