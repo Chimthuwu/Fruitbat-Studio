@@ -1,0 +1,11 @@
+# Cloudflare Pages project for the FruitBat Studio landing page (site/index.html).
+#
+# The page is plain static HTML with no build step; `pages_build_output_dir` names the folder Pages serves, so a
+# deployment works whatever the dashboard's "Build output directory" happens to say. The site is also what
+# `npm run build` copies into `dist/` (tools/site-build.mjs), for a build whose output directory is `dist`.
+#
+# `name` must match the Pages project (`fruitbat-studio`, whose deployments live at <hash>.fruitbat-studio.pages.dev).
+
+name = "fruitbat-studio"
+pages_build_output_dir = "site"
+compatibility_date = "2026-11-14"
