@@ -4343,6 +4343,20 @@ impl App {
         self.damage_win(Win::Mixer);
     }
 
+    /// A press outside the modulator editor closes it and its options menu: the editor is a popup in the same way the
+    /// Song info box is. A press in its own window, or on the strip that opened it, keeps it.
+    fn mod_click_away(&mut self, action: Option<&Action>) {
+        if self.state.surface == Some(Win::ModEditor)
+            || (self.state.mod_editor.is_none() && self.state.mod_menu.is_none())
+            || matches!(action, Some(Action::Mod(m)) if m.on_the_strip())
+        {
+            return;
+        }
+        self.state.mod_editor = None;
+        self.state.mod_menu = None;
+        self.invalidate();
+    }
+
     /// Esc in the modulator UI: abandon a depth or knob drag (restoring the graph exactly), then leave routing mode
     /// and close any editor / menu. Routing mode is never project state, so there is nothing to undo.
     fn mod_escape(&mut self) {
@@ -6770,6 +6784,9 @@ impl App {
         if action != Some(Action::SongInfo) {
             self.close_song_info();
         }
+        // The modulator editor is a popup in the same way: a press anywhere but in its own window or on the strip that
+        // opened it closes it, and the press itself goes on to what it is over (so it can open another's editor).
+        self.mod_click_away(action.as_ref());
         self.pressed = action.clone();
         self.armed = None;
         self.armed_right = None;
@@ -7179,6 +7196,7 @@ impl App {
         self.smooth.stop();
         let (x, y) = self.mouse;
         let action = self.top_hit(x, y).map(|h| h.action.clone());
+        self.mod_click_away(action.as_ref());
         if self.state.menu_open.is_some() {
             self.state.menu_open = None;
             // With its submenu.

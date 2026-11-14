@@ -1253,6 +1253,12 @@ pub(crate) fn mod_accent(base: Color, source: &os_model::modulation::ModSource) 
     }
 }
 
+/// Whether a slot's plot draws anything: a source whose amount is zero is switched off, so where the graph used to
+/// show a flat line at the middle there is nothing at all.
+pub(crate) fn mod_plot_visible(m: &os_model::modulation::Modulator) -> bool {
+    m.source.is_on()
+}
+
 /// An occupied slot: a live scrolling plot of its output, its rate, and the patch-point button, in its kind's colour.
 fn mod_slot_paint(ui: &mut Ui, s: &State, r: Rect, slot: u8, m: &os_model::modulation::Modulator) {
     let t = ui.t;
@@ -1277,7 +1283,7 @@ fn mod_slot_paint(ui: &mut Ui, s: &State, r: Rect, slot: u8, m: &os_model::modul
     ui.c.fill_rect(plot, t.s(0x101315));
     ui.c.line(plot.x, plot.cy(), plot.right(), plot.cy(), 1.0, t.s(0x242a2d));
     let hist = s.mod_hist.borrow();
-    if let Some(series) = hist.get(id) {
+    if let Some(series) = hist.get(id).filter(|_| mod_plot_visible(m)) {
         let n = series.len().max(2);
         let pts: Vec<(f32, f32)> = series
             .iter()
@@ -1430,7 +1436,7 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
             let hov = ui.hit(b, Action::Mod(crate::modulation::ModAct::NextShape(m.id)), "Next waveform");
             ui.c.fill_rrect(b, 2.0, if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
             ui.c.text(fnt(11.0), b.x + 6.0, b.y + 2.0, t.text, &format!("{:?}", l.shape).to_lowercase());
-            rate_paint(ui, m.id, panel.x + 106.0, cy - 8.0, l.period);
+            rate_paint(ui, s, m.id, panel.x + 106.0, cy - 8.0, l.period);
             mod_knob(ui, s, m.id, crate::modulation::KnobField::Amount, "amount", panel.x + 30.0, cy + 42.0);
             mod_knob(ui, s, m.id, crate::modulation::KnobField::Phase, "phase", panel.x + 78.0, cy + 42.0);
             mod_knob(ui, s, m.id, crate::modulation::KnobField::Offset, "offset", panel.x + 126.0, cy + 42.0);
@@ -1440,7 +1446,7 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
             ui.c.text_center(fnt(9.5), b, t.text, if l.bipolar { "bipolar" } else { "unipolar" });
         }
         ModSource::Random(rd) => {
-            rate_paint(ui, m.id, panel.x + 8.0, cy - 8.0, rd.period);
+            rate_paint(ui, s, m.id, panel.x + 8.0, cy - 8.0, rd.period);
             let b = Rect::new(panel.x + 8.0, cy + 22.0, 74.0, 18.0);
             let hov = ui.hit(b, Action::Mod(crate::modulation::ModAct::ToggleDistribution(m.id)), "Uniform / Gaussian");
             ui.c.fill_rrect(b, 2.0, if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
@@ -1471,7 +1477,7 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
             mod_knob(ui, s, m.id, crate::modulation::KnobField::Gain, "gain", panel.x + 150.0, cy + 42.0);
         }
         ModSource::Steps(st) => {
-            rate_paint(ui, m.id, panel.x + 8.0, cy - 8.0, st.period);
+            rate_paint(ui, s, m.id, panel.x + 8.0, cy - 8.0, st.period);
             ui.c.text(fnt(10.0), panel.x + 8.0, cy + 20.0, t.text_dim, "A step pattern from an old project: 16 steps.");
         }
         ModSource::Envelope(_) => {
@@ -1490,27 +1496,35 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
     ui.c.text_center(fnt(10.0), sw, t.text, if m.enabled { "on" } else { "off" });
 }
 
-/// The rate knob: the current musical rate, a drag knob and its sync / free mode button.
-fn rate_paint(ui: &mut Ui, id: os_model::modulation::ModulatorId, x: f32, y: f32, period: os_model::modulation::Timebase) {
+/// The rate knob: the current musical rate, a drag knob and its sync / free mode button. The rate is a routing
+/// destination like any other knob ([`os_model::modulation::ModParam::Rate`]), so it is ringed while routing mode is
+/// armed and its routes' arcs are drawn round its smaller radius.
+fn rate_paint(ui: &mut Ui, s: &State, id: os_model::modulation::ModulatorId, x: f32, y: f32, period: os_model::modulation::Timebase) {
     let t = ui.t;
     let label = crate::modulation::rate_text(period);
     let knob = Rect::new(x, y - 2.0, 24.0, 21.0);
+    let route = route_destination(s, id, crate::modulation::KnobField::Rate);
     let hov = ui.hit(
         knob,
         Action::Mod(crate::modulation::ModAct::Knob(id, crate::modulation::KnobField::Rate)),
-        format!("Rate: {label} - drag up / down"),
+        mod_hint(s, route, &format!("Rate: {label}")),
     );
+    let v = crate::modulation::rate_pos(period);
     kit::knob(
         ui.c,
         t,
         knob.cx(),
         knob.cy(),
         8.0,
-        crate::modulation::rate_pos(period),
+        v,
         false,
         kit::KnobLook::Ring,
         kit::State::hover(hov),
     );
+    if let Some(from) = route {
+        route_ring(ui, s, from, knob.cx(), knob.cy(), 10.2);
+    }
+    mod_arcs(ui, s, os_model::target::modulator_param(id.0, os_model::modulation::ModParam::Rate.code()), knob.cx(), knob.cy(), 12.5, v);
     ui.c.text(fnt(10.5), x + 28.0, y + 2.0, t.text, &label);
     let mode = Rect::new(x + 88.0, y + 1.0, 38.0, 15.0);
     let hov = ui.hit(
@@ -1530,28 +1544,41 @@ fn rate_paint(ui: &mut Ui, id: os_model::modulation::ModulatorId, x: f32, y: f32
     );
 }
 
-/// One editor knob: the ring, its label, and a drag hit (`ModAct::Knob`).
-fn mod_knob(ui: &mut Ui, s: &State, id: os_model::modulation::ModulatorId, field: crate::modulation::KnobField, label: &str, cx: f32, cy: f32) {
-    let t = ui.t;
-    let v = s.modulation.get(id).map_or(0.5, |m| crate::modulation::knob_value(m.source, field));
-    // With routing mode armed on another modulator, this knob is a destination: it is ringed in the driver's colour, and
-    // a press draws the route's depth instead of moving the knob (`modulation::act`).
-    let route = s.mod_routing.filter(|from| *from != id).and_then(|from| {
-        let param = crate::modulation::knob_param(field)?;
-        crate::modulation::can_route(s, from, id, param).then_some(from)
-    });
-    let hint = match route {
+/// With routing mode armed on another modulator, the modulator whose route a press on this knob would start: the
+/// knob is the armed modulator's destination. `modulation::act` then draws the route's depth on the press instead of
+/// moving the knob, and the knob is ringed and carries the route's arc.
+fn route_destination(s: &State, id: os_model::modulation::ModulatorId, field: crate::modulation::KnobField) -> Option<os_model::modulation::ModulatorId> {
+    let from = s.mod_routing.filter(|from| *from != id)?;
+    let param = crate::modulation::knob_param(field)?;
+    crate::modulation::can_route(s, from, id, param).then_some(from)
+}
+
+/// A knob's hint: what dragging it does, or which modulator's route a press on it would start.
+fn mod_hint(s: &State, route: Option<os_model::modulation::ModulatorId>, label: &str) -> String {
+    match route {
         Some(from) => {
             let name = s.modulation.get(from).map_or_else(|| "The modulator".to_string(), crate::modulation::name_of);
             format!("{name}: {label} - drag to set how far it drives this")
         }
         None => format!("{label}: drag up / down"),
-    };
-    let hov = ui.hit(Rect::new(cx - 14.0, cy - 14.0, 28.0, 28.0), Action::Mod(crate::modulation::ModAct::Knob(id, field)), hint);
+    }
+}
+
+/// The ring that marks a knob as the armed modulator's route destination, in the driver's colour.
+fn route_ring(ui: &mut Ui, s: &State, from: os_model::modulation::ModulatorId, cx: f32, cy: f32, r: f32) {
+    let accent = s.modulation.get(from).map_or(ui.t.modulation, |m| mod_accent(ui.t.modulation, &m.source));
+    ui.c.stroke_circle(cx, cy, r, 1.3, accent.with_alpha(route_flash()));
+}
+
+/// One editor knob: the ring, its label, and a drag hit (`ModAct::Knob`).
+fn mod_knob(ui: &mut Ui, s: &State, id: os_model::modulation::ModulatorId, field: crate::modulation::KnobField, label: &str, cx: f32, cy: f32) {
+    let t = ui.t;
+    let v = s.modulation.get(id).map_or(0.5, |m| crate::modulation::knob_value(m.source, field));
+    let route = route_destination(s, id, field);
+    let hov = ui.hit(Rect::new(cx - 14.0, cy - 14.0, 28.0, 28.0), Action::Mod(crate::modulation::ModAct::Knob(id, field)), mod_hint(s, route, label));
     kit::knob(ui.c, t, cx, cy, 11.0, v, false, kit::KnobLook::Ring, kit::State::hover(hov));
     if let Some(from) = route {
-        let accent = s.modulation.get(from).map_or(t.modulation, |m| mod_accent(t.modulation, &m.source));
-        ui.c.stroke_circle(cx, cy, 13.4, 1.3, accent.with_alpha(route_flash()));
+        route_ring(ui, s, from, cx, cy, 13.4);
     }
     // The routes driving this parameter, as the same arc a device parameter shows: one per source, from the knob's own
     // value to value + depth, with an endpoint handle that drags that route's depth (`ModAct::DepthDrag`). The route's

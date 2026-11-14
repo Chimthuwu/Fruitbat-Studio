@@ -1467,6 +1467,25 @@ pub fn group_selected(app: &mut App) -> bool {
 /// parameter names, sections and value texts. It does not embed a native plugin window — pinning the editor's frame
 /// into the tile never painted reliably (a tile stayed flat until its editor was popped out, and only then showed
 /// controls, because the tile had fallen back to drawing them), so the rack now draws them from the start.
+/// A modulated control keeps showing its own value. The modulation moves the parameter *inside* the instance, so the
+/// value read back from the plugin is the modulated one; drawing that made the knob (and its value text) dance with the
+/// source whenever it moved — worse while notes played, when the instrument applies its parameters. The value the rack
+/// already has is the user's (a drag writes it straight into `device_rack_params`), so it is kept. A control nothing
+/// drives follows its instance as before.
+fn hold_modulated(s: &State, key: usize, rows: &mut [RackParam], prev: &[RackParam]) {
+    for r in rows.iter_mut() {
+        let Some(old) = prev.iter().find(|p| p.id == r.id) else { continue };
+        let driven = crate::params::target_of_id(s, key, r.id)
+            .is_some_and(|t| !crate::modulation::routings_on(s, t).is_empty());
+        if !driven {
+            continue;
+        }
+        r.value = old.value;
+        r.plain = old.plain;
+        r.text = old.text.clone();
+    }
+}
+
 pub fn sync_embed(app: &mut App) {
     if !visible(&app.state) || app.state.device_rack_collapsed {
         app.state.device_rack_params.clear();
@@ -1496,8 +1515,9 @@ pub fn sync_embed(app: &mut App) {
             params.insert(key, prev);
             continue;
         }
-        let rows = app.plugins.rack_controls(key, &prev);
+        let mut rows = app.plugins.rack_controls(key, &prev);
         if !rows.is_empty() {
+            hold_modulated(&app.state, key, &mut rows, &prev);
             params.insert(key, rows);
         }
     }
@@ -3203,6 +3223,122 @@ mod tests {
         assert_eq!(before, after, "the knob keeps its own value");
     }
 
+    /// A modulator's rate is a routing destination like its amount: with routing mode armed on another modulator, a
+    /// press on the rate knob starts the route and drags its depth (the knob keeps its own value), and the route's arc
+    /// is drawn on that knob afterwards.
+    #[test]
+    fn a_modulators_rate_takes_a_route_from_its_knob() {
+        use crate::modulation::{KnobField, ModAct};
+        use crate::views::device_rack::{MOD_EDITOR_H, MOD_EDITOR_W};
+        use os_model::modulation::{ModParam, ParameterPath};
+        let Ok(mut c) = os_ui::Canvas::new(MOD_EDITOR_W as u32, MOD_EDITOR_H as u32, 1.0) else { return };
+        let mut app = app();
+        let driver = app.state.modulation.add(os_model::modulation::ModSource::default());
+        let driven = app.state.modulation.add(os_model::modulation::ModSource::default());
+        app.state.mod_editor = Some(driven);
+        app.state.mod_routing = Some(driver);
+        app.paint_detached(crate::app::Win::ModEditor, &mut c);
+        let knob = app
+            .on_surface(crate::app::Win::ModEditor, |a| {
+                a.hits
+                    .iter()
+                    .rev()
+                    .find(|h| h.action == Action::Mod(ModAct::Knob(driven, KnobField::Rate)))
+                    .map(|h| h.rect)
+            })
+            .expect("the editor's rate knob");
+        let before = app.state.modulation.get(driven).map_or(0.0, |m| crate::modulation::knob_value(m.source, KnobField::Rate));
+        app.on_surface(crate::app::Win::ModEditor, |a| {
+            a.mouse_move(knob.cx(), knob.cy());
+            a.mouse_down();
+            assert!(
+                matches!(a.drag, Some(crate::app::Drag::ModDepth { id, .. }) if id == driver),
+                "the press is the route's depth, not the rate knob"
+            );
+            a.mouse_move(knob.cx(), knob.cy() - 20.0);
+            a.mouse_up();
+        });
+        let path = ParameterPath::on_modulator(driven, ModParam::Rate);
+        let depth = app
+            .state
+            .modulation
+            .get(driver)
+            .and_then(|m| m.targets.iter().find(|t| t.path == path))
+            .map_or(-1.0, |t| t.depth);
+        assert!(depth > 0.4, "the press routed the driver into the rate and the drag set its depth: {depth}");
+        let after = app.state.modulation.get(driven).map_or(1.0, |m| crate::modulation::knob_value(m.source, KnobField::Rate));
+        assert_eq!(before, after, "the rate keeps its own value");
+        // With routing mode off, the route's arc stays on the rate knob, its handle dragging that route's depth.
+        app.state.mod_routing = None;
+        app.paint_detached(crate::app::Win::ModEditor, &mut c);
+        assert!(
+            app.on_surface(crate::app::Win::ModEditor, |a| a.hits.iter().any(|h| matches!(&h.action,
+                Action::Mod(ModAct::DepthDrag(d, p))
+                    if *d == driver && *p == os_model::target::modulator_param(driven.0, ModParam::Rate.code())))),
+            "the rate knob carries the route's arc"
+        );
+    }
+
+    /// The modulator editor closes on a press anywhere else in the program — the playlist, a right press, another
+    /// window — the way a popup does, while a press in its own window or on the strip keeps it. The press itself still
+    /// runs, so another modulator's tile opens that one's editor.
+    #[test]
+    fn a_press_outside_the_modulator_editor_closes_it() {
+        use crate::app::Win;
+        use crate::modulation::ModAct;
+        let Ok(mut main) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = app();
+        let a = app.state.modulation.add(os_model::modulation::ModSource::default());
+        let b = app.state.modulation.add(os_model::modulation::ModSource::default());
+        app.state.mod_editor = Some(a);
+        app.paint(&mut main, None);
+        let b_tile = app
+            .hits
+            .iter()
+            .rev()
+            .find(|h| h.action == Action::Mod(ModAct::Open(b)))
+            .map(|h| h.rect)
+            .expect("the second modulator's tile");
+        // A press in the editor's own window leaves it open.
+        app.on_surface(Win::ModEditor, |x| {
+            x.mouse_move(150.0, 138.0);
+            x.mouse_down();
+            x.mouse_up();
+        });
+        assert_eq!(app.state.mod_editor, Some(a), "a press in the editor keeps it");
+        // A tile is the strip, so the editor stays — and the tile opens its own modulator's editor.
+        app.mouse_move(b_tile.cx(), b_tile.cy());
+        app.mouse_down();
+        app.mouse_up();
+        assert_eq!(app.state.mod_editor, Some(b), "the strip keeps the editor, and another tile switches it");
+        // Anywhere else in the main window closes it.
+        app.mouse_move(300.0, 400.0);
+        app.mouse_down();
+        app.mouse_up();
+        assert_eq!(app.state.mod_editor, None, "a press elsewhere closes the editor");
+        // A right press too.
+        app.state.mod_editor = Some(a);
+        app.mouse_move(300.0, 400.0);
+        app.mouse_down_right();
+        assert_eq!(app.state.mod_editor, None, "so does a right press elsewhere");
+    }
+
+    /// A modulator's amount is its output gain: at 0 the source is switched off, so its slot draws no line at all (not
+    /// a flat one), and any amount above zero still draws its plot.
+    #[test]
+    fn a_modulator_at_zero_amount_draws_no_line() {
+        use os_model::modulation::{Lfo, ModSource};
+        let mut app = app();
+        let id = app.state.modulation.add(ModSource::Lfo(Lfo::default()));
+        let visible = |s: &crate::app::State| s.modulation.get(id).is_some_and(crate::views::device_rack::mod_plot_visible);
+        assert!(visible(&app.state), "a default modulator's plot is drawn");
+        crate::modulation::run(
+            &mut app,
+            crate::modulation::ModCmd::SetSource(id, ModSource::Lfo(Lfo { amount: 0.0, ..Lfo::default() })),
+        );
+        assert!(!visible(&app.state), "an amount of 0 is switched off: nothing to plot");
+    }
+
     /// The rack slot editor's title is its name field: clicking it edits the name in place, and the rename is one
     /// undo step.
     #[test]
@@ -3320,5 +3456,23 @@ mod tests {
             app.state.modulation.get(id).is_some_and(|m| m.targets.iter().any(|t| t.path == path)),
             "the LFO drives the cutoff"
         );
+        // The modulation writes the parameter inside the instance, so what is read back is the modulated value: the rack
+        // keeps the control at the value the user set instead of drawing that. A control nothing drives follows its
+        // instance.
+        let moved = if cutoff.value > 0.5 { cutoff.value - 0.4 } else { cutoff.value + 0.4 };
+        let mut read_back = vec![RackParam { value: moved, plain: moved, ..cutoff.clone() }];
+        hold_modulated(&app.state, key, &mut read_back, std::slice::from_ref(&cutoff));
+        assert!(
+            (read_back[0].value - cutoff.value).abs() < 1e-9,
+            "a modulated knob keeps its own value ({:?} at {} vs the read back {moved})",
+            cutoff.name,
+            cutoff.value
+        );
+        assert_eq!(read_back[0].text, cutoff.text, "and its value text");
+        // Only its modulation status decides: an undriven control takes the instance's value.
+        let other = RackParam { id: cutoff.id + 1, ..cutoff.clone() };
+        let mut free = vec![RackParam { value: moved, plain: moved, ..other.clone() }];
+        hold_modulated(&app.state, key, &mut free, std::slice::from_ref(&other));
+        assert_eq!(free[0].value, moved, "a control nothing drives follows the instance");
     }
 }

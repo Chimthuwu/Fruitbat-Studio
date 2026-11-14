@@ -1400,6 +1400,27 @@ pub enum ModAct {
     DepthPath(ModulatorId, ParameterPath, f32),
 }
 
+impl ModAct {
+    /// Whether this is a press on the modulator strip itself (its tiles and their buttons) rather than elsewhere in the
+    /// program. The editor and its options menu are their own window, so a press there never reaches the main window;
+    /// on the strip the editor stays open, and everywhere else it closes (`App::mouse_down`).
+    pub fn on_the_strip(self) -> bool {
+        matches!(
+            self,
+            ModAct::FocusStrip
+                | ModAct::AddMenu(_)
+                | ModAct::CloseAdd
+                | ModAct::AddKind(..)
+                | ModAct::Route(_)
+                | ModAct::Open(_)
+                | ModAct::Rename(..)
+                | ModAct::Menu(_)
+                | ModAct::Enable(_)
+                | ModAct::Remove(_)
+        )
+    }
+}
+
 /// A knob in a modulator's editor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KnobField {

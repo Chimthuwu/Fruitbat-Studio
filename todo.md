@@ -19,6 +19,22 @@
       `a_route_into_the_graph_is_a_browser_row_with_its_depth`). No live cursor on a route's arc: the engine publishes
       a value for project parameters only, and `engine_spec` now keeps modulator parameters out of the snapshot rather
       than offering a value that would read as a cursor pinned at zero.
+- [x] **Amount is the source's gain, and zero switches it off**: every source scales its swing around the middle
+      *after* its own bipolar / unipolar mapping (`ModSource::amount`, one rule for the LFO, the random source and the
+      follower), so 0 is a flat middle — no modulation at all whatever the shape — and turning it down shrinks the wave
+      inwards instead of flattening it against an edge. The slot's plot draws no line at all when the amount is 0.
+- [x] **The rate is a routing destination** like amount / phase / offset: ringed in the armed modulator's colour while
+      routing mode is on, carrying its route's depth arc, and a press on it drags that route's depth instead of the
+      rate (`a_modulators_rate_takes_a_route_from_its_knob`).
+- [x] **The editor closes on a press elsewhere**: it is a popup like the Song info box — a press outside its own window
+      or the strip closes it (and its options menu), and the press itself still runs, so another modulator's tile opens
+      that one's editor (`a_press_outside_the_modulator_editor_closes_it`).
+- [x] **A knob never moves with its modulation**: the rack holds a driven control at the value the user set instead of
+      the value read back from the instance (which is the modulated one), so nothing dances while a source runs or notes
+      play.
+- [ ] **The modulation's base is the parameter's own value**: `step_values` moves from `ParamAuto::base_of(..)` (what a
+      clip or control point last gave the parameter) and from `DEFAULT_BASE` (0.5) when nothing automates it, so a
+      driven parameter with no automation starts from the middle rather than from where the user left its knob.
 - [ ] **More routable parameters**: only rate, amount, phase and offset are addressable today. Depth-shaping
       a route (the assignment's depth as a destination), a follower's attack/release/gain, and a random source's
       smoothness are the obvious next ones.

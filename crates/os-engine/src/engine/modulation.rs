@@ -162,9 +162,11 @@ impl Follower {
         self.level = self.level.clamp(0.0, 1.0);
     }
 
-    /// Its `0..=1` output: the level scaled by the source's amount.
+    /// Its `0..=1` output: the level scaled by the source's amount *around the middle*, so an amount of 0 is the
+    /// middle (no modulation at all) whatever the signal does, and turning it down shrinks the swing.
     fn value(&self) -> f32 {
-        (self.level * self.source.amount.clamp(0.0, 1.0)).clamp(0.0, 1.0)
+        let amount = self.source.amount.clamp(0.0, 1.0);
+        (0.5 + (self.level - 0.5) * amount).clamp(0.0, 1.0)
     }
 }
 
@@ -270,7 +272,7 @@ impl Modulation {
     /// The value of `source` (modulator `id`'s) at a position (`0..=1`; a follower reads its detector).
     fn value_of(&self, source: &ModSource, id: u32, beats: f64, secs: f64) -> f32 {
         match source {
-            ModSource::AudioFollower(_) => self.follower(id).map_or(0.0, |f| f.value()),
+            ModSource::AudioFollower(_) => self.follower(id).map_or(0.5, |f| f.value()),
             other => source_value(other, id, beats, secs),
         }
     }
@@ -323,7 +325,8 @@ pub fn source_value(source: &ModSource, id: u32, beats: f64, secs: f64) -> f32 {
         ModSource::Envelope(e) => envelope_value(e, secs),
         ModSource::Random(r) => random_value(r, cycles(r.period, beats, secs)),
         // A follower's value comes from the master detector, not from the position: `Modulation::value` reads it.
-        ModSource::AudioFollower(_) => 0.0,
+        // With no detector (a preview of a stopped transport) it is the neutral middle, not the bottom.
+        ModSource::AudioFollower(_) => 0.5,
     }
 }
 
@@ -356,10 +359,11 @@ fn lfo_value(l: &Lfo, id: u32, cycles: f64) -> f32 {
     // The source's own output mode: bipolar swings either side of the middle (which the assignment reads as -1..1);
     // unipolar starts at the middle and only rises, so a bipolar assignment moves 0..depth above the base.
     let centered = (wave + 1.0) / 2.0;
-    // The source's amount is a gain around the middle, so 0 is a flat line (the middle) whatever the shape.
-    let gained = 0.5 + (centered - 0.5) * f64::from(l.amount.clamp(0.0, 1.0));
-    let shaped = if l.bipolar { gained } else { 0.5 + gained * 0.5 };
-    (shaped + f64::from(l.offset)).clamp(0.0, 1.0) as f32
+    let shaped = if l.bipolar { centered } else { 0.5 + centered * 0.5 };
+    // The amount is a gain around the middle applied after the output mode, so 0 is a flat line at the middle (no
+    // modulation at all) whatever the shape and whichever mode, and turning it down shrinks the swing inwards.
+    let gained = 0.5 + (shaped - 0.5) * f64::from(l.amount.clamp(0.0, 1.0));
+    (gained + f64::from(l.offset)).clamp(0.0, 1.0) as f32
 }
 
 /// A random source's value at `cycles`, `0..=1`. Deterministic from the seed and the cycle number; `smooth` is a
@@ -378,7 +382,8 @@ fn random_value(r: &Random, cycles: f64) -> f32 {
         cur
     };
     let centered = if r.bipolar { u } else { 0.5 + u * 0.5 };
-    (centered * r.amount.clamp(0.0, 1.0)).clamp(0.0, 1.0)
+    // The amount is a gain around the middle, so 0 is the middle (no modulation) rather than the bottom of the range.
+    (0.5 + (centered - 0.5) * r.amount.clamp(0.0, 1.0)).clamp(0.0, 1.0)
 }
 
 /// A random draw in `0..1` for `cycle` from `seed`, in the source's distribution.
@@ -1114,6 +1119,52 @@ mod tests {
         assert!((at(LfoShape::SawDown, 0.0) - 1.0).abs() < 1e-6);
         assert!((at(LfoShape::Square, 0.25) - 1.0).abs() < 1e-6);
         assert!(at(LfoShape::Square, 0.75) < 1e-6);
+    }
+
+    /// A source's amount is a gain around the middle, applied after its own output mode: at 0 the source is switched
+    /// off (a flat middle at every point of its cycle, whatever its shape and whichever mode), and turning it down
+    /// shrinks the swing inwards instead of flattening it against an edge.
+    #[test]
+    fn the_amount_shrinks_the_swing_to_nothing() {
+        let sine = |amount, bipolar| Lfo { shape: LfoShape::Sine, period: Timebase::Free(1.0), amount, bipolar, ..Lfo::default() };
+        // Bipolar: the whole range at full amount, halfway either side of the middle at half.
+        let (top, bottom) = (lfo_value(&sine(1.0, true), 1, 0.25), lfo_value(&sine(1.0, true), 1, 0.75));
+        assert!((top - 1.0).abs() < 1e-6 && bottom.abs() < 1e-6, "full amount: {top} / {bottom}");
+        let (top, bottom) = (lfo_value(&sine(0.5, true), 1, 0.25), lfo_value(&sine(0.5, true), 1, 0.75));
+        assert!((top - 0.75).abs() < 1e-6 && (bottom - 0.25).abs() < 1e-6, "half amount: {top} / {bottom}");
+        // Zero: the middle at every point of the cycle, in either mode and whatever the shape.
+        for bipolar in [true, false] {
+            for shape in [LfoShape::Sine, LfoShape::Triangle, LfoShape::SawUp, LfoShape::Square] {
+                for cycles in [0.0, 0.1, 0.25, 0.5, 0.9] {
+                    let l = Lfo { shape, amount: 0.0, bipolar, ..sine(0.0, bipolar) };
+                    let v = lfo_value(&l, 1, cycles);
+                    assert!((v - 0.5).abs() < 1e-6, "amount 0 is the middle ({shape:?}, bipolar {bipolar}, {cycles}): {v}");
+                }
+            }
+        }
+        // Unipolar stays above the middle and shrinks toward it, not toward the top of the range.
+        assert!((lfo_value(&sine(1.0, false), 1, 0.75) - 0.5).abs() < 1e-6);
+        assert!((lfo_value(&sine(0.5, false), 1, 0.75) - 0.5).abs() < 1e-6);
+        assert!((lfo_value(&sine(0.5, false), 1, 0.25) - 0.75).abs() < 1e-6);
+        // The offset still moves the result afterwards, so an offset source at no amount sits where its offset says.
+        let l = Lfo { offset: 0.25, ..sine(0.0, true) };
+        assert!((lfo_value(&l, 1, 0.25) - 0.75).abs() < 1e-6);
+        // A random source, in both modes, and a follower: the same middle at zero.
+        for bipolar in [true, false] {
+            let r = Random { seed: 7, period: Timebase::Sync(4), amount: 0.0, bipolar, ..Random::default() };
+            for c in [0.0, 1.0, 2.5, 9.0] {
+                assert!((random_value(&r, c) - 0.5).abs() < 1e-6, "a random source at amount 0 is the middle (bipolar {bipolar})");
+            }
+        }
+        let follower = |amount, level| {
+            let mut f = super::Follower::new(1, AudioFollower { amount, ..AudioFollower::default() });
+            f.level = level;
+            f.value()
+        };
+        assert_eq!(follower(0.0, 1.0), 0.5, "an amount of 0 drives nothing whatever the detected level");
+        assert_eq!(follower(0.0, 0.0), 0.5);
+        assert!((follower(1.0, 1.0) - 1.0).abs() < 1e-6 && follower(1.0, 0.0).abs() < 1e-6);
+        assert!((follower(0.5, 1.0) - 0.75).abs() < 1e-6, "half the swing: {}", follower(0.5, 1.0));
     }
 
     /// The random shape holds one value a cycle, changes from cycle to cycle, and gives the same value again on a

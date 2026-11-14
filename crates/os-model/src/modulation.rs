@@ -465,6 +465,25 @@ impl Default for ModSource {
     }
 }
 
+impl ModSource {
+    /// Its own output gain (`0..=1`). At `0` the source drives nothing at all: its output is the neutral middle, so
+    /// the modulator is effectively off whatever shape it has. A step sequence's steps are its values and a one-shot
+    /// envelope follows the transport, so neither has a gain.
+    pub fn amount(self) -> f32 {
+        match self {
+            ModSource::Lfo(l) => l.amount,
+            ModSource::Random(r) => r.amount,
+            ModSource::AudioFollower(f) => f.amount,
+            ModSource::Steps(_) | ModSource::Envelope(_) => 1.0,
+        }
+    }
+
+    /// Whether the source can move anything at all: an amount of zero leaves it a flat line at the middle.
+    pub fn is_on(self) -> bool {
+        self.amount() > 0.0
+    }
+}
+
 /// The shape of a target's response to the source's `0..=1` value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Curve {
