@@ -1534,8 +1534,25 @@ fn rate_paint(ui: &mut Ui, id: os_model::modulation::ModulatorId, x: f32, y: f32
 fn mod_knob(ui: &mut Ui, s: &State, id: os_model::modulation::ModulatorId, field: crate::modulation::KnobField, label: &str, cx: f32, cy: f32) {
     let t = ui.t;
     let v = s.modulation.get(id).map_or(0.5, |m| crate::modulation::knob_value(m.source, field));
-    let hov = ui.hit(Rect::new(cx - 14.0, cy - 14.0, 28.0, 28.0), Action::Mod(crate::modulation::ModAct::Knob(id, field)), format!("{label}: drag up / down"));
+    // With routing mode armed on another modulator, this knob is a destination: it is ringed in the driver's colour, and
+    // a press draws the route's depth instead of moving the knob (`modulation::act`).
+    let route = s.mod_routing.filter(|from| *from != id).and_then(|from| {
+        let param = crate::modulation::knob_param(field)?;
+        crate::modulation::can_route(s, from, id, param).then_some(from)
+    });
+    let hint = match route {
+        Some(from) => {
+            let name = s.modulation.get(from).map_or_else(|| "The modulator".to_string(), crate::modulation::name_of);
+            format!("{name}: {label} - drag to set how far it drives this")
+        }
+        None => format!("{label}: drag up / down"),
+    };
+    let hov = ui.hit(Rect::new(cx - 14.0, cy - 14.0, 28.0, 28.0), Action::Mod(crate::modulation::ModAct::Knob(id, field)), hint);
     kit::knob(ui.c, t, cx, cy, 11.0, v, false, kit::KnobLook::Ring, kit::State::hover(hov));
+    if let Some(from) = route {
+        let accent = s.modulation.get(from).map_or(t.modulation, |m| mod_accent(t.modulation, &m.source));
+        ui.c.stroke_circle(cx, cy, 14.5, 1.4, accent.with_alpha(route_flash()));
+    }
     ui.c.text_center(fnt(9.0), Rect::new(cx - 23.0, cy + 11.0, 46.0, 12.0), t.text_dim, label);
 }
 

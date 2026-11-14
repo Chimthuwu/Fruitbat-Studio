@@ -969,7 +969,6 @@ pub enum Drag {
     /// `before` is the graph as it stood on the press, so cancel restores it and the release is one undo step.
     ModDepth {
         id: os_model::modulation::ModulatorId,
-        target: u32,
         path: os_model::modulation::ParameterPath,
         y0: f32,
         depth: f32,
@@ -6482,7 +6481,7 @@ impl App {
                     let v = (v0 - (y - y0) as f64 * 0.005).clamp(0.0, 1.0);
                     crate::device_rack::set_param_value(self, key, id, v);
                 }
-                Drag::ModDepth { id, target, path, y0, depth, before } => {
+                Drag::ModDepth { id, path, y0, depth, before } => {
                     // Pull the control up / down: the depth (not the base) follows. The preview edits the graph live, so
                     // the sound and the arc move under the pointer; the release turns it into one undo step.
                     let depth = (depth + (y0 - y) * 0.01).clamp(-1.0, 1.0);
@@ -6493,7 +6492,7 @@ impl App {
                             m.targets.push(os_model::modulation::ModTarget::new(path).with_depth(depth));
                         }
                     }
-                    self.drag = Some(Drag::ModDepth { id, target, path, y0: y, depth, before });
+                    self.drag = Some(Drag::ModDepth { id, path, y0: y, depth, before });
                     crate::modulation::sync(self);
                     self.invalidate();
                 }
@@ -7471,12 +7470,12 @@ impl App {
             self.drop_modulator(id);
             return;
         }
-        if let Some(Drag::ModDepth { id, target, depth, before, .. }) = self.drag.clone() {
+        if let Some(Drag::ModDepth { id, path, depth, before, .. }) = self.drag.clone() {
             self.drag = None;
             // Undo the preview, then apply the final depth as the one undo step (a click with no drag still assigns).
             self.state.modulation = before;
             let depth = if depth.abs() < 0.01 { os_model::modulation::ModTarget::DEPTH_DEFAULT } else { depth };
-            crate::modulation::run(self, crate::modulation::ModCmd::AssignDepth(id, target, depth));
+            crate::modulation::run(self, crate::modulation::ModCmd::AssignDepthPath(id, path, depth));
             self.invalidate();
             return;
         }

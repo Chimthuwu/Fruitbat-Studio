@@ -687,8 +687,8 @@ pub enum ModCmd {
     PasteMany(Vec<(u8, Modulator)>),
     /// Modulator `.0` starts driving that parameter.
     Assign(ModulatorId, u32),
-    /// Assign and set the depth in one step (routing mode's drag on release).
-    AssignDepth(ModulatorId, u32, f32),
+    /// Assign and set the depth in one step (routing mode's drag on release), by the assignment's persistent path.
+    AssignDepthPath(ModulatorId, ParameterPath, f32),
     /// Modulator `.0` stops driving it.
     Unassign(ModulatorId, u32),
     /// The same, by the assignment's persistent path (the browser and the parameter-side menu).
@@ -733,13 +733,13 @@ pub fn run(app: &mut crate::app::App, cmd: ModCmd) -> Option<String> {
         let path = match cmd {
             ModCmd::New(t)
             | ModCmd::Assign(_, t)
-            | ModCmd::AssignDepth(_, t, _)
             | ModCmd::Unassign(_, t)
             | ModCmd::SetDepth(_, t, _)
             | ModCmd::SetCurve(_, t, _)
             | ModCmd::SetPolarity(_, t, _) => target_path(s, t),
             ModCmd::AddInSlot(..)
             | ModCmd::PasteMany(..)
+            | ModCmd::AssignDepthPath(..)
             | ModCmd::UnassignPath(..)
             | ModCmd::SetTargetEnabled(..)
             | ModCmd::SetDepthPath(..)
@@ -784,7 +784,7 @@ pub fn run(app: &mut crate::app::App, cmd: ModCmd) -> Option<String> {
                 let m = s.modulation.get(id).expect("an existing modulator");
                 format!("{} now drives this control", name_of(m))
             }),
-            ModCmd::AssignDepth(id, _, depth) => path.and_then(|path| {
+            ModCmd::AssignDepthPath(id, path, depth) => {
                 let target = os_model::modulation::ModTarget::new(path).with_depth(depth);
                 s.modulation.assign(id, target);
                 // A second routing on the same parameter updates its depth instead of being refused.
@@ -794,7 +794,7 @@ pub fn run(app: &mut crate::app::App, cmd: ModCmd) -> Option<String> {
                     }
                 }
                 Some(format!("Depth {:+.0}%", depth * 100.0))
-            }),
+            }
             ModCmd::Unassign(id, _) => path.and_then(|path| {
                 s.modulation.unassign(id, path).then(|| "Stopped driving this control".to_string())
             }),
@@ -1141,19 +1141,12 @@ pub fn menu_items(s: &State, m: &Modulator) -> Vec<(String, ModAct)> {
         && let Some(driver) = s.modulation.get(from)
     {
         let name = name_of(driver);
-        // A new route from this modulator back into one that already drives it would close a loop, which the graph
-        // refuses; the menu does not offer what would be refused. A route that exists is still offered, because its row
-        // takes it away again.
-        let blocked = s.modulation.reaches(from, m.id);
         for param in os_model::modulation::ModParam::ALL {
-            if !param.applies_to(&m.source) {
+            if !can_route(s, from, m.id, param) {
                 continue;
             }
             // The route lives on the driver, naming this modulator's parameter.
             let driving = driver.targets.iter().any(|t| t.path.modulator() == Some((m.id, param)));
-            if blocked && !driving {
-                continue;
-            }
             let label = if driving {
                 format!("Stop {name}: {}", param.label().to_lowercase())
             } else {
@@ -1255,9 +1248,23 @@ pub fn key(app: &mut crate::app::App, key: &winit::keyboard::Key, ctrl: bool, al
     }
 }
 
+/// Puts the route at `depth` on the graph and hands the pointer a depth drag for it. The graph as it was goes into
+/// the drag, so a release is one undo step and Esc restores it exactly.
+fn depth_drag(app: &mut crate::app::App, id: ModulatorId, path: ParameterPath, depth: f32, before: os_model::modulation::ModGraph) {
+    if let Some(m) = app.state.modulation.get_mut(id) {
+        if let Some(t) = m.targets.iter_mut().find(|t| t.path == path) {
+            *t = t.with_depth(depth);
+        } else {
+            m.targets.push(os_model::modulation::ModTarget::new(path).with_depth(depth));
+        }
+    }
+    app.drag = Some(crate::app::Drag::ModDepth { id, path, y0: app.mouse.1, depth, before });
+    sync(app);
+    app.invalidate();
+}
+
 /// Routing mode: a press on `target`. The assignment is created at depth 0 so the arc and the sound follow the drag;
-/// the base value is never written. The graph as it was is kept in the drag, so a release is one undo step and Esc
-/// restores it exactly.
+/// the base value is never written.
 pub fn begin_routing_drag(app: &mut crate::app::App, id: ModulatorId, target: u32) {
     let Some(path) = target_path(&mut app.state, target) else { return };
     let before = app.state.modulation.clone();
@@ -1267,16 +1274,54 @@ pub fn begin_routing_drag(app: &mut crate::app::App, id: ModulatorId, target: u3
         .get(id)
         .and_then(|m| m.targets.iter().find(|t| t.path == path))
         .map_or(0.0, |t| t.depth);
-    if let Some(m) = app.state.modulation.get_mut(id) {
-        if let Some(t) = m.targets.iter_mut().find(|t| t.path == path) {
-            *t = t.with_depth(depth);
-        } else {
-            m.targets.push(os_model::modulation::ModTarget::new(path).with_depth(depth));
-        }
+    depth_drag(app, id, path, depth, before);
+}
+
+/// Routing mode, on another modulator's tile: a press on one of its knobs. The armed modulator starts driving that
+/// parameter — an ordinary assignment, so the depth, curve, polarity, undo and `.lemon` come along — at the default
+/// depth (an existing route keeps its own), and the pointer drags that depth. False when the graph would refuse.
+pub fn begin_route_drag(app: &mut crate::app::App, from: ModulatorId, to: ModulatorId, param: os_model::modulation::ModParam) -> bool {
+    if !can_route(&app.state, from, to, param) {
+        return false;
     }
-    app.drag = Some(crate::app::Drag::ModDepth { id, target, path, y0: app.mouse.1, depth, before });
-    sync(app);
-    app.invalidate();
+    let path = ParameterPath::on_modulator(to, param);
+    let before = app.state.modulation.clone();
+    let depth = app
+        .state
+        .modulation
+        .get(from)
+        .and_then(|m| m.targets.iter().find(|t| t.path == path))
+        .map_or(os_model::modulation::ModTarget::DEPTH_DEFAULT, |t| t.depth);
+    depth_drag(app, from, path, depth, before);
+    true
+}
+
+/// Whether the graph would accept modulator `from` driving `param` of modulator `to`: the destination has that
+/// parameter, and the route is neither a self-drive nor one that closes a loop (`ModGraph::route` refuses exactly
+/// these). An existing route is always allowed, because its row is how it is taken away again.
+pub fn can_route(s: &State, from: ModulatorId, to: ModulatorId, param: os_model::modulation::ModParam) -> bool {
+    let Some(destination) = s.modulation.get(to) else { return false };
+    if from == to || s.modulation.get(from).is_none() || !param.applies_to(&destination.source) {
+        return false;
+    }
+    let driving = s
+        .modulation
+        .get(from)
+        .is_some_and(|m| m.targets.iter().any(|t| t.path.modulator() == Some((to, param))));
+    driving || !s.modulation.reaches(to, from)
+}
+
+/// The graph parameter a knob of the editor stands for. A knob the graph cannot address (a follower's attack, say)
+/// is not a routing destination.
+pub fn knob_param(field: KnobField) -> Option<os_model::modulation::ModParam> {
+    use os_model::modulation::ModParam;
+    match field {
+        KnobField::Rate => Some(ModParam::Rate),
+        KnobField::Amount => Some(ModParam::Amount),
+        KnobField::Phase => Some(ModParam::Phase),
+        KnobField::Offset => Some(ModParam::Offset),
+        KnobField::Attack | KnobField::Release | KnobField::Gain | KnobField::Smooth => None,
+    }
 }
 
 /// Hands the current graph and its snapshot to playback, and keeps the same snapshot in the app state for the UI's
@@ -1399,6 +1444,16 @@ pub fn act(app: &mut crate::app::App, a: ModAct) {
     // A click on a modulator slot or its editor hands that strip the selection keys; a click on a device
     // hands them back (`App::act`).
     app.state.keyboard_focus = crate::app::KeyboardFocus::Modulators;
+    // Routing mode, a press on another modulator's knob: this is the route's destination, so the press starts the
+    // route and drags its depth instead of moving the knob (the device controls' gesture).
+    if let ModAct::Knob(id, field) = a
+        && let Some(param) = knob_param(field)
+        && let Some(from) = app.state.mod_routing.filter(|from| *from != id)
+        && begin_route_drag(app, from, id, param)
+    {
+        return;
+    }
+    let ctrl = app.ctrl;
     let s = &mut app.state;
     match a {
         ModAct::FocusStrip => {}
@@ -1449,15 +1504,12 @@ pub fn act(app: &mut crate::app::App, a: ModAct) {
             s.mod_menu = None;
         }
         ModAct::Open(id) => {
-            // A click on another modulator's tile while routing mode is armed is the route's destination, not a request
-            // for its editor: its menu offers the parameters the armed modulator can drive into it.
-            if let Some(from) = s.mod_routing.filter(|a| *a != id)
-                && s.modulation.get(id).is_some()
-                && s.modulation.get(from).is_some()
-            {
+            // Ctrl+click on another modulator's tile opens its panel without leaving routing mode, so the armed
+            // modulator's route can be dropped straight onto its knobs (Bitwig's gesture). A plain click is an ordinary
+            // open, which leaves routing mode, as every other click on a tile does.
+            if ctrl && s.mod_routing.is_some_and(|from| from != id) && s.modulation.get(id).is_some() {
                 select_one(s, id);
                 s.mod_editor = Some(id);
-                s.mod_menu = Some(id);
                 s.mod_add_slot = None;
             } else {
                 select_one(s, id);
@@ -1810,11 +1862,12 @@ mod tests {
         assert!(app.state.modulation.get(a).unwrap().targets.is_empty(), "routed again: gone");
     }
 
-    /// Only the parameters the destination actually has are offered, a route that would close a loop is not, and a
-    /// click on a modulator's tile with routing armed opens its menu rather than disarming the mode.
+    /// Only the parameters the destination actually has are offered, and a route that would close a loop is not. The
+    /// route into the graph is drawn the way a device routing is: Ctrl+click the destination's tile to open its panel
+    /// without leaving routing mode, then press the knob the route should land on.
     #[test]
     fn routing_mode_offers_only_what_can_be_routed_and_keeps_itself_armed() {
-        use os_model::modulation::ModParam;
+        use os_model::modulation::{ModParam, ModTarget};
         let mut app = crate::app::App::new(None);
         let a = app.state.modulation.add(ModSource::default());
         let steps = app.state.modulation.add(ModSource::Steps(os_model::modulation::Steps::default()));
@@ -1829,17 +1882,37 @@ mod tests {
                 .collect()
         };
         assert_eq!(offered(&app, steps), vec![ModParam::Rate], "a step sequence has only a rate");
-        // The steps drive a's rate. With the steps armed, a's menu offers only that route's own switch: a new route back
-        // into them would close a loop, so the other three parameters are not offered at all.
-        assert!(app.state.modulation.route(steps, a, ModParam::Rate, 0.5));
-        crate::modulation::act(&mut app, ModAct::Route(steps));
-        assert_eq!(offered(&app, a), vec![ModParam::Rate], "the three that would close a loop are not offered");
-        // The tile's click, while armed, opens the other modulator's menu and keeps the mode.
-        crate::modulation::act(&mut app, ModAct::Route(a));
+        // Ctrl+click on the other modulator's tile opens its panel and keeps routing mode; a plain click is an ordinary
+        // open and leaves it.
+        app.ctrl = true;
         crate::modulation::act(&mut app, ModAct::Open(steps));
-        assert_eq!(app.state.mod_menu, Some(steps), "its menu opened");
-        assert_eq!(app.state.mod_editor, Some(steps), "with the always-on-top window the menu lives in");
+        assert_eq!(app.state.mod_editor, Some(steps), "its panel opened");
+        assert_eq!(app.state.mod_menu, None, "the panel, not the menu");
         assert_eq!(app.state.mod_routing, Some(a), "routing mode is still armed");
+        // A press on one of its knobs is the route's destination: the armed modulator starts driving that parameter at the
+        // default depth, and the pointer drags that depth (the knob's own value is not touched).
+        crate::modulation::act(&mut app, ModAct::Knob(steps, KnobField::Rate));
+        let route = app
+            .state
+            .modulation
+            .get(a)
+            .and_then(|m| m.targets.iter().find(|t| t.path.modulator() == Some((steps, ModParam::Rate))).copied())
+            .expect("the press routed a's output into the steps' rate");
+        assert_eq!(route.depth, ModTarget::DEPTH_DEFAULT, "a new route is audible");
+        assert!(matches!(app.drag, Some(crate::app::Drag::ModDepth { id, .. }) if id == a), "and the drag is its depth");
+        app.drag = None;
+        app.ctrl = false;
+        crate::modulation::act(&mut app, ModAct::Open(a));
+        assert_eq!(app.state.mod_routing, None, "a plain click leaves routing mode");
+        // The route now runs a → steps, so the steps driving a's rate would close a loop: the graph refuses it, its menu
+        // does not offer it, and the press on a's knob edits the knob instead of drawing a route.
+        crate::modulation::act(&mut app, ModAct::Route(steps));
+        assert!(offered(&app, a).is_empty(), "the route back is not offered");
+        app.ctrl = true;
+        crate::modulation::act(&mut app, ModAct::Open(a));
+        crate::modulation::act(&mut app, ModAct::Knob(a, KnobField::Rate));
+        assert!(app.state.modulation.get(steps).unwrap().targets.is_empty(), "no loop was drawn");
+        assert!(matches!(app.drag, Some(crate::app::Drag::ModKnob { .. })), "the knob edited itself instead");
     }
 
     /// A route into the graph resolves from the graph itself (no device identity) and reaches the engine as the
