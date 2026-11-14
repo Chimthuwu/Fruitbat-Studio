@@ -78,8 +78,12 @@ impl Plugin {
             plain = plain.round();
         }
         self.auto.push((offset, id, plain));
-        // A sleeping instance takes it in the UI thread's flush.
-        self.host_data.attention.raise();
+        // A sleeping instance takes it in the UI thread's flush; a running one takes it at its next block, and the UI
+        // has no news to look for — raising it per value (750 times a second for a modulated parameter) made a device
+        // rack tile re-read its instance's whole parameter list on every frame.
+        if !self.processing {
+            self.host_data.attention.raise();
+        }
     }
 
     /// Adds this chunk's automation values (time < `n`) to `pvals` after the host edits, in time order, and moves the

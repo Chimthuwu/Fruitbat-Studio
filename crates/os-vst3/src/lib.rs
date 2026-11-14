@@ -969,8 +969,10 @@ impl Plugin {
         if steps > 0 {
             v = (v * f64::from(steps)).round() / f64::from(steps);
         }
+        // No attention raised: the host asked for this value itself, so the UI has no news to look for. Raising it
+        // per value (750 times a second for a modulated parameter) made a device rack tile re-read its instance's whole
+        // parameter list on every frame. An edit still waiting for a stream nudges on its own (`idle`, `pending_since`).
         self.auto.push((offset, id, v));
-        self.shared.attention.raise();
     }
 
     /// This chunk's automation (offset < `n`) into the input parameter changes, after the host edits at offset 0; the
@@ -999,15 +1001,19 @@ impl Plugin {
     /// Parameter values the processor reported, for the controller.
     fn take_outputs(&mut self) {
         let out = &mut self.from_processor;
+        let mut reported = false;
         self.params_out.get().for_each_last(|id, v| {
+            reported = true;
             if let Some(e) = out.iter_mut().find(|e| e.0 == id) {
                 e.1 = v;
             } else if out.len() < out.capacity() {
                 out.push((id, v));
             }
         });
-        // The controller hears them on the UI thread.
-        if !self.from_processor.is_empty() {
+        // The controller hears them on the UI thread — the processor's own reports, not the values the host's
+        // automation put there (those are already its own doing, and nudging the UI for each of them made a device
+        // rack tile re-read its instance on every frame while a modulation ran).
+        if reported && !self.from_processor.is_empty() {
             self.shared.attention.raise();
         }
     }
@@ -1574,8 +1580,8 @@ impl os_engine::Instrument for Plugin {
         if id == u32::MAX || self.auto.len() >= MAX_AUTO {
             return;
         }
+        // As `automate`: a value the host plays raises nothing for the UI to look at.
         self.auto.push((offset, id, v));
-        self.shared.attention.raise();
     }
 
     /// Portamento glides (spec: audio/channel-voices.md): the tuning note expression of the key's sounding note, or

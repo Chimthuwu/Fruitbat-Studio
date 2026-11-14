@@ -1522,7 +1522,9 @@ pub fn sync_embed(app: &mut App) {
         if let Some(d) = app.plugins.descriptor(key) {
             names.insert(key, d.name);
         }
-        let prev = app.state.device_rack_params.get(&key).cloned().unwrap_or_default();
+        // The tile's rows are taken out of the map rather than copied: a big instrument's list is thousands of rows of
+        // name, group and value text, and a copy a frame cost more than the read it was keeping for the next one.
+        let prev = app.state.device_rack_params.remove(&key).unwrap_or_default();
         // A tile re-reads its instance when the instance has something to say (a value moved in its own window) or
         // every 40 ms, not on every tick: reading a big instrument's ~900 values 60 times a second held the lock its
         // audio thread wanted (Vital distorted while the rack showed its track). A tile with nothing yet is read now.

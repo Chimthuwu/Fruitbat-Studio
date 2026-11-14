@@ -47,12 +47,22 @@
       away (`a_clip_still_moves_a_modulated_parameter`: a constant clip at 0.8 with a knob handed over at 0.2 keeps
       swinging around 0.8). Before, a clip's value stuck for good and any knob write replaced it, which is what
       "automation stopped working" looked like on a driven parameter.
-- [ ] **The lag when a graph runs**: two probes, both on a real chain (built-in devices) — a four-second render with
-      an LFO on a plugin parameter costs 1.11 ms against 0.88 ms without it (1.27×, ~0.03 % of real time), and a whole
-      frame (`tick` + a full 1920×1080 paint) is 4.04 ms against 4.16 ms (0.97×, within noise). Neither path shows the
-      lag, so what is left is the one thing a headless probe cannot model: a *hosted* plugin taking the modulated
-      parameter traffic, and `params_tick` locking every host instance each tick while it reports the moves. Next probe:
-      time `params_tick` and a `rack_controls` read against a real VST while a source drives one of its parameters.
+- [x] **The lag when a graph runs — found and fixed (device rack, not the engine)**: earlier probes on built-in
+      devices found nothing in the audio path (1.27×, ~0.03 % of real time) or the frame (0.97×), and a probe against a
+      **real VST3** (Odin III, 2120 parameters, a parameter driven at the engine's 750 values a second) puts
+      `params_tick` at 4.4 µs a frame with the source running and 0.6 µs idle — it was never the cost. The rack was: the
+      engine's own parameter writes raised the instance's `Attention` on every value (`os-vst3::automate`, its MIDI CC
+      path and the `from_processor` echo, and `os-clap::automate`), and `Hosted::rack_due` re-reads a tile whenever that
+      count moves — so a modulated parameter made a visible tile re-read **every frame**: 2414 µs a frame, a re-read on
+      300 of 300 frames. The host's own automation now raises nothing (a running CLAP instance applies it at its next
+      block, a sleeping one still nudges, a VST3's waiting flush nudges itself), and the same frame costs **6.5 µs**, a
+      re-read on 1 of 300. The read itself halved, 2434 µs → **1034 µs**: `rack_controls` looked up each parameter's
+      previous row by scanning the whole list (quadratic) and now matches by position, and `sync_embed` no longer copies
+      every tile's rows every tick (257 µs for that instrument) — it moves them out of the map and back.
+- **A docked editor's knobs are the plugin's own**: a VST3/CLAP window draws its controls from its own state, so the app
+      cannot make them show the base instead of the modulated value (and must not freeze them: that is the plugin's
+      window). Every control the app draws itself — the device rack's tiles, which mirror an editor's parameters — does
+      follow automation while a source drives it and never follows the source (`hold_modulated`).
 - [ ] **More routable parameters**: only rate, amount, phase and offset are addressable today. Depth-shaping
       a route (the assignment's depth as a destination), a follower's attack/release/gain, and a random source's
       smoothness are the obvious next ones.

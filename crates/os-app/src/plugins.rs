@@ -1128,12 +1128,17 @@ impl Plugins {
         // wait for its own lock (what the plain `lock()` did) distorted its audio while the rack showed its tile.
         // `prev` keeps the tile showing what it had until the next tick gets through.
         let Some(mut p) = h.lock_for_tick() else { return prev.to_vec() };
+        // `prev` came from this same list, so its rows line up with the parameters one for one: matching by position
+        // keeps a big instrument's read linear (searching the list for every parameter made it quadratic).
+        let mut at = 0usize;
         h.param_infos(&mut p)
             .iter()
             .filter(|i| !i.read_only && !i.bypass && !i.hidden)
             .map(|i| {
                 let value = p.param_value(i.id).unwrap_or(i.default);
-                let text = match prev.iter().find(|r| r.id == i.id) {
+                let old = prev.get(at).filter(|r| r.id == i.id);
+                at += 1;
+                let text = match old {
                     Some(r) if r.value == value => r.text.clone(),
                     _ => p
                         .param_text(i.id, value)
