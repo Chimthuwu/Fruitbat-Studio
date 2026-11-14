@@ -1,0 +1,8 @@
+{
+  "name": "fruitbat-studio-site",
+  "private": true,
+  "description": "Cloudflare Pages build for the FruitBat Studio landing page (site/).",
+  "scripts": {
+    "build": "node tools/site-build.mjs"
+  }
+}

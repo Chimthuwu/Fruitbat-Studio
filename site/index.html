@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FruitBat Studio — a hybrid pattern-based and modular DAW, built in Rust</title>
+<meta name="description" content="FruitBat Studio is a hybrid pattern-based and modular digital audio workstation in Rust: channel rack, clip launcher, piano roll, mixer, cable-routed modulation and CLAP/VST hosting on Windows, Linux and macOS.">
+<meta name="theme-color" content="#0b0f0c">
+<link rel="canonical" href="https://fruitbat-studio.pages.dev/">
+
+<!-- Link previews (Discord, Slack, X, Bluesky, iMessage): absolute URLs, a 1200x630 PNG with the logo. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="FruitBat Studio">
+<meta property="og:url" content="https://fruitbat-studio.pages.dev/">
+<meta property="og:title" content="FruitBat Studio — a hybrid pattern-based &amp; modular DAW, built in Rust">
+<meta property="og:description" content="Fast pattern sequencing, a clip launcher, cable-routed modulation and FL Studio project support in one native Rust workstation. Pre-alpha, open source.">
+<meta property="og:image" content="https://fruitbat-studio.pages.dev/assets/og.png">
+<meta property="og:image:secure_url" content="https://fruitbat-studio.pages.dev/assets/og.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The FruitBat Studio logo">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="FruitBat Studio">
+<meta name="twitter:description" content="A hybrid pattern-based and modular DAW, built in Rust. Pre-alpha, open source.">
+<meta name="twitter:image" content="https://fruitbat-studio.pages.dev/assets/og.png">
+<meta name="twitter:image:alt" content="The FruitBat Studio logo">
+<link rel="icon" href="assets/mark.png">
+<style>
+  :root {
+    --obsidian: #0b0f0c;
+    --obsidian-2: #111814;
+    --panel: #16201a;
+    --panel-2: #1c2a21;
+    --line: #2a3a2f;
+    --leaf: #7fd08a;
+    --leaf-deep: #3f8a5a;
+    --passion: #b477e6;
+    --citrus: #f0b64a;
+    --text: #e8f0e9;
+    --muted: #9fb0a4;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(900px 500px at 80% -10%, rgba(180, 119, 230, .18), transparent 60%),
+      radial-gradient(700px 400px at -10% 10%, rgba(127, 208, 138, .12), transparent 60%),
+      var(--obsidian);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--leaf); text-decoration: none; }
+  a:hover { color: var(--citrus); }
+  img { max-width: 100%; height: auto; display: block; }
+  .wrap { width: min(1120px, 100% - 3rem); margin-inline: auto; }
+
+  header.nav {
+    position: sticky; top: 0; z-index: 10;
+    backdrop-filter: blur(10px);
+    background: rgba(11, 15, 12, .78);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav-inner { display: flex; align-items: center; gap: 1rem; padding: .7rem 0; }
+  .nav-inner img { width: 34px; height: 34px; border-radius: 8px; }
+  .brand { font-weight: 700; letter-spacing: .02em; color: var(--text); }
+  .brand span { color: var(--leaf); }
+  .nav-links { margin-left: auto; display: flex; gap: 1.25rem; font-size: .92rem; }
+  .nav-links a { color: var(--muted); }
+  .nav-links a:hover { color: var(--text); }
+  @media (max-width: 620px) { .nav-links { display: none; } }
+
+  .hero { padding: 4.5rem 0 2rem; text-align: center; }
+  .hero .logo { width: min(620px, 100%); margin: 0 auto 1.5rem; }
+  .kicker {
+    display: inline-flex; gap: .5rem; align-items: center;
+    font-size: .75rem; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--citrus);
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: .3rem .8rem; margin-bottom: 1.25rem;
+    background: rgba(240, 182, 74, .06);
+  }
+  h1 { font-size: clamp(1.9rem, 5vw, 3.1rem); line-height: 1.1; margin: 0 0 1rem; letter-spacing: -.02em; }
+  h1 em { font-style: normal; color: var(--leaf); }
+  .lede { font-size: clamp(1rem, 2.2vw, 1.2rem); color: var(--muted); max-width: 46rem; margin: 0 auto 2rem; }
+
+  .cta { display: flex; gap: .8rem; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: .5rem;
+    padding: .75rem 1.35rem; border-radius: 10px;
+    border: 1px solid var(--line);
+    font-weight: 600; font-size: .95rem;
+    transition: transform .12s ease, background .12s ease, border-color .12s ease;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-primary { background: linear-gradient(180deg, #8ade95, var(--leaf-deep)); color: #08120c; border-color: #8ade95; }
+  .btn-primary:hover { color: #08120c; background: linear-gradient(180deg, #a3e8ac, var(--leaf)); }
+  .btn-ghost { color: var(--text); background: rgba(255, 255, 255, .02); }
+  .btn-ghost:hover { border-color: var(--leaf-deep); color: var(--text); }
+
+  section { padding: 3.5rem 0; }
+  .shot {
+    border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+    background: var(--panel);
+    box-shadow: 0 30px 60px -30px rgba(0, 0, 0, .8);
+  }
+  .shot img { width: 100%; }
+  .shot figcaption { padding: .8rem 1rem; color: var(--muted); font-size: .85rem; border-top: 1px solid var(--line); }
+
+  h2 { font-size: clamp(1.35rem, 3vw, 1.9rem); margin: 0 0 .6rem; letter-spacing: -.01em; }
+  .section-lede { color: var(--muted); margin: 0 0 2rem; max-width: 44rem; }
+
+  .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .card {
+    background: linear-gradient(180deg, var(--panel), var(--obsidian-2));
+    border: 1px solid var(--line); border-radius: 12px; padding: 1.15rem 1.25rem;
+  }
+  .card h3 { margin: 0 0 .4rem; font-size: 1rem; }
+  .card h3 span { color: var(--passion); margin-right: .4rem; }
+  .card p { margin: 0; color: var(--muted); font-size: .92rem; }
+
+  .split { display: grid; gap: 2rem; grid-template-columns: 1.1fr .9fr; align-items: center; }
+  @media (max-width: 860px) { .split { grid-template-columns: 1fr; } }
+
+  .note {
+    border-left: 3px solid var(--citrus);
+    background: rgba(240, 182, 74, .06);
+    padding: .9rem 1.1rem; border-radius: 0 10px 10px 0;
+    color: #f2e4c4; font-size: .92rem;
+  }
+
+  pre {
+    margin: 0; padding: 1rem 1.1rem; overflow-x: auto;
+    background: #0a0e0b; border: 1px solid var(--line); border-radius: 10px;
+    font-family: var(--mono); font-size: .85rem; color: #cfe6d3;
+  }
+  pre .c { color: #6f8577; }
+  code.inline { font-family: var(--mono); font-size: .88em; background: rgba(127, 208, 138, .1); color: #cfe6d3; padding: .1em .35em; border-radius: 4px; }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1rem; margin-top: 2rem; }
+  .stat { text-align: center; border: 1px solid var(--line); border-radius: 12px; padding: 1rem; background: rgba(255, 255, 255, .015); }
+  .stat b { display: block; font-size: 1.35rem; color: var(--leaf); }
+  .stat span { color: var(--muted); font-size: .8rem; letter-spacing: .05em; text-transform: uppercase; }
+
+  footer { border-top: 1px solid var(--line); padding: 2rem 0 3rem; color: var(--muted); font-size: .88rem; }
+  footer .foot { display: flex; gap: 1rem; flex-wrap: wrap; justify-content: space-between; align-items: center; }
+  footer nav { display: flex; gap: 1rem; }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <img src="assets/mark.png" alt="">
+    <span class="brand">FruitBat <span>Studio</span></span>
+    <nav class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#screenshots">Screenshots</a>
+      <a href="#build">Build</a>
+      <a href="#status">Status</a>
+      <a href="https://github.com/Chimthuwu/Fruitbat-Studio">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero wrap">
+    <img class="logo" src="assets/logo-light.png" alt="FruitBat Studio">
+    <div class="kicker">🦇 pre-alpha · Rust 2024</div>
+    <h1>A hybrid pattern-based &amp; <em>modular</em> DAW</h1>
+    <p class="lede">
+      Lightning-fast pattern stamping and channel-rack ergonomics meet the deep, cable-routed modulation
+      and routing of modular workstations — a native Rust audio engine on Windows, Linux and macOS.
+    </p>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://github.com/Chimthuwu/Fruitbat-Studio">View on GitHub</a>
+      <a class="btn btn-ghost" href="https://github.com/Chimthuwu/Fruitbat-Studio/blob/main/docs/build.md">Build from source</a>
+      <a class="btn btn-ghost" href="https://github.com/Chimthuwu/Fruitbat-Studio/blob/main/docs/AUDIT-2026-11-14-fruitbat.md">Read the status</a>
+    </div>
+  </section>
+
+  <section id="screenshots" class="wrap">
+    <figure class="shot">
+      <img src="assets/screenshot-fruitbat.png" alt="FruitBat Studio with the clip launcher, mixer, project modulators and device rack open">
+      <figcaption>The clip launcher, mixer, project modulators and device rack, all in one workspace.</figcaption>
+    </figure>
+  </section>
+
+  <section id="features" class="wrap">
+    <h2>What it does</h2>
+    <p class="section-lede">
+      One workspace that keeps the fast ideas from classic pattern sequencers and the deep ideas from modular
+      hosts — without making you choose between them.
+    </p>
+    <div class="grid">
+      <article class="card">
+        <h3><span>◆</span>Hybrid workflow</h3>
+        <p>Fast pattern-based sequencing for the arrangement, with modular signal routing and live parameter modulation on the same tracks.</p>
+      </article>
+      <article class="card">
+        <h3><span>◆</span>Native audio engine</h3>
+        <p>A sample-accurate Rust engine with a fast CPU-rendered interface, running on WASAPI/ASIO, ALSA and Core Audio.</p>
+      </article>
+      <article class="card">
+        <h3><span>◆</span>Modular patching</h3>
+        <p>Connect LFOs, random sources and audio followers to instrument, effect and mixer parameters on the fly — and automate the same parameters on the timeline.</p>
+      </article>
+      <article class="card">
+        <h3><span>◆</span>Clip launcher</h3>
+        <p>Scenes, clips, launch quantisation, follow actions, per-track stop, mute and solo, and keyboard navigation alongside the classic playlist.</p>
+      </article>
+      <article class="card">
+        <h3><span>◆</span>FL Studio projects</h3>
+        <p>Opens and saves <code class="inline">.flp</code> files, alongside FruitBat's own <code class="inline">.lemon</code> project format. FLP support is still young — work on copies and keep backups.</p>
+      </article>
+      <article class="card">
+        <h3><span>◆</span>Plugin hosting</h3>
+        <p>CLAP, VST3 and VST2 instruments and effects, with their own editors docked into the FruitBat workspace.</p>
+      </article>
+      <article class="card">
+        <h3><span>◆</span>Skins and themes</h3>
+        <p>Deep botanical greens, passionfruit purples and midnight obsidian styling, with the Meridian, Lemon, Lemon Industrial and Citrus skins.</p>
+      </article>
+      <article class="card">
+        <h3><span>◆</span>Built in the open</h3>
+        <p>GPL-3.0-or-later, written in Rust 2024, developed in public with an audited status document that says what actually works.</p>
+      </article>
+    </div>
+    <div class="stats">
+      <div class="stat"><b>Rust</b><span>2024 edition</span></div>
+      <div class="stat"><b>3</b><span>Platforms</span></div>
+      <div class="stat"><b>CLAP · VST3 · VST2</b><span>Plugins</span></div>
+      <div class="stat"><b>GPL-3.0</b><span>License</span></div>
+    </div>
+  </section>
+
+  <section class="wrap split">
+    <div>
+      <h2>The piano roll and the modulation strip</h2>
+      <p class="section-lede">
+        Notes, project modulators and docked device editors sit together, so a filter sweep you drew in the rack
+        is the same value the engine hears at the next block boundary.
+      </p>
+      <p class="section-lede">
+        Automation belongs to the playlist track that owns the device, modulation belongs to the modulators —
+        two systems, two clear workflows, one engine.
+      </p>
+    </div>
+    <figure class="shot">
+      <img src="assets/screenshot-piano-roll-fruitbat.png" alt="The FruitBat Studio piano roll with Lemon Drum Sampler notes and the modulator strip below">
+      <figcaption>The piano roll, the project modulation strip and docked device editors.</figcaption>
+    </figure>
+  </section>
+
+  <section id="build" class="wrap">
+    <h2>Build from source</h2>
+    <p class="section-lede">
+      You need a Rust toolchain (2024 edition) and your platform's C++ build tools. The full, known-good recipe
+      for each platform lives in
+      <a href="https://github.com/Chimthuwu/Fruitbat-Studio/blob/main/docs/build.md">docs/build.md</a>.
+    </p>
+    <pre><code><span class="c"># clone the repository</span>
+git clone https://github.com/Chimthuwu/Fruitbat-Studio.git
+cd Fruitbat-Studio
+
+<span class="c"># build the workstation</span>
+cargo build --release -p os-app
+
+<span class="c"># the binary lands in target/release/lemonstudio</span></code></pre>
+    <p class="section-lede" style="margin-top:1.25rem">
+      No builds are published yet — watch the
+      <a href="https://github.com/Chimthuwu/Fruitbat-Studio/releases">releases page</a> for the first packaged ones.
+    </p>
+  </section>
+
+  <section id="status" class="wrap">
+    <h2>Where it actually stands</h2>
+    <p class="section-lede">
+      FruitBat Studio is pre-alpha. The interface shows more than the engine can do today, and the project is
+      deliberately honest about the gap: every claim in the README is checked against the code.
+    </p>
+    <div class="note">
+      Expect rough edges and controls that are not implemented yet. Keep backups of your projects, and treat
+      everything you make in it as experimental until 1.0.
+    </div>
+    <p class="section-lede" style="margin-top:1.25rem">
+      The current, tested picture of what works, what is partial and what is planned is in
+      <a href="https://github.com/Chimthuwu/Fruitbat-Studio/blob/main/docs/AUDIT-2026-11-14-fruitbat.md">the status audit</a>.
+    </p>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <span>🦇🍊 FruitBat Studio — GPL-3.0-or-later. Built in Rust.</span>
+    <nav>
+      <a href="https://github.com/Chimthuwu/Fruitbat-Studio">GitHub</a>
+      <a href="https://github.com/Chimthuwu/Fruitbat-Studio/issues">Issues</a>
+      <a href="https://github.com/Chimthuwu/Fruitbat-Studio/blob/main/LICENSE">License</a>
+    </nav>
+  </div>
+</footer>
+
+</body>
+</html>

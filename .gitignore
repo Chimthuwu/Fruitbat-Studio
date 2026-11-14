@@ -16,3 +16,7 @@ CLAUDE.md
 
 # Local build env (portable MSVC / rustup on Z:)
 env.sh
+
+# Cloudflare Pages: local wrangler cache and the build output
+/.wrangler/
+/dist/
