@@ -3456,6 +3456,15 @@ mod tests {
             app.state.modulation.get(id).is_some_and(|m| m.targets.iter().any(|t| t.path == path)),
             "the LFO drives the cutoff"
         );
+        // The engine moves from the value the knob has without the modulation, which the app hands over with the graph:
+        // a parameter nothing automates has no base of its own inside the engine.
+        let bases = crate::modulation::mod_bases(&app.state, &app.plugins);
+        assert!(
+            bases.iter().any(|&(t, v)| t == target && (v - cutoff.value).abs() < 1e-9),
+            "the cutoff's own value is the base: {bases:?} vs {} at {}",
+            cutoff.name,
+            cutoff.value
+        );
         // The modulation writes the parameter inside the instance, so what is read back is the modulated value: the rack
         // keeps the control at the value the user set instead of drawing that. A control nothing drives follows its
         // instance.

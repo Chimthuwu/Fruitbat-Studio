@@ -90,6 +90,9 @@ pub struct Shared {
     /// The live modulation values (the same graph's outputs and effective target values): engines publish into it and
     /// the UI reads it without a lock of its own.
     mod_snapshot: Mutex<Arc<os_engine::ModSnapshot>>,
+    /// The value each driven parameter has without its modulation (the base the engine moves from), as the app last
+    /// handed it over: a target id and the value (`Transport::set_mod_bases`).
+    mod_bases: Mutex<Vec<(u32, f64)>>,
     /// Counts play and stop requests (see the module docs).
     generation: AtomicU64,
     /// The running playback is the playlist (else one pattern).
@@ -407,6 +410,8 @@ enum Cmd {
     LiveEdits(Vec<os_engine::LiveEdit>),
     /// The modulation graph in `Shared::modulation` changed (`Transport::set_modulation`): the running engine takes it.
     Modulation,
+    /// The driven parameters' own values changed (`Transport::set_mod_bases`): the engine moves from the new ones.
+    ModBases,
     Preview(Box<Project>),
     /// Play a project's playlist once on the preview stream (clip preview).
     PreviewSong(Box<Project>),
@@ -707,17 +712,36 @@ impl Transport {
 
     /// The modulation graph as the engine runs it (`crate::modulation::engine_spec`), from now on: engines built after
     /// this start with it, and a playing one takes it in place. An unchanged graph is not sent again.
-    pub fn set_modulation(&self, mods: Vec<os_engine::Modulator>, snapshot: Arc<os_engine::ModSnapshot>) {
-        if let Ok(mut slot) = self.shared.modulation.lock() {
-            if *slot == mods {
-                return;
-            }
+    pub fn set_modulation(&self, mods: Vec<os_engine::Modulator>, snapshot: Arc<os_engine::ModSnapshot>, bases: Vec<(u32, f64)>) {
+        let changed = self.shared.modulation.lock().is_ok_and(|mut slot| {
+            let changed = *slot != mods;
             *slot = mods;
+            changed
+        });
+        if !changed {
+            // The graph is the same graph; a base that moved still has to reach the engine (a knob turned under a
+            // source that is running).
+            return self.set_mod_bases(bases);
         }
         if let Ok(mut slot) = self.shared.mod_snapshot.lock() {
             *slot = snapshot;
         }
+        if let Ok(mut slot) = self.shared.mod_bases.lock() {
+            *slot = bases;
+        }
         let _ = self.tx.send(Cmd::Modulation);
+    }
+
+    /// The value each driven parameter has without its modulation (its own, as the user set it): what the engine moves
+    /// from. Sent only when it changed, so the caller can hand it over every tick.
+    pub fn set_mod_bases(&self, bases: Vec<(u32, f64)>) {
+        let Ok(mut slot) = self.shared.mod_bases.lock() else { return };
+        if *slot == bases {
+            return;
+        }
+        *slot = bases;
+        drop(slot);
+        let _ = self.tx.send(Cmd::ModBases);
     }
 
     /// Play pattern 1 of `project` once (a one-note preview project), on its own stream.
@@ -1339,6 +1363,7 @@ fn export(project: &Project, mode: PlayMode, rate: u32, job: &crate::export::Job
     // An export plays the modulation the app last set (M1b): a render equals what the song plays.
     e.set_modulation(shared.modulation.lock().map(|m| m.clone()).unwrap_or_default());
     e.set_mod_snapshot(shared.mod_snapshot.lock().map(|s| s.clone()).unwrap_or_default());
+    e.set_mod_bases(&shared.mod_bases.lock().map(|b| b.clone()).unwrap_or_default());
     e.set_interpolation(o.points);
     e.set_effects(o.insert_fx, o.master_fx);
     match job.span {
@@ -1443,6 +1468,7 @@ fn audio_thread(rx: Receiver<Cmd>, shared: Arc<Shared>, latest: Arc<Mutex<Option
         // update (a device knob drag, any edit) would silently drop the modulation until the next modulator edit.
         e.set_modulation(shared.modulation.lock().map(|m| m.clone()).unwrap_or_default());
         e.set_mod_snapshot(shared.mod_snapshot.lock().map(|s| s.clone()).unwrap_or_default());
+    e.set_mod_bases(&shared.mod_bases.lock().map(|b| b.clone()).unwrap_or_default());
         let old = s.engine.lock().map(|mut slot| {
             e.continue_from(&mut slot);
             std::mem::replace(&mut *slot, e)
@@ -1487,10 +1513,20 @@ fn audio_thread(rx: Receiver<Cmd>, shared: Arc<Shared>, latest: Arc<Mutex<Option
             Ok(Cmd::Modulation) => {
                 let mods = shared.modulation.lock().map(|m| m.clone()).unwrap_or_default();
                 let snap = shared.mod_snapshot.lock().map(|s| s.clone()).unwrap_or_default();
+                let bases = shared.mod_bases.lock().map(|b| b.clone()).unwrap_or_default();
                 for s in [session.as_mut(), live.as_mut()].into_iter().flatten() {
                     if let Ok(mut e) = s.engine.lock() {
                         e.set_modulation(mods.clone());
                         e.set_mod_snapshot(snap.clone());
+                        e.set_mod_bases(&bases);
+                    }
+                }
+            }
+            Ok(Cmd::ModBases) => {
+                let bases = shared.mod_bases.lock().map(|b| b.clone()).unwrap_or_default();
+                for s in [session.as_mut(), live.as_mut()].into_iter().flatten() {
+                    if let Ok(mut e) = s.engine.lock() {
+                        e.set_mod_bases(&bases);
                     }
                 }
             }
@@ -2194,6 +2230,7 @@ impl Session {
         // The modulation graph as the app last set it: the engine evaluates it every tick (M1b).
         e.set_modulation(shared.modulation.lock().map(|m| m.clone()).unwrap_or_default());
         e.set_mod_snapshot(shared.mod_snapshot.lock().map(|s| s.clone()).unwrap_or_default());
+    e.set_mod_bases(&shared.mod_bases.lock().map(|b| b.clone()).unwrap_or_default());
         // The device's output pairs, and its inputs for the mixer tracks that hear them (a preview hears none; spec:
         // audio/track-io.md §2.2).
         let input = (kind != Kind::Preview).then(|| crate::device::input_reader((f64::from(rate) * MARGIN_MAX) as u64));

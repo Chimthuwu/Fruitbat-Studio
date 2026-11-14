@@ -1343,7 +1343,45 @@ pub fn knob_param(field: KnobField) -> Option<os_model::modulation::ModParam> {
 pub fn sync(app: &mut crate::app::App) {
     let (spec, snapshot) = engine_spec(&app.state, &app.plugins);
     app.state.mod_snapshot = snapshot.clone();
-    app.transport.set_modulation(spec, snapshot);
+    let bases = mod_bases(&app.state, &app.plugins);
+    app.transport.set_modulation(spec, snapshot, bases);
+}
+
+/// The value each parameter the graph drives has when its modulation is taken away: what the engine moves from.
+///
+/// The engine has no base of its own for a parameter nothing automates (`ParamAuto` only knows the values clips and
+/// control points give), so without this a modulation would move the parameter from halfway rather than from where its
+/// knob is. `ParamUi` holds the value the user set — `params_tick` refuses a driven parameter's modulated read-back — so
+/// that is the base, and a clip that drives the same parameter later still wins inside the engine.
+pub fn mod_bases(s: &State, plugins: &Plugins) -> Vec<(u32, f64)> {
+    let mut bases: Vec<(u32, f64)> = Vec::new();
+    for m in s.modulation.modulators.iter().filter(|m| m.enabled) {
+        for t in m.targets.iter().filter(|t| t.enabled) {
+            let Some((target, _)) = resolve_path(s, plugins, t.path) else { continue };
+            if bases.iter().any(|&(x, _)| x == target) {
+                continue;
+            }
+            let Some((key, index)) = crate::params::key_of(s, target::decode(target)) else { continue };
+            let Some(list) = s.params.lists.get(&key) else { continue };
+            let Some(id) = list.params.get(index).map(|e| e.id) else { continue };
+            if let Some(&value) = list.values.get(&id) {
+                bases.push((target, value));
+            }
+        }
+    }
+    bases
+}
+
+/// Hands the bases over, at most every 60 ms: a knob turned while a source runs moves the whole swing, and the
+/// parameter is never left standing where the last swing put it. Nothing is sent when they are unchanged.
+pub fn sync_bases(app: &mut crate::app::App) {
+    let now = Instant::now();
+    if app.mod_bases_at.is_some_and(|t| now.duration_since(t).as_millis() < 60) {
+        return;
+    }
+    app.mod_bases_at = Some(now);
+    let bases = mod_bases(&app.state, &app.plugins);
+    app.transport.set_mod_bases(bases);
 }
 
 /// The modulator UI's actions (the eight slot row, its editor and its menus).

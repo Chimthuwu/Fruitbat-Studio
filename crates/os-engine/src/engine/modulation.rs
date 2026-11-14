@@ -631,6 +631,19 @@ impl Engine {
         self.mods.snapshot = Some(snapshot);
     }
 
+    /// The value each driven parameter has when its modulation is taken away: the app sends these with the graph
+    /// (`Transport::set_mod_bases`), because a parameter nothing automates has no base of its own and a modulation would
+    /// otherwise move it from halfway. A clip or control point that drives the parameter later still wins
+    /// (`ParamAuto::set_base`), and so does a knob the user turns, which the app hands over the same way.
+    pub fn set_mod_bases(&mut self, bases: &[(u32, f64)]) {
+        for &(target, value) in bases {
+            let target = os_model::target::decode(target);
+            if super::param_auto::is_param(target) {
+                self.params.set_base(target, value.clamp(0.0, 1.0));
+            }
+        }
+    }
+
     /// Installs the modulation graph (an empty one: no modulation). Values are sent again from scratch, and every
     /// track gives its host parameters back.
     pub fn set_modulation(&mut self, modulators: Vec<Modulator>) {
@@ -1119,6 +1132,39 @@ mod tests {
         assert!((at(LfoShape::SawDown, 0.0) - 1.0).abs() < 1e-6);
         assert!((at(LfoShape::Square, 0.25) - 1.0).abs() < 1e-6);
         assert!(at(LfoShape::Square, 0.75) < 1e-6);
+    }
+
+    /// A modulated parameter moves from the value it has without the modulation (`Engine::set_mod_bases`): the engine
+    /// knows a base only for what a clip or a control point gave it, so without one a parameter nothing automates would
+    /// swing from halfway instead of from where its knob is.
+    #[test]
+    fn a_modulated_parameter_moves_from_its_own_value() {
+        let value = |bases: bool| {
+            let p = project(0);
+            let mut e = Engine::new(&p, &mut SampleLibrary::new(None), 48000, PlayMode::Pattern(1));
+            let probe = Arc::new(Mutex::new(Probe::default()));
+            e.set_instrument(0, probe.clone());
+            let steps = Steps { values: [100; 16], period: Timebase::Sync(1), smooth: false };
+            e.set_modulation(vec![Modulator {
+                id: 1,
+                source: ModSource::Steps(steps),
+                enabled: true,
+                targets: vec![ModTarget {
+                    target: Target::ChannelParam(0, 7),
+                    depth: 0.1,
+                    curve: Curve::Linear,
+                    polarity: Polarity::Bipolar,
+                    enabled: true,
+                }],
+            }]);
+            if bases {
+                e.set_mod_bases(&[(os_model::target::channel_param(0, 7), 0.8)]);
+            }
+            run(&mut e, 4000, 1000);
+            probe.lock().unwrap().seen.last().map(|&(_, _, v)| v)
+        };
+        assert!((value(true).expect("a value reached the instrument") - 0.9).abs() < 1e-6, "0.8 plus a tenth of the range");
+        assert!((value(false).expect("a value reached the instrument") - 0.6).abs() < 1e-6, "and halfway without a base");
     }
 
     /// A source's amount is a gain around the middle, applied after its own output mode: at 0 the source is switched

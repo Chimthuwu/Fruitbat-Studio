@@ -1486,6 +1486,8 @@ pub struct App {
     live: Vec<(Live, Rect)>,
     /// Playback state the frame shows (see `Shown`).
     shown: Shown,
+    /// When the modulation's bases (the values its driven parameters move from) were last handed to the engine.
+    pub mod_bases_at: Option<std::time::Instant>,
     /// Rects of last frame's overlays (menus, popups...): docked plugin windows are clipped under them.
     overlays: Vec<Rect>,
     /// Each detached window's own hits, mouse and hover while another surface is active (`on_surface`).
@@ -1817,6 +1819,7 @@ impl App {
             keep: Keep::default(),
             live: Vec::new(),
             shown: Shown::default(),
+            mod_bases_at: None,
             overlays: Vec::new(),
             screens: Vec::new(),
             native: Vec::new(),
@@ -4489,6 +4492,11 @@ impl App {
         }
         // The modulator strip's plots are live samples, so a stopped project still repaints the row (its history samples
         // from this tick).
+        // The modulation's bases: the value each driven parameter has without its modulation, handed over when the user
+        // turns one of their knobs (throttled inside).
+        if !self.state.modulation.is_empty() {
+            crate::modulation::sync_bases(self);
+        }
         if self.state.show_device_rack && !self.state.device_rack_collapsed && !self.state.modulation.is_empty() {
             let s = &self.state;
             let h = crate::device_rack::height(s);
@@ -4598,7 +4606,8 @@ impl App {
                 self.transport.update(&crate::rack::play_project(&self.state));
                 // The modulation graph reaches playback the same way (M1b); an unchanged one is not sent again.
                 let (spec, snapshot) = crate::modulation::engine_spec(&self.state, &self.plugins);
-                self.transport.set_modulation(spec, snapshot);
+                let bases = crate::modulation::mod_bases(&self.state, &self.plugins);
+                self.transport.set_modulation(spec, snapshot, bases);
             }
         }
         self.playback_damage();
