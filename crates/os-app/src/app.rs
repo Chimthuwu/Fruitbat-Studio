@@ -7998,6 +7998,15 @@ impl App {
     /// The wheel's work; returns the window when only that window's view moved (else everything is repainted).
     fn wheel_act(&mut self, dx: f32, dy: f32, shift: bool, ctrl: bool) -> Option<Win> {
         let (x, y) = self.mouse;
+        // The palette floats over the workspace, so anywhere over its window scrolls its list: the rows, the well's
+        // padding, the pills, the title and the footer (all of which answer with their own action or the window's
+        // swallow). It is taken before the panels it can cover, whose own wheel would otherwise move under it.
+        let hit = self.top_hit(x, y).map(|h| (h.action.clone(), h.win));
+        let palette = hit.as_ref().is_some_and(|(a, w)| *w == Some(Win::PluginPalette) || matches!(a, Action::Palette(_) | Action::Scrollbar(Scroll::Palette)));
+        if palette {
+            self.palette_wheel(dy + dx);
+            return Some(Win::PluginPalette);
+        }
         // The device rack's body: the wheel scrolls its chain horizontally (up = left, as the mixer's).
         if crate::device_rack::visible(&self.state)
             && crate::launcher::rack_visible(&self.state)
@@ -8009,7 +8018,7 @@ impl App {
                 return None;
             }
         }
-        let area = self.top_hit(x, y).map(|h| h.action.clone());
+        let area = hit.map(|(a, _)| a);
         // The clip launcher's grid (Tab in the Playlist window): the wheel scrolls its track rows, sideways (Shift)
         // its scene columns, so the cells a small window cannot show are reachable.
         if self.state.launcher_open
@@ -8091,11 +8100,6 @@ impl App {
             let max = (views::settings::content_h(s) - views::settings::page_h(s)).max(0.0);
             self.state.settings.scroll = (self.state.settings.scroll - (dy + dx) * 63.0).min(max).max(0.0);
             return None;
-        }
-        // Anywhere in the palette scrolls its list: the rows, the empty well, the headings' margin and the scroll bar.
-        if matches!(area, Some(Action::Palette(_) | Action::Scrollbar(Scroll::Palette))) {
-            self.palette_wheel(dy + dx);
-            return Some(Win::PluginPalette);
         }
         if matches!(area, Some(Action::Perf(crate::perf::PerfAct::List | crate::perf::PerfAct::Row(_)))) {
             self.perf_wheel(dy + dx);
@@ -23694,5 +23698,38 @@ mod detach_tests {
         assert_ne!(probe(&app), before, "it scrolled");
         app.mouse_up_from(Some(Win::Mixer));
         assert!(!app.cursor_locked());
+    }
+
+    /// The wheel scrolls the plugin palette's list from anywhere inside its window — the rows, the well's padding,
+    /// the footer — not only over the list where its own hit is. Over the window's padding the top hit is the
+    /// window's swallow, so the wheel used to do nothing and only the scroll bar moved the list.
+    #[test]
+    fn the_plugin_palette_scrolls_from_anywhere_inside_its_window() {
+        let mut app = App::new(None);
+        for i in 0..300 {
+            app.plugins.available.push(crate::plugin_db::fake(&format!("Many Synth {i:03}"), os_host::Kind::Instrument));
+        }
+        app.state.plugdb.rebuild(&app.plugins);
+        app.open_plugin_palette(crate::plugin_menu::Target::All, (400.0, 200.0), None);
+        assert!(main_paint(&mut app).is_some());
+        let win = crate::views::plugin_palette::rect(&app.state);
+        assert!(crate::views::plugin_palette::list_h(&app.state) > 0.0 && app.state.palette.scroll == 0.0);
+        // The window's left padding, beside the list: not the list's hit, only the window's swallow.
+        let padding = (win.x + 3.0, win.y + win.h / 2.0);
+        app.mouse_move(padding.0, padding.1);
+        assert!(main_paint(&mut app).is_some());
+        assert!(matches!(app.top_hit(padding.0, padding.1).map(|h| &h.action), Some(Action::Swallow)), "the padding is the window's own");
+        app.wheel(0.0, -1.0, false, false);
+        assert!(app.state.palette.scroll > 0.0, "the wheel scrolls from the padding");
+        // The footer, below the list, scrolls the list too.
+        let footer = (win.cx(), win.bottom() - 6.0);
+        app.mouse_move(footer.0, footer.1);
+        assert!(main_paint(&mut app).is_some());
+        let before = app.state.palette.scroll;
+        app.wheel(0.0, -1.0, false, false);
+        assert!(app.state.palette.scroll > before, "the wheel scrolls from the footer");
+        // And up over the rows brings it back.
+        app.wheel(0.0, 100.0, false, false);
+        assert_eq!(app.state.palette.scroll, 0.0);
     }
 }

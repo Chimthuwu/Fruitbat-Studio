@@ -2023,6 +2023,9 @@ mod win32 {
             unsafe {
                 let mut ps: PAINTSTRUCT = std::mem::zeroed();
                 let hdc = BeginPaint(self.hwnd, &mut ps);
+                // The app's palette as it is now, not as it was when the editor opened: a skin or theme change (and the
+                // theme the app applies at start, after a window kept from the last run) reaches this window too.
+                os_plugkit::refresh_palette(&mut self.palette);
                 let path = self.params.sample_path.read().map(|p| p.clone()).unwrap_or_default();
                 let shown = Shown::of(&self.shared, &self.logic.view, Some(&mut self.near));
                 let bits = (self.shared.bits.load(Ordering::Relaxed) & 0x1ff) as u16;
@@ -2812,6 +2815,7 @@ mod gui {
 
         fn paint(&mut self) {
             self.dirty = false;
+            os_plugkit::refresh_palette(&mut self.palette);
             let path = self.params.sample_path.read().map(|p| p.clone()).unwrap_or_default();
             let shown = Shown::of(&self.shared, &self.logic.view, Some(&mut self.near));
             let bits = (self.shared.bits.load(Ordering::Relaxed) & 0x1ff) as u16;
