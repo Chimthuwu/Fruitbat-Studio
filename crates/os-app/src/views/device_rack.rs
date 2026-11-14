@@ -1551,7 +1551,14 @@ fn mod_knob(ui: &mut Ui, s: &State, id: os_model::modulation::ModulatorId, field
     kit::knob(ui.c, t, cx, cy, 11.0, v, false, kit::KnobLook::Ring, kit::State::hover(hov));
     if let Some(from) = route {
         let accent = s.modulation.get(from).map_or(t.modulation, |m| mod_accent(t.modulation, &m.source));
-        ui.c.stroke_circle(cx, cy, 14.5, 1.4, accent.with_alpha(route_flash()));
+        ui.c.stroke_circle(cx, cy, 13.4, 1.3, accent.with_alpha(route_flash()));
+    }
+    // The routes driving this parameter, as the same arc a device parameter shows: one per source, from the knob's own
+    // value to value + depth, with an endpoint handle that drags that route's depth (`ModAct::DepthDrag`). The route's
+    // target is the graph's own modulator parameter, so nothing here depends on a device's identity. No live cursor:
+    // the engine publishes a value for project parameters only (`engine_spec`).
+    if let Some(param) = crate::modulation::knob_param(field) {
+        mod_arcs(ui, s, os_model::target::modulator_param(id.0, param.code()), cx, cy, 15.5, v);
     }
     ui.c.text_center(fnt(9.0), Rect::new(cx - 23.0, cy + 11.0, 46.0, 12.0), t.text_dim, label);
 }

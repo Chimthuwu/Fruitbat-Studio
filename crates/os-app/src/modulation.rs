@@ -195,14 +195,28 @@ pub fn path_of(target: u32) -> Option<(OwnerLocator, ParameterKey)> {
     Some((owner, parameter))
 }
 
+/// A route into the graph as a path: modulator `id`'s parameter `param` is its own owner, so it needs no registry.
+fn modulator_path(target: u32) -> Option<ParameterPath> {
+    let target::Target::ModulatorParam(id, code) = target::decode(target) else { return None };
+    let param = os_model::modulation::ModParam::of(code)?;
+    Some(ParameterPath::on_modulator(os_model::modulation::ModulatorId(id), param))
+}
+
 /// `target` as a [`ParameterPath`] against the current registry: `None` when the owner has no id yet.
 pub fn path_in(s: &State, target: u32) -> Option<ParameterPath> {
+    if let Some(path) = modulator_path(target) {
+        s.modulation.get(path.modulator()?.0)?;
+        return Some(path);
+    }
     let (owner, parameter) = path_of(target)?;
     Some(ParameterPath { owner: s.owner_of(owner)?, parameter })
 }
 
 /// `target` as a [`ParameterPath`], giving its owner an identity if it has none: what an assignment stores.
 pub fn target_path(s: &mut State, target: u32) -> Option<ParameterPath> {
+    if let Some(path) = modulator_path(target) {
+        return Some(path);
+    }
     let (owner, parameter) = path_of(target)?;
     Some(ParameterPath { owner: s.ensure_owner(owner), parameter })
 }
@@ -1744,7 +1758,9 @@ pub fn engine_spec(s: &State, plugins: &Plugins) -> (Vec<os_engine::Modulator>, 
                 .filter_map(|t| {
                     let (target, _) = resolve_path(s, plugins, t.path)?;
                     let target = target::decode(target);
-                    if !targets.contains(&target) {
+                    // A route into the graph is an edge, not a project parameter: the engine applies it while it evaluates
+                    // and never publishes a value for it, so the snapshot must not offer one (a cursor pinned at zero).
+                    if !matches!(target, target::Target::ModulatorParam(..)) && !targets.contains(&target) {
                         targets.push(target);
                     }
                     Some(os_engine::ModTarget { target, depth: t.depth, curve: t.curve, polarity: t.polarity, enabled: t.enabled })

@@ -3150,6 +3150,59 @@ mod tests {
         );
     }
 
+    /// A route into the graph draws the same depth arc on the driven modulator's knob as on a device parameter: one arc
+    /// per source, with an endpoint handle that drags that route's depth. The handle is the routing's own path, so no
+    /// device identity is needed, and only the parameters the knob has can carry one.
+    #[test]
+    fn a_route_draws_its_depth_arc_on_the_driven_modulators_knob() {
+        use crate::modulation::{KnobField, ModAct};
+        use crate::views::device_rack::{MOD_EDITOR_H, MOD_EDITOR_W};
+        use os_model::modulation::{ModParam, ParameterPath};
+        let Ok(mut c) = os_ui::Canvas::new(MOD_EDITOR_W as u32, MOD_EDITOR_H as u32, 1.0) else { return };
+        let mut app = app();
+        let driver = app.state.modulation.add(os_model::modulation::ModSource::default());
+        let driven = app.state.modulation.add(os_model::modulation::ModSource::default());
+        assert!(app.state.modulation.route(driver, driven, ModParam::Amount, 0.4));
+        app.state.mod_editor = Some(driven);
+        app.paint_detached(crate::app::Win::ModEditor, &mut c);
+        let path = ParameterPath::on_modulator(driven, ModParam::Amount);
+        let handle = app
+            .on_surface(crate::app::Win::ModEditor, |a| {
+                a.hits
+                    .iter()
+                    .rev()
+                    .find(|h| matches!(&h.action, Action::Mod(ModAct::DepthDrag(d, p)) if *d == driver && *p == os_model::target::modulator_param(driven.0, ModParam::Amount.code())))
+                    .map(|h| h.rect)
+            })
+            .expect("the arc's endpoint handle");
+        // Nothing drives this modulator's rate, so that knob carries no second handle.
+        assert!(
+            !app.on_surface(crate::app::Win::ModEditor, |a| a
+                .hits
+                .iter()
+                .any(|h| matches!(&h.action, Action::Mod(ModAct::DepthDrag(d, p)) if *d == driver && *p == os_model::target::modulator_param(driven.0, ModParam::Rate.code())))),
+            "only a driven parameter has an arc"
+        );
+        // The handle belongs to the amount knob, and dragging it moves that route's depth, not the knob's own value.
+        let before = app.state.modulation.get(driven).map_or(0.0, |m| crate::modulation::knob_value(m.source, KnobField::Amount));
+        app.on_surface(crate::app::Win::ModEditor, |a| {
+            a.mouse_move(handle.cx(), handle.cy());
+            a.mouse_down();
+            assert!(matches!(a.drag, Some(crate::app::Drag::ModDepth { id, path: p, .. }) if id == driver && p == path), "the handle starts the route's depth drag");
+            a.mouse_move(handle.cx(), handle.cy() - 20.0);
+            a.mouse_up();
+        });
+        let depth = app
+            .state
+            .modulation
+            .get(driver)
+            .and_then(|m| m.targets.iter().find(|t| t.path == path))
+            .map_or(-1.0, |t| t.depth);
+        assert!(depth > 0.4, "dragging up adds depth: {depth}");
+        let after = app.state.modulation.get(driven).map_or(1.0, |m| crate::modulation::knob_value(m.source, KnobField::Amount));
+        assert_eq!(before, after, "the knob keeps its own value");
+    }
+
     /// The rack slot editor's title is its name field: clicking it edits the name in place, and the rename is one
     /// undo step.
     #[test]

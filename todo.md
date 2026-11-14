@@ -12,9 +12,13 @@
       the parameters that modulator actually has (a step sequence offers only its rate, a one-shot envelope none);
       the row creates the route at the default 25 % depth and switches it off again once it exists. Routes that
       would close a loop are not offered.
-- [ ] **Feedback for a route**: the ring on the driven modulator's knob does not light up yet (`ModSnapshot` has
-      the values; the editor's knobs need to draw the arc), and the browser should list a route with its depth
-      drag like a device parameter's row.
+- [x] **Feedback for a route**: the driven modulator's own knobs now draw the route as the same depth arc a device
+      parameter gets — one per source, from the knob's value to value + depth, with an endpoint handle that drags
+      that route's depth (`mod_arcs` on `Target::ModulatorParam`, so no device identity is involved); the browser has
+      listed a route as a row under its driver since the graph landed (name, depth drag, switch, x:
+      `a_route_into_the_graph_is_a_browser_row_with_its_depth`). No live cursor on a route's arc: the engine publishes
+      a value for project parameters only, and `engine_spec` now keeps modulator parameters out of the snapshot rather
+      than offering a value that would read as a cursor pinned at zero.
 - [ ] **More routable parameters**: only rate, amount, phase and offset are addressable today. Depth-shaping
       a route (the assignment's depth as a destination), a follower's attack/release/gain, and a random source's
       smoothness are the obvious next ones.

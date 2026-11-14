@@ -1332,6 +1332,55 @@ mod tests {
         assert_eq!(app.state.modulation.get(id).map(|m| m.name.as_str()), Some(""));
     }
 
+    /// A route into the graph (a modulator driving another modulator's own parameter) is a browser row just like a device
+    /// parameter's: under its driver, named after what it drives, and carrying the same depth, switch and remove cells.
+    #[test]
+    fn a_route_into_the_graph_is_a_browser_row_with_its_depth() {
+        use crate::modulation::ModAct;
+        use os_model::modulation::{ModParam, ParameterPath};
+        let Ok(mut c) = Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = App::new(None);
+        app.state.project = crate::app::test_project();
+        app.state.browser_tab = view::PROJECT_TAB;
+        app.state.show_browser = true;
+        let root = view::project_root();
+        app.state.browser_open.insert(root.clone());
+        app.state.browser_open.insert(format!("{root}/Modulation"));
+        let driver = app.state.modulation.add(os_model::modulation::ModSource::default());
+        let driven = app.state.modulation.add(os_model::modulation::ModSource::default());
+        assert!(app.state.modulation.route(driver, driven, ModParam::Amount, 0.5));
+        app.state.browser_open.insert(format!("{root}/Modulation/{}", driver.0));
+        app.paint(&mut c, None);
+        let path = ParameterPath::on_modulator(driven, ModParam::Amount);
+        let rows = view::rows(&app.state);
+        let row = rows
+            .iter()
+            .find(|r| r.item == Item::ModRouting(driver, path, 0.5, true))
+            .expect("the route's own row");
+        assert_eq!(row.depth, 3, "nested under its modulator, like a device parameter");
+        assert!(row.label.ends_with(" - Amount"), "the row names what it drives: {}", row.label);
+        let name = crate::modulation::name_of(app.state.modulation.get(driven).expect("the driven modulator"));
+        assert_eq!(row.label, format!("{name} - Amount"));
+        assert!(
+            app.hits
+                .iter()
+                .any(|h| matches!(&h.action, Action::Mod(ModAct::DepthDragPath(d, p)) if *d == driver && *p == path)),
+            "its depth is a drag"
+        );
+        assert!(
+            app.hits
+                .iter()
+                .any(|h| matches!(&h.action, Action::Mod(ModAct::TargetEnabled(d, p, false)) if *d == driver && *p == path)),
+            "and it can be switched off"
+        );
+        assert!(
+            app.hits
+                .iter()
+                .any(|h| matches!(&h.action, Action::Mod(ModAct::RemovePath(d, p)) if *d == driver && *p == path)),
+            "or removed"
+        );
+    }
+
     /// Favorites (spec: ui/browser.md §10): a file's and a plugin's row menu tick Favorite; the Favorites tab lists the
     /// favorite plugins, then the files, and drops a row whose Favorite is unticked; folders cannot be favorites; the
     /// plugin windows' and mixer slots' "Add to plugin database (flag as favorite)" star the plugin.
