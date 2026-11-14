@@ -4,8 +4,9 @@
 # deployment works whatever the dashboard's "Build output directory" happens to say. The site is also what
 # `npm run build` copies into `dist/` (tools/site-build.mjs), for a build whose output directory is `dist`.
 #
-# `name` must match the Pages project (`fruitbat-studio`, whose deployments live at <hash>.fruitbat-studio.pages.dev).
+# `name` must match the Pages project (`fruitbat`, whose deployments live at <hash>.fruitbat.pages.dev and whose
+# production URL is https://fruitbat.pages.dev).
 
-name = "fruitbat-studio"
+name = "fruitbat"
 pages_build_output_dir = "site"
 compatibility_date = "2026-11-14"
