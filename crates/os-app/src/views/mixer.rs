@@ -472,6 +472,8 @@ fn chip_label(m: &os_model::modulation::Modulator) -> String {
         ModSource::AudioFollower(_) => "follow".to_string(),
         ModSource::Mseg(m) => crate::modulation::rate_text(m.period),
         ModSource::Macro(_) => "macro".to_string(),
+        ModSource::Velocity(_) => "vel".to_string(),
+        ModSource::KeyTrack(_) => "key".to_string(),
     };
     format!("{} · {short}", crate::modulation::name_of(m))
 }

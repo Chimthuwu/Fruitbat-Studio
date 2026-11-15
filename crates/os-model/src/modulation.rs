@@ -173,6 +173,9 @@ impl ModParam {
             ModSource::Steps(_) => matches!(self, ModParam::Rate),
             ModSource::Mseg(_) => matches!(self, ModParam::Rate | ModParam::Amount),
             ModSource::Macro(_) => matches!(self, ModParam::Value),
+            // A note source's amount is its only setting: what it reads (a channel's last note) is not a parameter of
+            // the modulator, so nothing else routes into it.
+            ModSource::Velocity(_) | ModSource::KeyTrack(_) => matches!(self, ModParam::Amount),
             ModSource::AudioFollower(_) => matches!(self, ModParam::Amount | ModParam::Attack | ModParam::Release | ModParam::Gain),
             ModSource::Envelope(_) => false,
         }
@@ -566,6 +569,42 @@ pub struct Macro {
     pub value: f32,
 }
 
+/// The velocity of the last note a channel played: the handoff's velocity source. A channel that has played nothing
+/// reads the middle, so an assignment at `0.5` base is unmoved until the first note.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Velocity {
+    /// `0..=1` gain around the middle, like every source's amount.
+    pub amount: f32,
+}
+
+/// Where a channel's last note sits in a key range: the handoff's key-tracking source. A low key reads the bottom of
+/// the range and a high one the top, so an assignment can be as wide or as narrow as the player's hands.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KeyTrack {
+    /// `0..=1` gain around the middle, like every source's amount.
+    pub amount: f32,
+    /// The MIDI keys the range spans, both ends included.
+    pub low: u8,
+    pub high: u8,
+}
+
+impl Default for KeyTrack {
+    fn default() -> Self {
+        KeyTrack { amount: 1.0, low: 36, high: 96 }
+    }
+}
+
+impl KeyTrack {
+    /// Its `0..=1` value for `key`: `0` at `low`, `1` at `high`, the middle for a reversed or empty range.
+    pub fn value(self, key: u8) -> f32 {
+        let (low, high) = (f32::from(self.low), f32::from(self.high));
+        if high <= low {
+            return 0.5;
+        }
+        ((f32::from(key) - low) / (high - low)).clamp(0.0, 1.0)
+    }
+}
+
 /// A one-shot shape: rises over `attack`, falls to `sustain` over `decay`, holds, falls to nothing over `release`.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Envelope {
@@ -590,6 +629,10 @@ pub enum ModSource {
     AudioFollower(AudioFollower),
     Mseg(Mseg),
     Macro(Macro),
+    /// The velocity of each channel's last note.
+    Velocity(Velocity),
+    /// Where each channel's last note sits in a key range.
+    KeyTrack(KeyTrack),
 }
 
 impl Default for ModSource {
@@ -608,6 +651,8 @@ impl ModSource {
             ModSource::Random(r) => r.amount,
             ModSource::AudioFollower(f) => f.amount,
             ModSource::Mseg(m) => m.amount,
+            ModSource::Velocity(v) => v.amount,
+            ModSource::KeyTrack(k) => k.amount,
             // A macro at 0 is still on: the whole point of it is to be turned up.
             ModSource::Steps(_) | ModSource::Envelope(_) | ModSource::Macro(_) => 1.0,
         }
@@ -1111,6 +1156,27 @@ mod tests {
         assert_eq!(ParamResolution::from_native(&[7, 7, 7], 7), ParamResolution::Duplicate(0));
         // A duplicate later in the list still resolves to the first occurrence.
         assert_eq!(ParamResolution::from_native(&[3, 9, 9, 3], 3), ParamResolution::Duplicate(0));
+    }
+
+    #[test]
+    fn key_tracking_spans_its_range() {
+        let k = KeyTrack { amount: 1.0, low: 40, high: 80 };
+        assert_eq!(k.value(40), 0.0, "the low key is the bottom");
+        assert_eq!(k.value(80), 1.0, "the high key is the top");
+        assert_eq!(k.value(20), 0.0, "below the range stays at the bottom");
+        assert!((k.value(60) - 0.5).abs() < 1e-6);
+        assert_eq!(k.value(127), 1.0);
+        assert_eq!(KeyTrack { amount: 1.0, low: 80, high: 40 }.value(60), 0.5, "a reversed range reads the middle");
+    }
+
+    #[test]
+    fn note_sources_offer_only_their_amount() {
+        let velocity = ModSource::Velocity(Velocity { amount: 1.0 });
+        assert!(ModParam::Amount.applies_to(&velocity));
+        assert!(!ModParam::Value.applies_to(&velocity));
+        assert!(ModParam::Amount.applies_to(&ModSource::KeyTrack(KeyTrack::default())));
+        assert!(velocity.is_on());
+        assert!(!ModSource::Velocity(Velocity { amount: 0.0 }).is_on());
     }
 
     #[test]

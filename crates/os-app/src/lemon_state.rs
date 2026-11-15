@@ -255,6 +255,16 @@ fn write_graph(g: &ModGraph) -> Vec<u8> {
                 b.push(MACRO);
                 b.extend_from_slice(&mc.value.to_le_bytes());
             }
+            ModSource::Velocity(v) => {
+                b.push(VELOCITY);
+                b.extend_from_slice(&v.amount.to_le_bytes());
+            }
+            ModSource::KeyTrack(k) => {
+                b.push(KEYTRACK);
+                b.extend_from_slice(&k.amount.to_le_bytes());
+                b.push(k.low);
+                b.push(k.high);
+            }
             ModSource::AudioFollower(f) => {
                 b.push(FOLLOWER);
                 // v1 has one source (master); the byte is the scope field for later track sources.
@@ -326,6 +336,8 @@ const RANDOM: u8 = 3;
 const FOLLOWER: u8 = 4;
 const MACRO: u8 = 5;
 const MSEG: u8 = 6;
+const VELOCITY: u8 = 7;
+const KEYTRACK: u8 = 8;
 
 /// A [`Timebase`] kind in [`write_graph`]: 0 hertz (f32), 1 synced (u16 sixteenths).
 const FREE: u8 = 0;
@@ -529,6 +541,8 @@ fn read_source(r: &mut Reader, kind: u8, layout: u8) -> Option<ModSource> {
             ModSource::Mseg(os_model::modulation::Mseg { points, used, period, looped, smooth, amount, bipolar })
         }
         MACRO => ModSource::Macro(os_model::modulation::Macro { value: r.f32()? }),
+        VELOCITY => ModSource::Velocity(os_model::modulation::Velocity { amount: r.f32()? }),
+        KEYTRACK => ModSource::KeyTrack(os_model::modulation::KeyTrack { amount: r.f32()?, low: r.u8()?, high: r.u8()? }),
         FOLLOWER => {
             let _source = r.u8()?;
             let amount = r.f32()?;
@@ -1735,12 +1749,17 @@ mod modulation_graph_tests {
         ]);
         let m = g.add(ModSource::Mseg(mseg));
         let mc = g.add(ModSource::Macro(os_model::modulation::Macro { value: 0.42 }));
+        // A note source keeps its amount, and key tracking its range.
+        let vel = g.add(ModSource::Velocity(os_model::modulation::Velocity { amount: 0.6 }));
+        let key = g.add(ModSource::KeyTrack(os_model::modulation::KeyTrack { amount: 0.8, low: 30, high: 90 }));
         let back = read_graph(&write_graph(&g)).expect("round trip");
         assert_eq!(back, g);
         assert_eq!(back.get(m).map(|x| x.source), Some(ModSource::Mseg(mseg)), "the shape reads back point for point");
         assert_eq!(back.get(mc).map(|x| x.source), Some(ModSource::Macro(os_model::modulation::Macro { value: 0.42 })));
         assert!(matches!(back.get(r).map(|m| m.source), Some(ModSource::Random(os_model::modulation::Random { seed: 0xDEAD_BEEF_1234_5678, .. }))));
         assert!(back.get(f).is_some());
+        assert_eq!(back.get(vel).map(|x| x.source), Some(ModSource::Velocity(os_model::modulation::Velocity { amount: 0.6 })));
+        assert_eq!(back.get(key).map(|x| x.source), Some(ModSource::KeyTrack(os_model::modulation::KeyTrack { amount: 0.8, low: 30, high: 90 })));
     }
 
     /// The graph's event payload is its exact round trip; a layout this version does not know is ignored, and a

@@ -2682,6 +2682,13 @@ impl Engine {
         let rules: Vec<notes::Rules> = self.channels.iter().map(|c| c.rules).collect();
         self.note_voices.resize(self.channels.len(), notes::Voices::default());
         notes::apply(&self.inst_events, &rules, &mut self.note_voices, n as u32, &mut self.inst_notes);
+        // Every channel's newest note, which the note sources read (velocity and key tracking). A tick fed twice is
+        // harmless: it holds the same note.
+        for e in &self.inst_events {
+            if e.vel >= 0.0 {
+                self.mods.notes.note_on(e.ch, e.key, (e.vel.clamp(0.0, 1.0) * 127.0).round() as u8);
+            }
+        }
         let held = !self.inst_offs.is_empty()
             || self.sounding.iter().any(|&(c, _, end)| end == u64::MAX && self.channels.get(c).is_some_and(|ch| ch.instrument.0.is_some()));
         if held || !self.inst_events.is_empty() {

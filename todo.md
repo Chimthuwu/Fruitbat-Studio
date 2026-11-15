@@ -108,12 +108,21 @@
       (`the_new_sources_round_trip`, `an_mseg_and_a_macro_are_kinds_of_their_own`,
       `an_mseg_reads_its_points_at_a_position`). A new source kind is a graph tag an older build stops reading at —
       the trade-off routes already took, and what the layout item below is for.
-- [ ] **Task 2, the note sources**: per-voice ADSR, velocity and key tracking. These are the ones the project graph
-      cannot carry yet: a target is a device or mixer parameter, and the engine has no per-voice modulation — its
-      voices are the sampler's (`engine/voice.rs`), not an instrument's, and no built-in instrument has a voice pool
-      until FreqBat (see the device handoff below). The step before per-voice is a note context for the graph (the
-      newest note at least: key, velocity, gate) and per-channel modulator values, since one global output cannot
-      differ per note. Design it together with FreqBat's `os-dsp` voice pool rather than twice.
+- [x] **Task 2, first slice of the note sources: velocity and key tracking** (2026-11-15): the note context the
+      graph needed. The engine keeps `NoteBank`, the newest note of every channel (key and velocity), fed from the
+      tick's note events after the channel rules (`render_generators`), so live input and played song notes both count;
+      a note off leaves it alone — velocity and key are properties of the note last played, not of the gate.
+      `ModSource::Velocity` and `ModSource::KeyTrack` (0..1 range, amount as a gain around the middle) read the note of
+      the channel their target is on — the target's channel, or the channel a mixer track plays through
+      (`MixTrack::output`, mapped by `Engine::refresh_note_subjects` when the graph is installed) — so two keyboards
+      keep their own velocity and key range (`a_note_source_reads_each_channels_own_note`). A target with no channel
+      reads the newest note anywhere. Both travel in `.lemon` (tags 7 and 8, `the_new_sources_round_trip`). Not yet:
+      the gate and per-voice envelopes — those need the voice pool, so they go with FreqBat's `os-dsp` pool rather
+      than a second implementation.
+- [ ] **Task 2, per-voice ADSR**: the note sources' gate half. Needs a voice pool and a note context per voice (the
+      bank is per channel and holds only the newest note), so design it with FreqBat's `os-dsp` voice pool, not twice.
+      A channel's track routing is also refreshed only when the graph is installed; a mixer edit that re-routes a
+      track to another channel should call `Engine::refresh_note_subjects` too.
 - [ ] **Task 2, the XY pad**: two axes, one drag. The graph's modulator has one output, so a pad is a pair of macros
       dragged together (`MacroId` × `MacroId`, saved with the graph and drawn as a pad in the editor of either) rather
       than a new source with two outputs — decided, not built.

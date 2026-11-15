@@ -196,6 +196,64 @@ impl Follower {
     }
 }
 
+/// The last note each channel played, as the note sources read it: one slot per channel, holding the key and the
+/// velocity of the newest note. A note off leaves it alone — key tracking and velocity are properties of the note the
+/// channel last played, not of whether it is still held — so a pad's filter stays where the last chord put it.
+#[derive(Debug, Default, Clone)]
+pub(super) struct NoteBank {
+    channels: Vec<Option<(u8, u8)>>,
+    /// The newest note of the whole engine and its channel, for a target that is not on a channel (a master-adjacent
+    /// mixer target) and for the graph's own display.
+    latest: Option<(usize, u8, u8)>,
+}
+
+impl NoteBank {
+    /// What a note source reads for `channel`: its `0..=1` value, the middle for a channel that has played nothing.
+    fn value(&self, source: &ModSource, channel: usize) -> f32 {
+        match self.channels.get(channel).copied().flatten() {
+            Some((key, velocity)) => Self::read(source, key, velocity),
+            None => 0.5,
+        }
+    }
+
+    /// What a note source reads for the newest note anywhere.
+    fn value_latest(&self, source: &ModSource) -> f32 {
+        match self.latest {
+            Some((_, key, velocity)) => Self::read(source, key, velocity),
+            None => 0.5,
+        }
+    }
+
+    /// A note source's value for one note: the reading scaled by the source's amount around the middle.
+    fn read(source: &ModSource, key: u8, velocity: u8) -> f32 {
+        match source {
+            ModSource::Velocity(v) => {
+                let u = f32::from(velocity.min(127)) / 127.0;
+                0.5 + (u - 0.5) * v.amount.clamp(0.0, 1.0)
+            }
+            ModSource::KeyTrack(k) => {
+                let u = k.value(key);
+                0.5 + (u - 0.5) * k.amount.clamp(0.0, 1.0)
+            }
+            _ => 0.5,
+        }
+    }
+
+    /// Records a note on: the channel's last note becomes this one, and (if it is the newest of the tick) the engine's.
+    pub(super) fn note_on(&mut self, channel: usize, key: u8, velocity: u8) {
+        if self.channels.len() <= channel {
+            self.channels.resize(channel + 1, None);
+        }
+        let velocity = velocity.min(127);
+        self.channels[channel] = Some((key, velocity));
+        self.latest = Some((channel, key, velocity));
+    }
+
+    fn is_note(&self) -> bool {
+        !self.channels.is_empty()
+    }
+}
+
 /// One parameter a modulator drives, resolved to an engine [`Target`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModTarget {
@@ -244,6 +302,16 @@ pub(super) struct Modulation {
     /// Scratch so a tick never allocates: the offsets a parameter's drivers add up to, and the mixer path's.
     by: Vec<(Target, f64)>,
     host_by: Vec<(usize, HostParam, Target, f64)>,
+    /// The last note of each channel, which the note sources read.
+    pub(super) notes: NoteBank,
+    /// The channel each mixer track plays through (`None` for a track with no channel), so a note source can find the
+    /// note of the channel a mixer target belongs to.
+    track_channels: Vec<Option<usize>>,
+    /// The channel count `note_outputs` was sized for.
+    channels: usize,
+    /// Each note-driven modulator's value per channel, indexed `modulator × channels + channel`: `NaN` for every other
+    /// modulator, so a destination on a channel can tell which ones read a note.
+    note_outputs: Vec<f32>,
     /// The live values the UI reads.
     pub(super) snapshot: Option<Arc<ModSnapshot>>,
 }
@@ -332,6 +400,49 @@ impl Modulation {
         self.modulators.is_empty()
     }
 
+    /// Sizes the per-channel note values for `channels` channels and `tracks`, the channel each mixer track plays
+    /// through. Called when the graph is installed and when the project's channels change; never while it runs.
+    pub(super) fn set_channels(&mut self, channels: usize, tracks: Vec<Option<usize>>) {
+        self.channels = channels;
+        self.track_channels = tracks;
+        self.note_outputs.clear();
+        self.note_outputs.resize(self.modulators.len().saturating_mul(channels), f32::NAN);
+    }
+
+    /// The channel a target belongs to, when it has one the note sources can read.
+    fn channel_of(&self, target: Target) -> Option<usize> {
+        match target {
+            Target::ChannelParam(channel, _) => Some(usize::from(channel)),
+            Target::MixerVolume(t)
+            | Target::MixerPan(t)
+            | Target::MixerSeparation(t)
+            | Target::MixerEq(t, ..)
+            | Target::MixerSend(t, _)
+            | Target::SlotMix(t, _) => self.track_channels.get(usize::from(t)).copied().flatten(),
+            _ => None,
+        }
+    }
+
+    /// The `0..=1` value a modulator reads for `target`: its own, unless it is a note source and the target is on a
+    /// channel, in which case it is that channel's note. A target with no channel reads the newest note.
+    pub(super) fn output_at(&self, modulator: usize, target: Target) -> f32 {
+        let Some(m) = self.modulators.get(modulator) else { return 0.5 };
+        let own = self.outputs.get(modulator).copied().unwrap_or(0.5);
+        match m.source {
+            ModSource::Velocity(_) | ModSource::KeyTrack(_) => {
+                let at = self
+                    .channel_of(target)
+                    .and_then(|c| self.note_outputs.get(modulator * self.channels + c))
+                    .copied();
+                match at {
+                    Some(v) if v.is_finite() => v,
+                    _ => self.notes.value_latest(&m.source),
+                }
+            }
+            _ => own,
+        }
+    }
+
     fn follower(&self, id: u32) -> Option<&Follower> {
         self.followers.iter().find(|f| f.id == id)
     }
@@ -393,7 +504,17 @@ impl Modulation {
                 };
                 apply_param(&mut source, param, offset_values(depth, e.curve, e.polarity, u));
             }
-            let u = self.value_of(&source, id, beats, secs);
+            // A note source reads one note per channel: every channel's value is read here, so a destination on a
+            // channel takes its own channel's note rather than whichever channel played last.
+            let note_source = matches!(source, ModSource::Velocity(_) | ModSource::KeyTrack(_));
+            let u = if note_source { self.notes.value_latest(&source) } else { self.value_of(&source, id, beats, secs) };
+            if note_source && j * self.channels + self.channels <= self.note_outputs.len() {
+                let base = j * self.channels;
+                let notes = &self.notes;
+                for c in 0..self.channels {
+                    self.note_outputs[base + c] = notes.value(&source, c);
+                }
+            }
             if let Some(slot) = self.outputs.get_mut(j) {
                 *slot = u;
             }
@@ -436,6 +557,8 @@ pub fn source_value(source: &ModSource, id: u32, beats: f64, secs: f64) -> f32 {
         // A follower's value comes from the master detector, not from the position: `Modulation::value` reads it.
         // With no detector (a preview of a stopped transport) it is the neutral middle, not the bottom.
         ModSource::AudioFollower(_) => 0.5,
+        // Bound to a channel in the engine, not here: the newest note stands in for a target with no channel.
+        ModSource::Velocity(_) | ModSource::KeyTrack(_) => 0.5,
     }
 }
 
@@ -670,6 +793,17 @@ fn apply_param(source: &mut ModSource, param: ModParam, by: f64) {
                 m.value = add(m.value).clamp(0.0, 1.0);
             }
         }
+        // A note source's amount is its only setting (what it reads is the channel's note, not a parameter).
+        ModSource::Velocity(v) => {
+            if param == ModParam::Amount {
+                v.amount = add(v.amount).clamp(0.0, 1.0);
+            }
+        }
+        ModSource::KeyTrack(k) => {
+            if param == ModParam::Amount {
+                k.amount = add(k.amount).clamp(0.0, 1.0);
+            }
+        }
         ModSource::Envelope(_) => {}
     }
 }
@@ -738,12 +872,12 @@ pub(super) fn step_values(params: &mut ParamAuto, mods: &mut Modulation, pos: f6
     let mut offsets = std::mem::take(&mut mods.by);
     offsets.clear();
     for (i, m) in mods.modulators.iter().enumerate().filter(|(_, m)| m.enabled) {
-        let u = mods.outputs.get(i).copied().unwrap_or(0.0);
         for (k, t) in m.targets.iter().enumerate().filter(|(_, t)| t.enabled) {
             // A route inside the graph is not a project parameter: the engine already applied it while evaluating.
             if matches!(t.target, Target::ModulatorParam(..) | Target::RouteDepth(..)) {
                 continue;
             }
+            let u = mods.output_at(i, t.target);
             let by = offset_values(mods.depth_of(i, k), t.curve, t.polarity, u);
             match offsets.iter_mut().find(|(x, _)| *x == t.target) {
                 Some((_, v)) => *v += by,
@@ -824,6 +958,7 @@ impl Engine {
     /// track gives its host parameters back.
     pub fn set_modulation(&mut self, modulators: Vec<Modulator>) {
         self.mods.set(modulators);
+        self.refresh_note_subjects();
         self.params.forget();
         for m in &mut self.tracks {
             let released = m.mod_vol.take().is_some() || m.mod_pan.take().is_some() || m.mod_sep.take().is_some();
@@ -833,6 +968,19 @@ impl Engine {
             // The equaliser, the slots' mix levels and the sends go back to their authored values too.
             m.release_modulation();
         }
+    }
+
+    /// Tells the graph how many channels there are and which one each mixer track plays through, so a note source
+    /// finds its note for a target on a channel or a track. Called when the graph is installed and after the project's
+    /// tracks or channels change.
+    pub fn refresh_note_subjects(&mut self) {
+        let channels = self.channels.len();
+        let tracks = self
+            .tracks
+            .iter()
+            .map(|t| usize::try_from(t.output).ok().filter(|&c| c < channels))
+            .collect();
+        self.mods.set_channels(channels, tracks);
     }
 
     /// The tick's modulated mixer values: a track's fader, pan and separation, sampled once a tick (a fader value is
@@ -851,9 +999,9 @@ impl Engine {
         let mut offsets = std::mem::take(&mut self.mods.host_by);
         offsets.clear();
         for (i, m) in self.mods.modulators.iter().enumerate().filter(|(_, m)| m.enabled) {
-            let u = self.mods.outputs.get(i).copied().unwrap_or(0.0);
             for (k, t) in m.targets.iter().enumerate().filter(|(_, t)| t.enabled) {
                 let Some((track, param)) = host_target(t.target) else { continue };
+                let u = self.mods.output_at(i, t.target);
                 let by = offset_values(self.mods.depth_of(i, k), t.curve, t.polarity, u);
                 match offsets.iter_mut().find(|(x, p, ..)| *x == track && *p == param) {
                     Some((_, _, _, v)) => *v += by,
@@ -1650,5 +1798,37 @@ mod tests {
         ] }]);
         run(&mut e, 1000, 1000);
         assert_eq!(e.tracks[1].mod_vol, Some(16000), "half up plus half the range is the top");
+    }
+
+    /// A note source reads the note of the channel its target is on, not whichever channel played last: two keyboards
+    /// playing two instruments keep their own velocity and their own key range.
+    #[test]
+    fn a_note_source_reads_each_channels_own_note() {
+        let mut mods = Modulation::default();
+        let target = |channel: u16| ModTarget {
+            target: Target::ChannelParam(channel, 7),
+            depth: 1.0,
+            curve: Curve::Linear,
+            polarity: Polarity::Unipolar,
+            enabled: true,
+        };
+        mods.set(vec![
+            Modulator { id: 1, source: ModSource::Velocity(os_model::modulation::Velocity { amount: 1.0 }), enabled: true, targets: vec![target(0), target(1)] },
+            Modulator { id: 2, source: ModSource::KeyTrack(os_model::modulation::KeyTrack { amount: 1.0, low: 40, high: 80 }), enabled: true, targets: vec![target(0), target(1)] },
+        ]);
+        // Track 0 plays through channel 0, track 1 through channel 1.
+        mods.set_channels(2, vec![Some(0), Some(1)]);
+        mods.notes.note_on(0, 40, 127);
+        mods.notes.note_on(1, 80, 64);
+        mods.evaluate(0.0, 0.0);
+        assert_eq!(mods.output_at(0, Target::ChannelParam(0, 7)), 1.0, "channel 0's loud note");
+        assert!((mods.output_at(0, Target::ChannelParam(1, 7)) - 64.0 / 127.0).abs() < 1e-5, "channel 1's softer note");
+        assert_eq!(mods.output_at(1, Target::ChannelParam(0, 7)), 0.0, "channel 0's low key sits at the bottom");
+        assert_eq!(mods.output_at(1, Target::ChannelParam(1, 7)), 1.0, "channel 1's high key at the top");
+        // A mixer track follows the channel it plays through, and a channel that played nothing reads the middle.
+        assert!((mods.output_at(0, Target::MixerVolume(1)) - 64.0 / 127.0).abs() < 1e-5);
+        mods.notes.note_on(0, 60, 127);
+        mods.evaluate(0.0, 0.0);
+        assert!((mods.output_at(1, Target::ChannelParam(0, 7)) - 0.5).abs() < 1e-6, "C4 is halfway up 40..80");
     }
 }

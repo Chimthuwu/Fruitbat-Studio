@@ -1191,6 +1191,8 @@ pub(crate) fn slot_text(m: &os_model::modulation::Modulator) -> String {
         ModSource::Envelope(_) => "envelope".into(),
         ModSource::Mseg(mseg) => format!("MSEG {}", crate::modulation::rate_text(mseg.period)),
         ModSource::Macro(mc) => format!("macro {:.0}%", mc.value * 100.0),
+        ModSource::Velocity(v) => format!("velocity {:.0}%", v.amount * 100.0),
+        ModSource::KeyTrack(k) => format!("keys {}..{}", k.low, k.high),
     }
 }
 
@@ -1441,6 +1443,15 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
     }
     let cy = panel.y + 64.0;
     match m.source {
+        ModSource::Velocity(v) => {
+            // One knob: what it reads is the channel's note, not a setting of the modulator.
+            mod_knob(ui, s, m.id, crate::modulation::KnobField::Amount, "amount", panel.x + 30.0, cy + 42.0);
+            ui.c.text(fnt(10.0), panel.x + 8.0, cy + 78.0, t.text_dim, &format!("last note's velocity, {:.0}%", v.amount * 100.0));
+        }
+        ModSource::KeyTrack(k) => {
+            mod_knob(ui, s, m.id, crate::modulation::KnobField::Amount, "amount", panel.x + 30.0, cy + 42.0);
+            ui.c.text(fnt(10.0), panel.x + 8.0, cy + 78.0, t.text_dim, &format!("keys {}..{} at {:.0}%", k.low, k.high, k.amount * 100.0));
+        }
         ModSource::Lfo(l) => {
             // Shape and rate step; both are buttons, not dropdowns.
             let b = Rect::new(panel.x + 8.0, cy - 8.0, 92.0, 18.0);

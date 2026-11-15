@@ -301,6 +301,8 @@ pub fn name_of(m: &Modulator) -> String {
         os_model::modulation::ModSource::AudioFollower(_) => "FOLLOWER",
         os_model::modulation::ModSource::Mseg(_) => "MSEG",
         os_model::modulation::ModSource::Macro(_) => "MACRO",
+        os_model::modulation::ModSource::Velocity(_) => "VELOCITY",
+        os_model::modulation::ModSource::KeyTrack(_) => "KEY",
     };
     format!("{kind} {}", m.id.0)
 }
@@ -321,6 +323,8 @@ pub enum Kind {
     Follower,
     Mseg,
     Macro,
+    Velocity,
+    KeyTrack,
     Steps,
     Envelope,
 }
@@ -336,6 +340,8 @@ impl Kind {
             ModSource::AudioFollower(_) => Kind::Follower,
             ModSource::Mseg(_) => Kind::Mseg,
             ModSource::Macro(_) => Kind::Macro,
+            ModSource::Velocity(_) => Kind::Velocity,
+            ModSource::KeyTrack(_) => Kind::KeyTrack,
         }
     }
 
@@ -346,6 +352,8 @@ impl Kind {
             Kind::Follower => "Audio Follower",
             Kind::Mseg => "MSEG",
             Kind::Macro => "Macro",
+            Kind::Velocity => "Velocity",
+            Kind::KeyTrack => "Key tracking",
             Kind::Steps => "Steps",
             Kind::Envelope => "Envelope",
         }
@@ -353,13 +361,13 @@ impl Kind {
 
     /// The types a new slot can be made as (the strip's add menu). Steps and Envelope are not here: they stay readable
     /// in old projects and keep their knob-menu entries, but a new modulator starts as one of these.
-    pub const PROJECT: [Kind; 5] = [Kind::Lfo, Kind::Random, Kind::Follower, Kind::Mseg, Kind::Macro];
+    pub const PROJECT: [Kind; 7] = [Kind::Lfo, Kind::Random, Kind::Follower, Kind::Mseg, Kind::Macro, Kind::Velocity, Kind::KeyTrack];
 
     /// The type buttons the editor draws, as many as fit its title row (the rest are in its menu's Source list).
     pub const EDITOR: [Kind; 3] = [Kind::Lfo, Kind::Random, Kind::Follower];
 
     /// The kinds the editor's menu offers, including the ones from old projects.
-    pub const MENU: [Kind; 7] = [Kind::Lfo, Kind::Random, Kind::Follower, Kind::Mseg, Kind::Macro, Kind::Steps, Kind::Envelope];
+    pub const MENU: [Kind; 9] = [Kind::Lfo, Kind::Random, Kind::Follower, Kind::Mseg, Kind::Macro, Kind::Velocity, Kind::KeyTrack, Kind::Steps, Kind::Envelope];
 }
 
 /// `src` as `kind`, keeping the rate it had where the new kind has one: an LFO and a step pattern are both timed, so a
@@ -370,7 +378,7 @@ pub fn set_kind(src: ModSource, kind: Kind) -> ModSource {
         ModSource::Steps(s) => Some(s.period),
         ModSource::Random(r) => Some(r.period),
         ModSource::Mseg(m) => Some(m.period),
-        ModSource::Envelope(_) | ModSource::AudioFollower(_) | ModSource::Macro(_) => None,
+        ModSource::Envelope(_) | ModSource::AudioFollower(_) | ModSource::Macro(_) | ModSource::Velocity(_) | ModSource::KeyTrack(_) => None,
     };
     match (kind, src) {
         (Kind::Lfo, ModSource::Lfo(_))
@@ -379,7 +387,9 @@ pub fn set_kind(src: ModSource, kind: Kind) -> ModSource {
         | (Kind::Random, ModSource::Random(_))
         | (Kind::Follower, ModSource::AudioFollower(_))
         | (Kind::Mseg, ModSource::Mseg(_))
-        | (Kind::Macro, ModSource::Macro(_)) => src,
+        | (Kind::Macro, ModSource::Macro(_))
+        | (Kind::Velocity, ModSource::Velocity(_))
+        | (Kind::KeyTrack, ModSource::KeyTrack(_)) => src,
         (Kind::Lfo, _) => ModSource::Lfo(Lfo { period: period.unwrap_or(Timebase::Sync(4)), ..Lfo::default() }),
         // A pattern, not sixteen zeros: a step source that came in silent would read as a broken modulator.
         (Kind::Steps, _) => ModSource::Steps(Steps { values: step_preset(1), period: period.unwrap_or(Timebase::Sync(1)), smooth: false }),
@@ -388,6 +398,9 @@ pub fn set_kind(src: ModSource, kind: Kind) -> ModSource {
         (Kind::Follower, _) => ModSource::AudioFollower(AudioFollower::default()),
         (Kind::Mseg, _) => ModSource::Mseg(Mseg { period: period.unwrap_or(Timebase::Sync(16)), ..Mseg::default() }),
         (Kind::Macro, _) => ModSource::Macro(Macro::default()),
+        // A note source starts at full amount: it is turned down, not up, and at 1 it reads the note as it is.
+        (Kind::Velocity, _) => ModSource::Velocity(os_model::modulation::Velocity { amount: 1.0 }),
+        (Kind::KeyTrack, _) => ModSource::KeyTrack(os_model::modulation::KeyTrack::default()),
     }
 }
 
@@ -474,6 +487,8 @@ pub fn source_text(src: ModSource) -> String {
         ModSource::AudioFollower(_) => "audio follower".into(),
         ModSource::Mseg(m) => format!("MSEG {}", rate_text(m.period)),
         ModSource::Macro(_) => "macro".into(),
+        ModSource::Velocity(v) => format!("velocity {:.0}%", v.amount * 100.0),
+        ModSource::KeyTrack(k) => format!("key {}..{}", k.low, k.high),
     }
 }
 
@@ -635,6 +650,9 @@ pub fn editor_menu(s: &State, id: ModulatorId, target: u32) -> Option<PItem> {
                 items.push(PItem::new(label, cmd).mark(Mark::Check((mc.value - v).abs() < 0.005)));
             }
         }
+        // A note source has one setting, its amount: what it reads is the note a channel played, so there is nothing
+        // to pick here (the editor's knob turns the amount).
+        ModSource::Velocity(_) | ModSource::KeyTrack(_) => {}
         ModSource::AudioFollower(f) => {
             items.push(PItem::head("Detection"));
             for (d, label) in [(Detection::Rms, "RMS"), (Detection::Peak, "Peak")] {
