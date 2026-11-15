@@ -736,7 +736,7 @@ mod win {
             wc.hInstance = inst;
             wc.lpszClassName = class.as_ptr();
             RegisterClassW(&wc);
-            let title = wide("Lemon Studio");
+            let title = wide("Fruitbat Studio");
             // Layered (per-pixel alpha) and transparent to the mouse; above every window that is not topmost too; a
             // tool window takes no taskbar button; never activated, so the main window gets the focus as before.
             let hwnd = CreateWindowExW(
@@ -930,7 +930,7 @@ mod x11 {
         if let (Some(ty), Some(splash)) = (atom(b"_NET_WM_WINDOW_TYPE"), atom(b"_NET_WM_WINDOW_TYPE_SPLASH")) {
             let _ = c.change_property32(PropMode::REPLACE, win, ty, AtomEnum::ATOM, &[splash]);
         }
-        let _ = c.change_property8(PropMode::REPLACE, win, AtomEnum::WM_NAME, AtomEnum::STRING, b"Lemon Studio");
+        let _ = c.change_property8(PropMode::REPLACE, win, AtomEnum::WM_NAME, AtomEnum::STRING, b"Fruitbat Studio");
         let _ = c.change_property8(PropMode::REPLACE, win, AtomEnum::WM_CLASS, AtomEnum::STRING, b"lemonstudio\0LemonStudio\0");
         // No input region: clicks go through to what is behind.
         let _ = c.shape_rectangles(shape::SO::SET, shape::SK::INPUT, ClipOrdering::UNSORTED, win, 0, 0, &[]);

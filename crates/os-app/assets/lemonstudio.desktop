@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Lemon Studio
+Name=Fruitbat Studio
 GenericName=Digital Audio Workstation
 Comment=Pattern-based music production
 Exec=lemonstudio %f
