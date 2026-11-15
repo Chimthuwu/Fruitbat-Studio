@@ -1286,18 +1286,37 @@ fn mod_slot_paint(ui: &mut Ui, s: &State, r: Rect, slot: u8, m: &os_model::modul
     // The live plot: the last ~2 s of actual output (a source preview while stopped), not a drawing of the
     // waveform. The tile carries no name, so the plot gets the top of the slot.
     let plot = Rect::new(r.x + 4.0, r.y + 4.0, (r.w - 8.0).max(6.0), (r.h - 24.0).max(8.0));
-    ui.c.fill_rect(plot, t.s(0x101315));
-    ui.c.line(plot.x, plot.cy(), plot.right(), plot.cy(), 1.0, t.s(0x242a2d));
-    let hist = s.mod_hist.borrow();
-    if let Some(series) = hist.get(id).filter(|_| mod_plot_visible(m)) {
-        let n = series.len().max(2);
-        let pts: Vec<(f32, f32)> = series
-            .iter()
-            .enumerate()
-            .map(|(i, &v)| (plot.x + plot.w * i as f32 / (n - 1) as f32, plot.bottom() - v.clamp(0.0, 1.0) * plot.h))
-            .collect();
-        if pts.len() > 1 {
-            ui.c.polyline(&pts, 1.4, accent.with_alpha(if m.enabled { 235 } else { 90 }));
+    if let os_model::modulation::ModSource::Macro(mc) = m.source {
+        // A macro is a control, not a shape: its tile is the knob itself, turned where it stands (spec: the handoff's
+        // macro), so it reads and works as the performance control it is rather than as a flat line at its position.
+        let (cx, cy) = (plot.cx(), plot.cy());
+        let radius = (plot.h.min(plot.w) * 0.30).clamp(9.0, 20.0);
+        let field = crate::modulation::KnobField::Value;
+        let route = route_destination(s, id, field);
+        let hov = ui.hit(
+            Rect::new(cx - radius - 6.0, cy - radius - 6.0, 2.0 * radius + 12.0, 2.0 * radius + 12.0),
+            Action::Mod(crate::modulation::ModAct::Knob(id, field)),
+            mod_hint(s, route, &format!("Macro: {:.0}%", mc.value * 100.0)),
+        );
+        kit::knob(ui.c, t, cx, cy, radius, mc.value, false, kit::KnobLook::Ring, kit::State::hover(hov));
+        if let Some(from) = route {
+            route_ring(ui, s, from, cx, cy, radius + 2.6);
+        }
+        mod_arcs(ui, s, os_model::target::modulator_param(id.0, os_model::modulation::ModParam::Value.code()), cx, cy, radius + 4.8, mc.value);
+    } else {
+        ui.c.fill_rect(plot, t.s(0x101315));
+        ui.c.line(plot.x, plot.cy(), plot.right(), plot.cy(), 1.0, t.s(0x242a2d));
+        let hist = s.mod_hist.borrow();
+        if let Some(series) = hist.get(id).filter(|_| mod_plot_visible(m)) {
+            let n = series.len().max(2);
+            let pts: Vec<(f32, f32)> = series
+                .iter()
+                .enumerate()
+                .map(|(i, &v)| (plot.x + plot.w * i as f32 / (n - 1) as f32, plot.bottom() - v.clamp(0.0, 1.0) * plot.h))
+                .collect();
+            if pts.len() > 1 {
+                ui.c.polyline(&pts, 1.4, accent.with_alpha(if m.enabled { 235 } else { 90 }));
+            }
         }
     }
     // The enable light, over the plot's top-right corner; the remove button sits just left of it, so a padded
