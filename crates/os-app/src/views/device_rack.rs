@@ -1496,9 +1496,9 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
             let hov = ui.hit(b, Action::Mod(crate::modulation::ModAct::ToggleInterpolate(m.id)), "Hold or interpolate");
             ui.c.fill_rrect(b, 2.0, if rd.interpolate { accent.with_alpha(150) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
             ui.c.text_center(fnt(9.5), b, t.text, if rd.interpolate { "interpolated" } else { "hold" });
-            mod_knob(ui, s, m.id, crate::modulation::KnobField::Amount, "amount", panel.x + 30.0, cy + 58.0);
-            mod_knob(ui, s, m.id, crate::modulation::KnobField::Smooth, "smoothing", panel.x + 78.0, cy + 58.0);
-            let b = Rect::new(panel.x + 168.0, cy + 50.0, 74.0, 18.0);
+            mod_knob(ui, s, m.id, crate::modulation::KnobField::Amount, "amount", panel.x + 30.0, cy + 54.0);
+            mod_knob(ui, s, m.id, crate::modulation::KnobField::Smooth, "smoothing", panel.x + 78.0, cy + 54.0);
+            let b = Rect::new(panel.x + 168.0, cy + 46.0, 74.0, 18.0);
             let hov = ui.hit(b, Action::Mod(crate::modulation::ModAct::RerollSeed(m.id)), "Draw a new seed");
             ui.c.fill_rrect(b, 2.0, if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
             ui.c.text_center(fnt(9.5), b, t.text, "reroll seed");
@@ -1567,7 +1567,7 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
 fn rate_paint(ui: &mut Ui, s: &State, id: os_model::modulation::ModulatorId, x: f32, y: f32, period: os_model::modulation::Timebase) {
     let t = ui.t;
     let label = crate::modulation::rate_text(period);
-    let knob = Rect::new(x, y - 2.0, 24.0, 21.0);
+    let knob = Rect::new(x, y - 3.0, 28.0, 22.0);
     let route = route_destination(s, id, crate::modulation::KnobField::Rate);
     let hov = ui.hit(
         knob,
@@ -1580,18 +1580,18 @@ fn rate_paint(ui: &mut Ui, s: &State, id: os_model::modulation::ModulatorId, x: 
         t,
         knob.cx(),
         knob.cy(),
-        8.0,
+        9.5,
         v,
         false,
         kit::KnobLook::Ring,
         kit::State::hover(hov),
     );
     if let Some(from) = route {
-        route_ring(ui, s, from, knob.cx(), knob.cy(), 10.2);
+        route_ring(ui, s, from, knob.cx(), knob.cy(), 11.8);
     }
-    mod_arcs(ui, s, os_model::target::modulator_param(id.0, os_model::modulation::ModParam::Rate.code()), knob.cx(), knob.cy(), 12.5, v);
-    ui.c.text(fnt(10.5), x + 28.0, y + 2.0, t.text, &label);
-    let mode = Rect::new(x + 88.0, y + 1.0, 38.0, 15.0);
+    mod_arcs(ui, s, os_model::target::modulator_param(id.0, os_model::modulation::ModParam::Rate.code()), knob.cx(), knob.cy(), 14.1, v);
+    ui.c.text(fnt(10.5), x + 32.0, y + 2.0, t.text, &label);
+    let mode = Rect::new(x + 90.0, y + 1.0, 38.0, 15.0);
     let hov = ui.hit(
         mode,
         Action::Mod(crate::modulation::ModAct::RateMode(id)),
@@ -1640,19 +1640,19 @@ fn mod_knob(ui: &mut Ui, s: &State, id: os_model::modulation::ModulatorId, field
     let t = ui.t;
     let v = s.modulation.get(id).map_or(0.5, |m| crate::modulation::knob_value(m.source, field));
     let route = route_destination(s, id, field);
-    let hov = ui.hit(Rect::new(cx - 14.0, cy - 14.0, 28.0, 28.0), Action::Mod(crate::modulation::ModAct::Knob(id, field)), mod_hint(s, route, label));
-    kit::knob(ui.c, t, cx, cy, 11.0, v, false, kit::KnobLook::Ring, kit::State::hover(hov));
+    let hov = ui.hit(Rect::new(cx - 17.0, cy - 17.0, 34.0, 34.0), Action::Mod(crate::modulation::ModAct::Knob(id, field)), mod_hint(s, route, label));
+    kit::knob(ui.c, t, cx, cy, 14.0, v, false, kit::KnobLook::Ring, kit::State::hover(hov));
     if let Some(from) = route {
-        route_ring(ui, s, from, cx, cy, 13.4);
+        route_ring(ui, s, from, cx, cy, 16.6);
     }
     // The routes driving this parameter, as the same arc a device parameter shows: one per source, from the knob's own
     // value to value + depth, with an endpoint handle that drags that route's depth (`ModAct::DepthDrag`). The route's
     // target is the graph's own modulator parameter, so nothing here depends on a device's identity. No live cursor:
     // the engine publishes a value for project parameters only (`engine_spec`).
     if let Some(param) = crate::modulation::knob_param(field) {
-        mod_arcs(ui, s, os_model::target::modulator_param(id.0, param.code()), cx, cy, 15.5, v);
+        mod_arcs(ui, s, os_model::target::modulator_param(id.0, param.code()), cx, cy, 18.6, v);
     }
-    ui.c.text_center(fnt(9.0), Rect::new(cx - 23.0, cy + 11.0, 46.0, 12.0), t.text_dim, label);
+    ui.c.text_center(fnt(9.5), Rect::new(cx - 27.0, cy + 14.0, 54.0, 12.0), t.text_dim, label);
 }
 
 /// A slot's right-click menu: on / off, clear routings, reroll the seed, remove.
