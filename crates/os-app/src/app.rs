@@ -2667,7 +2667,8 @@ impl App {
     fn open_dialog(&mut self) {
         let start = self.state.path.as_ref().and_then(|p| p.parent().map(std::path::Path::to_path_buf));
         let dlg = crate::filedlg::FileDlg::new(crate::filedlg::Mode::Open, "Open project", "project", crate::dialog::Then::OpenProject)
-            .filter("Fruitbat Studio project", &["lemon", "flp", "zip"])
+            // The projects this version saves, the ones it still opens, and a zipped project.
+            .filter("Fruitbat Studio project", &[crate::project_files::EXT, "lemon", "flp", "zip"])
             .start(start.as_deref());
         self.file_dialog(dlg);
     }

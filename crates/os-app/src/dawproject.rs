@@ -280,6 +280,13 @@ mod tests {
         let p = project();
         let bytes = pack(&p, 128.0, b"native-bytes").expect("pack");
         assert_eq!(&bytes[..2], b"PK", "a zip");
+        // Two files and no more: the standard project, and the project's own state beside it. No `.lemon` file.
+        let mut zip = zip::ZipArchive::new(Cursor::new(bytes.clone())).expect("a zip archive");
+        let mut names: Vec<String> = (0..zip.len())
+            .map(|i| zip.by_index(i).expect("an entry").name().expect("a name").to_string())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["fruitbat/project.flp", "project.xml"]);
         assert_eq!(native(&bytes).expect("unpack"), b"native-bytes");
     }
 

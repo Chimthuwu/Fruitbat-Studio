@@ -50,13 +50,19 @@ pub struct Category {
     pub templates: Vec<String>,
 }
 
-/// Template `name`'s file in category `cat`: `<name>.lemon`, else an existing `<name>.flp` (spec: project/lemon-format.md
-/// "Templates").
+/// Template `name`'s file in category `cat`: `<name>.dawproject`, else an existing `<name>.lemon` or `<name>.flp`
+/// (spec: project/lemon-format.md "Templates").
 pub(crate) fn file_in(root: &Path, cat: &str, name: &str) -> PathBuf {
     let dir = root.join(cat).join(name);
-    let lemon = dir.join(format!("{name}.{}", crate::project_files::EXT));
-    let flp = dir.join(format!("{name}.flp"));
-    if !lemon.is_file() && flp.is_file() { flp } else { lemon }
+    let project = dir.join(format!("{name}.{}", crate::project_files::EXT));
+    let older = ["lemon", "flp"].map(|ext| dir.join(format!("{name}.{ext}")));
+    let mut found = project;
+    for p in older {
+        if !found.is_file() && p.is_file() {
+            found = p;
+        }
+    }
+    found
 }
 
 /// The folders in `dir`, by name, sorted without regard to case.
