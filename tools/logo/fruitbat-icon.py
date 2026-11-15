@@ -75,10 +75,10 @@ def wing(mask, sign):
     # A pointed tip, not a cut end: the top edge falls to it and the trailing edge leaves from it.
     panel = top + [px(0.50 + sign * 0.478, 0.475), px(0.50 + sign * 0.440, 0.552), px(0.50 + sign * 0.035, 0.552)]
     d.polygon(panel, fill=255)
-    # Three fingers: a narrow triangle with a rounded end, hanging just below the trailing edge.
-    for cx, reach in [(0.115, 0.075), (0.255, 0.09), (0.385, 0.075)]:
+    # Two fingers per wing, wide enough to survive a 16 px render: three thin ones blur into a bar on the taskbar.
+    for cx, reach in [(0.175, 0.105), (0.345, 0.095)]:
         x = 0.50 + sign * cx
-        d.polygon([px(x - 0.030, 0.548), px(x + 0.030, 0.548), px(x, 0.548 + reach)], fill=255)
+        d.polygon([px(x - 0.052, 0.545), px(x + 0.052, 0.545), px(x, 0.545 + reach)], fill=255)
 
 
 def bat_mask():
@@ -88,11 +88,11 @@ def bat_mask():
     wing(mask, -1)
     d = ImageDraw.Draw(mask)
     # Body and head, wide enough to overlap both wing panels (no seam left where they meet).
-    d.ellipse([*px(0.444, 0.445), *px(0.556, 0.675)], fill=255)
-    d.ellipse([*px(0.448, 0.355), *px(0.552, 0.505)], fill=255)
-    # Ears: short triangles, so the head reads as a bat's and not an insect's.
+    d.ellipse([*px(0.436, 0.445), *px(0.564, 0.675)], fill=255)
+    d.ellipse([*px(0.440, 0.345), *px(0.560, 0.505)], fill=255)
+    # Ears: short, wide triangles — at taskbar size they are most of what says "bat".
     for sign in (1, -1):
-        d.polygon([px(0.50 + sign * 0.020, 0.392), px(0.50 + sign * 0.043, 0.330), px(0.50 + sign * 0.058, 0.398)], fill=255)
+        d.polygon([px(0.50 + sign * 0.014, 0.400), px(0.50 + sign * 0.040, 0.312), px(0.50 + sign * 0.068, 0.396)], fill=255)
     return mask
 
 
