@@ -2672,6 +2672,19 @@ pub mod target {
         u32::from(MODULATOR_PARAM + u16::from(param)) << 16 | (id & 0xFFFF)
     }
 
+    /// The first tag of a route's own depth: the modulator id sits in the low half (like [`modulator_param`]) and the
+    /// index of the assignment within that modulator's targets in the tag, so the first one is `0x6100`. That leaves
+    /// the next 3840 tags for one modulator's assignments, before the mixer places at `0x7000`.
+    pub const ROUTE_DEPTH: u16 = 0x6100;
+    /// How many assignments one modulator can address this way (`0x6100..0x7000`).
+    pub const ROUTE_DEPTH_SLOTS: u16 = 0x7000 - ROUTE_DEPTH;
+
+    /// The depth of assignment `index` of modulator `owner` ([`os_model::modulation::ModTarget::route`]), as the
+    /// engine addresses it. `None` for an index past [`ROUTE_DEPTH_SLOTS`].
+    pub fn route_depth(owner: u32, index: u16) -> Option<u32> {
+        (index < ROUTE_DEPTH_SLOTS).then(|| u32::from(ROUTE_DEPTH + index) << 16 | (owner & 0xFFFF))
+    }
+
     /// The container slot parameter of item `item` of member `id` (`None`: an id or item out of range).
     pub fn member_item(id: u32, item: u16) -> Option<u16> {
         ((1..=MEMBER_IDS).contains(&id) && item < MEMBER_ITEMS).then(|| id as u16 * MEMBER_ITEMS + item)
@@ -2793,6 +2806,9 @@ pub mod target {
         /// Modulator (the graph's id), its parameter code ([`os_model::modulation::ModParam::code`]): a route inside
         /// the modulation graph rather than a device parameter ([`modulator_param`]).
         ModulatorParam(u32, u8),
+        /// A route's own depth: the modulator making the assignment, and its index among that modulator's targets
+        /// ([`route_depth`]). A modulator shaping how far another one drives.
+        RouteDepth(u32, u16),
         Other(u32),
     }
 
@@ -2812,6 +2828,9 @@ pub mod target {
         // which start at 0x7000.
         if (MODULATOR_PARAM..MODULATOR_PARAM + 16).contains(&hi) {
             return Target::ModulatorParam(u32::from(lo), (hi - MODULATOR_PARAM) as u8);
+        }
+        if (ROUTE_DEPTH..ROUTE_DEPTH + ROUTE_DEPTH_SLOTS).contains(&hi) {
+            return Target::RouteDepth(u32::from(lo), hi - ROUTE_DEPTH);
         }
         if (0x7000..0x7000 + 128 * 64).contains(&hi) && lo >= PLUGIN_PARAM {
             let loc = hi - 0x7000;

@@ -469,6 +469,8 @@ fn project_rows(s: &State, root: &str, cat: u8, out: &mut Vec<Row>) {
                             // A route into the graph: numbered by the modulator and its parameter, so two of them on
                             // one modulator keep apart.
                             os_model::modulation::ParameterKey::ModulatorParam(id, param) => id.0 << 8 | u32::from(param.code()),
+                            // A route's depth: numbered by the route itself.
+                            os_model::modulation::ParameterKey::RouteDepth(route) => route.0 << 8 | 1,
                         };
                         out.push(Row {
                             key: format!("{gkey}/{}/{pk}", t.path.owner.0),

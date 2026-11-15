@@ -1189,6 +1189,8 @@ pub(crate) fn slot_text(m: &os_model::modulation::Modulator) -> String {
         },
         ModSource::Steps(st) => format!("steps {}", crate::modulation::rate_text(st.period)),
         ModSource::Envelope(_) => "envelope".into(),
+        ModSource::Mseg(mseg) => format!("MSEG {}", crate::modulation::rate_text(mseg.period)),
+        ModSource::Macro(mc) => format!("macro {:.0}%", mc.value * 100.0),
     }
 }
 
@@ -1249,6 +1251,8 @@ pub(crate) fn mod_accent(base: Color, source: &os_model::modulation::ModSource) 
     match source {
         os_model::modulation::ModSource::Random(_) => Color::rgb(0xc6ff53),
         os_model::modulation::ModSource::AudioFollower(_) => Color::rgb(0xae65ff),
+        os_model::modulation::ModSource::Mseg(_) => Color::rgb(0x53d7ff),
+        os_model::modulation::ModSource::Macro(_) => Color::rgb(0xffb347),
         _ => base,
     }
 }
@@ -1323,7 +1327,7 @@ fn mod_slot_paint(ui: &mut Ui, s: &State, r: Rect, slot: u8, m: &os_model::modul
 /// An empty slot's "+" (the add menu opens from it).
 fn mod_empty_slot(ui: &mut Ui, s: &State, r: Rect, slot: u8) {
     let t = ui.t;
-    let hov = ui.hit(r, Action::Mod(crate::modulation::ModAct::AddMenu(slot)), "Add a project modulator (LFO, Random or Audio Follower)");
+    let hov = ui.hit(r, Action::Mod(crate::modulation::ModAct::AddMenu(slot)), "Add a project modulator (LFO, Random, Follower, MSEG or Macro)");
     let cursor = s.mod_cursor == Some(slot);
     ui.c.fill_rrect(r, 3.0, if hov { t.s(0x232a2e) } else { t.s(0x1b1f21) });
     ui.c.stroke_rrect(r, 3.0, if cursor { 1.6 } else { 1.0 }, if cursor { ui.t.modulation.with_alpha(170) } else { t.splitter_dark });
@@ -1337,7 +1341,8 @@ pub(crate) fn mod_add_menu_paint(ui: &mut Ui, s: &State, r: Rect) {
     if let Some(slot) = s.mod_add_slot {
         if let Some((_, anchor)) = slots.iter().find(|(at, _)| *at == slot).copied() {
             let w = 148.0;
-            let h = 3.0 * 21.0 + 55.0;
+            // A row each (30 px) under the title: the menu is exactly as tall as the kinds it lists.
+            let h = 28.0 + crate::modulation::Kind::PROJECT.len() as f32 * 30.0;
             let m = Rect::new(anchor.x.min(r.right() - w - 2.0), (anchor.y - h - 2.0).max(2.0), w, h);
             ui.c.fill_rrect(m, 3.0, ui.t.s(0x26292c));
             ui.c.stroke_rrect(m, 3.0, 1.0, ui.t.splitter_dark);
@@ -1358,6 +1363,12 @@ pub(crate) fn mod_add_menu_paint(ui: &mut Ui, s: &State, r: Rect) {
                 }
                 if kind == crate::modulation::Kind::Follower {
                     ui.c.text(fnt(9.5), row.x + 8.0, row.y + 13.0, ui.t.text_faint, "follows the master's level");
+                }
+                if kind == crate::modulation::Kind::Mseg {
+                    ui.c.text(fnt(9.5), row.x + 8.0, row.y + 13.0, ui.t.text_faint, "a multi-segment shape");
+                }
+                if kind == crate::modulation::Kind::Macro {
+                    ui.c.text(fnt(9.5), row.x + 8.0, row.y + 13.0, ui.t.text_faint, "a knob you turn, routable");
                 }
                 y += 30.0;
             }
@@ -1420,7 +1431,7 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
     }
     // The three types the project slots offer.
     let mut bx = panel.x + 8.0;
-    for kind in crate::modulation::Kind::PROJECT {
+    for kind in crate::modulation::Kind::EDITOR {
         let b = Rect::new(bx, panel.y + 22.0, 74.0, 17.0);
         let on = crate::modulation::Kind::of(m.source) == kind;
         let hov = ui.hit(b, Action::Mod(crate::modulation::ModAct::Kind(m.id, kind)), kind.label());
@@ -1475,6 +1486,30 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
             mod_knob(ui, s, m.id, crate::modulation::KnobField::Attack, "attack", panel.x + 66.0, cy + 42.0);
             mod_knob(ui, s, m.id, crate::modulation::KnobField::Release, "release", panel.x + 108.0, cy + 42.0);
             mod_knob(ui, s, m.id, crate::modulation::KnobField::Gain, "gain", panel.x + 150.0, cy + 42.0);
+        }
+        ModSource::Mseg(mseg) => {
+            rate_paint(ui, s, m.id, panel.x + 8.0, cy - 8.0, mseg.period);
+            // Loop, lines and polarity: the shape itself comes from the menu's presets (as a step pattern's does).
+            let mut bx = panel.x + 8.0;
+            for (label, on, act, hint) in [
+                ("loop", mseg.looped, crate::modulation::ModAct::ToggleLoop(m.id), "Loop the shape / play it once"),
+                ("lines", mseg.smooth, crate::modulation::ModAct::ToggleSmooth(m.id), "Lines between points / hold each"),
+                ("bipolar", mseg.bipolar, crate::modulation::ModAct::ToggleBipolar(m.id), "Bipolar / unipolar output"),
+            ] {
+                let b = Rect::new(bx, cy + 12.0, 52.0, 17.0);
+                let hov = ui.hit(b, Action::Mod(act), hint);
+                ui.c.fill_rrect(b, 2.0, if on { accent.with_alpha(150) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
+                ui.c.text_center(fnt(9.5), b, t.text, label);
+                bx += 56.0;
+            }
+            mod_knob(ui, s, m.id, crate::modulation::KnobField::Amount, "amount", panel.x + 30.0, cy + 52.0);
+            ui.c.text(fnt(9.5), panel.x + 60.0, cy + 40.0, t.text_dim, "shape: menu > Shape");
+        }
+        ModSource::Macro(mc) => {
+            mod_knob(ui, s, m.id, crate::modulation::KnobField::Value, "value", panel.x + 30.0, cy + 16.0);
+            ui.c.text(fnt(10.0), panel.x + 60.0, cy + 4.0, t.text_dim, &format!("{:.0}%", mc.value * 100.0));
+            ui.c.text(fnt(9.5), panel.x + 60.0, cy + 20.0, t.text_dim, "a knob of its own, and a");
+            ui.c.text(fnt(9.5), panel.x + 60.0, cy + 32.0, t.text_dim, "destination other routes can turn");
         }
         ModSource::Steps(st) => {
             rate_paint(ui, s, m.id, panel.x + 8.0, cy - 8.0, st.period);

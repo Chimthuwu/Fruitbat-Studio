@@ -470,6 +470,8 @@ fn chip_label(m: &os_model::modulation::Modulator) -> String {
         ModSource::Envelope(_) => "env".to_string(),
         ModSource::Random(r) => crate::modulation::rate_text(r.period),
         ModSource::AudioFollower(_) => "follow".to_string(),
+        ModSource::Mseg(m) => crate::modulation::rate_text(m.period),
+        ModSource::Macro(_) => "macro".to_string(),
     };
     format!("{} · {short}", crate::modulation::name_of(m))
 }

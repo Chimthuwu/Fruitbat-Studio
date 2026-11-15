@@ -26,7 +26,17 @@ use os_model::modulation::{
 use std::collections::BTreeMap;
 
 /// The payload layout written (the first byte of each event). A reader ignores an event with a layout it does not know.
+///
+/// This is the file's layout, shared by every `LMex` event, and it stays where it is: the modulation graph is the one
+/// event that has opened up since the format froze, so it carries its own version ([`GRAPH_LAYOUT`]) rather than
+/// making every other event unreadable to an older build.
 const LAYOUT: u8 = 2;
+/// The modulation graph event's own layout, independent of the file's.
+///
+/// 3 added each assignment's route identity and a target that names a route's depth; 2 and 1 are the layouts the graph
+/// shared with the file's before it had one of its own, still read (their assignments are given route ids in graph
+/// order).
+const GRAPH_LAYOUT: u8 = 3;
 /// The layout written before project slots, random follow shape edits and per-routing enable. Still read.
 const LAYOUT_1: u8 = 1;
 
@@ -185,8 +195,9 @@ pub fn modulation(s: &State) -> Event {
 /// flag, name, source and targets; numbers are little-endian and a source's kind picks the fields that follow.
 /// Readers ignore a layout they do not know, so a later record can grow.
 fn write_graph(g: &ModGraph) -> Vec<u8> {
-    let mut b = start(g.modulators.len());
+    let mut b = graph_start(g.modulators.len());
     b.extend_from_slice(&g.next.to_le_bytes());
+    b.extend_from_slice(&g.next_route.to_le_bytes());
     for m in &g.modulators {
         b.extend_from_slice(&m.id.0.to_le_bytes());
         b.push(u8::from(m.enabled));
@@ -225,6 +236,24 @@ fn write_graph(g: &ModGraph) -> Vec<u8> {
                 b.push(u8::from(r.interpolate));
                 b.push(u8::from(r.bipolar));
                 b.extend_from_slice(&r.seed.to_le_bytes());
+            }
+            ModSource::Mseg(mseg) => {
+                b.push(MSEG);
+                write_timebase(&mut b, mseg.period);
+                b.push(u8::from(mseg.looped));
+                b.push(u8::from(mseg.smooth));
+                b.push(u8::from(mseg.bipolar));
+                b.extend_from_slice(&mseg.amount.to_le_bytes());
+                let used = mseg.used.clamp(2, os_model::modulation::MSEG_POINTS as u8);
+                b.push(used);
+                for p in &mseg.points[..usize::from(used)] {
+                    b.extend_from_slice(&p.at.to_le_bytes());
+                    b.extend_from_slice(&p.value.to_le_bytes());
+                }
+            }
+            ModSource::Macro(mc) => {
+                b.push(MACRO);
+                b.extend_from_slice(&mc.value.to_le_bytes());
             }
             ModSource::AudioFollower(f) => {
                 b.push(FOLLOWER);
@@ -269,11 +298,17 @@ fn write_graph(g: &ModGraph) -> Vec<u8> {
                     b.extend_from_slice(&id.0.to_le_bytes());
                     b.push(param.code());
                 }
+                ParameterKey::RouteDepth(route) => {
+                    b.push(ROUTE_DEPTH);
+                    b.extend_from_slice(&route.0.to_le_bytes());
+                }
             }
             b.extend_from_slice(&t.depth.to_le_bytes());
             b.push(curve_code(t.curve));
             b.push(polarity_code(t.polarity));
             b.push(u8::from(t.enabled));
+            // Layout 3: the route's own identity, which a depth destination names.
+            b.extend_from_slice(&t.route.0.to_le_bytes());
         }
     }
     // The strip's rows trail the modulators: a reader that stops after the count ignores them, and a payload cut
@@ -282,12 +317,15 @@ fn write_graph(g: &ModGraph) -> Vec<u8> {
     b
 }
 
-/// A source kind in [`write_graph`].
+/// A source kind in [`write_graph`]. The last two arrived with Task 2's modulator suite; a build from before them stops
+/// reading a graph that holds one, the same trade-off a route's own tag has.
 const LFO: u8 = 0;
 const STEPS: u8 = 1;
 const ENVELOPE: u8 = 2;
 const RANDOM: u8 = 3;
 const FOLLOWER: u8 = 4;
+const MACRO: u8 = 5;
+const MSEG: u8 = 6;
 
 /// A [`Timebase`] kind in [`write_graph`]: 0 hertz (f32), 1 synced (u16 sixteenths).
 const FREE: u8 = 0;
@@ -300,6 +338,8 @@ const HOST_CODE: u8 = 2;
 /// A route into the modulation graph (a modulator driving another's parameter). Only this version writes it; a reader
 /// that does not know it stops the graph there rather than misreading the bytes.
 const MOD_PARAM: u8 = 3;
+/// The depth of a route (a modulator shaping how far another one drives). Layout 3 and later.
+const ROUTE_DEPTH: u8 = 4;
 
 fn lfo_code(s: LfoShape) -> u8 {
     match s {
@@ -383,12 +423,15 @@ fn read_timebase(r: &mut Reader) -> Option<Timebase> {
 /// left out); `None` for an unrecognized layout or one too short to hold the counter.
 fn read_graph(d: &[u8]) -> Option<ModGraph> {
     let mut r = Reader(d);
+    // The graph's own layout, or one it shared with the file's before it had one. A file layout this build does not
+    // know does not matter here: the graph event is versioned on its own.
     let layout = r.u8()?;
-    if layout != LAYOUT && layout != LAYOUT_1 {
+    if layout != GRAPH_LAYOUT && layout != LAYOUT && layout != LAYOUT_1 {
         return None;
     }
     let count = r.u32()? as usize;
     let next = r.u32()?;
+    let mut next_route = if layout >= 3 { Some(r.u32()?) } else { None };
     let mut modulators: Vec<Modulator> = Vec::new();
     for index in 0..count {
         let (Some(id), Some(enabled)) = (r.u32(), r.u8()) else { break };
@@ -423,7 +466,21 @@ fn read_graph(d: &[u8]) -> Option<ModGraph> {
     }
     // Rows trail the modulators; a payload written before they existed (or cut short) is one row.
     let rows = r.u8().unwrap_or(0);
-    Some(ModGraph { modulators, next, rows })
+    let mut g = ModGraph { modulators, next, next_route: next_route.unwrap_or(0), rows };
+    // A payload from before layout 3 has no route identities: give its assignments theirs now, in graph order, so a
+    // depth destination written later can name one.
+    if next_route.is_none() {
+        let mut mint = 0u32;
+        for m in &mut g.modulators {
+            for t in &mut m.targets {
+                mint += 1;
+                t.route = os_model::modulation::RouteId(mint);
+            }
+        }
+        // No routes, no counter: a graph that never had one reads as a default one.
+        g.next_route = mint;
+    }
+    Some(g)
 }
 
 fn read_source(r: &mut Reader, kind: u8, layout: u8) -> Option<ModSource> {
@@ -458,6 +515,20 @@ fn read_source(r: &mut Reader, kind: u8, layout: u8) -> Option<ModSource> {
             let seed = r.u64()?;
             ModSource::Random(os_model::modulation::Random { period, amount, distribution, smooth, interpolate, seed, bipolar })
         }
+        MSEG => {
+            let period = read_timebase(r)?;
+            let looped = r.u8()? != 0;
+            let smooth = r.u8()? != 0;
+            let bipolar = r.u8()? != 0;
+            let amount = r.f32()?;
+            let used = r.u8()?.clamp(2, os_model::modulation::MSEG_POINTS as u8);
+            let mut points = [os_model::modulation::MsegPoint::default(); os_model::modulation::MSEG_POINTS];
+            for p in points.iter_mut().take(usize::from(used)) {
+                *p = os_model::modulation::MsegPoint { at: r.f32()?, value: r.f32()? };
+            }
+            ModSource::Mseg(os_model::modulation::Mseg { points, used, period, looped, smooth, amount, bipolar })
+        }
+        MACRO => ModSource::Macro(os_model::modulation::Macro { value: r.f32()? }),
         FOLLOWER => {
             let _source = r.u8()?;
             let amount = r.f32()?;
@@ -486,6 +557,7 @@ fn read_target(r: &mut Reader, layout: u8) -> Option<ModTarget> {
         LEGACY_INDEX => ParameterKey::LegacyPluginIndex(r.u16()?),
         HOST_CODE => ParameterKey::HostParameterCode(r.u16()?),
         MOD_PARAM => ParameterKey::ModulatorParam(ModulatorId(r.u32()?), os_model::modulation::ModParam::of(r.u8()?)?),
+        ROUTE_DEPTH => ParameterKey::RouteDepth(os_model::modulation::RouteId(r.u32()?)),
         _ => return None,
     };
     let depth = r.f32()?;
@@ -493,7 +565,9 @@ fn read_target(r: &mut Reader, layout: u8) -> Option<ModTarget> {
     let polarity = polarity_of(r.u8()?)?;
     // A routing's own switch arrived in layout 2; before that every routing was on.
     let enabled = if layout >= 2 { r.u8()? != 0 } else { true };
-    Some(ModTarget { path: ParameterPath { owner, parameter }, depth, curve, polarity, enabled })
+    // A route's identity arrived in layout 3; an older payload's routes are given one after reading.
+    let route = if layout >= 3 { os_model::modulation::RouteId(r.u32()?) } else { os_model::modulation::ROUTE_NONE };
+    Some(ModTarget { path: ParameterPath { owner, parameter }, route, depth, curve, polarity, enabled })
 }
 
 /// Puts the state a `.lemon` file holds into `s` and `plugins` (a project just opened, its ids given). A legacy project has
@@ -514,7 +588,8 @@ pub fn apply(s: &mut State, plugins: &mut Plugins, file: &FlpFile) {
             s.identity = reg;
         }
     }
-    if let Some(d) = read(lemon::MODULATION) {
+    // The graph is versioned on its own ([`GRAPH_LAYOUT`]), so it is not read through the file layout's filter.
+    if let Some(d) = lemon::data(file, lemon::MODULATION) {
         if let Some(g) = read_graph(&d) {
             s.modulation = g;
         }
@@ -1057,6 +1132,13 @@ fn start(count: usize) -> Vec<u8> {
     b
 }
 
+/// The modulation graph payload's version and modulator count: [`GRAPH_LAYOUT`], not the file's layout.
+fn graph_start(count: usize) -> Vec<u8> {
+    let mut b = vec![GRAPH_LAYOUT];
+    b.extend_from_slice(&(count as u32).to_le_bytes());
+    b
+}
+
 /// Reads a payload front to back; `None` once it runs out (a cut entry and the ones after it are left out).
 struct Reader<'a>(&'a [u8]);
 
@@ -1529,6 +1611,7 @@ mod modulation_graph_tests {
             lfo,
             ModTarget {
                 path: ParameterPath { owner: PersistentObjectId(1), parameter: ParameterKey::HostParameterCode(0x0100) },
+                route: os_model::modulation::ROUTE_NONE,
                 depth: -0.5,
                 curve: Curve::Exp,
                 polarity: Polarity::Unipolar,
@@ -1559,13 +1642,40 @@ mod modulation_graph_tests {
         let a = g.add(ModSource::default());
         let b = g.add(ModSource::default());
         assert!(g.route(a, b, os_model::modulation::ModParam::Rate, 0.75));
+        // A route's own depth as a destination: a third modulator shapes how far `a` drives `b`'s rate.
+        let c = g.add(ModSource::default());
+        let route = g.route_between(a, ParameterPath::on_modulator(b, os_model::modulation::ModParam::Rate)).expect("a route identity");
+        assert!(g.assign(c, ModTarget::new(ParameterPath::on_route(route)).with_depth(-0.4)));
         let bytes = write_graph(&g);
         let back = read_graph(&bytes).expect("a route reads back");
-        assert_eq!(back, g);
+        assert_eq!(back, g, "route identities and depth destinations travel");
+        assert_eq!(back.route_owner(route), Some(a));
+        assert_eq!(back.route_path(route), Some(ParameterPath::on_modulator(b, os_model::modulation::ModParam::Rate)));
         assert_eq!(
             back.get(a).and_then(|m| m.targets.first()).and_then(|t| t.path.modulator()),
             Some((b, os_model::modulation::ModParam::Rate))
         );
+    }
+
+    /// The graph event carries its own layout byte: the file's layout stays at 2, so every other event still reads in an
+    /// older build, while the graph is versioned independently (`GRAPH_LAYOUT`).
+    #[test]
+    fn the_graph_has_its_own_layout_version() {
+        assert_eq!(LAYOUT, 2, "the file's layout did not move");
+        assert_ne!(GRAPH_LAYOUT, LAYOUT, "the graph's version is not the file's");
+        let bytes = write_graph(&graph());
+        assert_eq!(bytes[0], GRAPH_LAYOUT, "the graph announces its own version");
+        assert!(read_graph(&bytes).is_some());
+        // A graph written when the two shared a layout still reads, and an empty one reads as a default graph.
+        let mut two = vec![LAYOUT];
+        two.extend_from_slice(&0u32.to_le_bytes()); // no modulators
+        two.extend_from_slice(&0u32.to_le_bytes()); // next id
+        two.push(0); // rows
+        assert_eq!(read_graph(&two), Some(ModGraph::default()));
+        // And a version this build does not know is still refused rather than misread.
+        let mut future = vec![GRAPH_LAYOUT + 1];
+        future.extend_from_slice(&[0; 9]);
+        assert_eq!(read_graph(&future), None);
     }
 
     #[test]
@@ -1615,8 +1725,20 @@ mod modulation_graph_tests {
             band: os_model::modulation::Band::Custom { low: 120.0, high: 3500.0 },
             ..os_model::modulation::AudioFollower::default()
         }));
+        // An MSEG keeps every point of its shape, its loop and its interpolation; a macro its position.
+        let mut mseg = os_model::modulation::Mseg { used: 4, looped: false, smooth: false, amount: 0.7, bipolar: false, period: Timebase::Free(0.5), ..os_model::modulation::Mseg::default() };
+        mseg.points[..4].copy_from_slice(&[
+            os_model::modulation::MsegPoint { at: 0.0, value: -1.0 },
+            os_model::modulation::MsegPoint { at: 0.1, value: 0.5 },
+            os_model::modulation::MsegPoint { at: 0.6, value: -0.25 },
+            os_model::modulation::MsegPoint { at: 1.0, value: 1.0 },
+        ]);
+        let m = g.add(ModSource::Mseg(mseg));
+        let mc = g.add(ModSource::Macro(os_model::modulation::Macro { value: 0.42 }));
         let back = read_graph(&write_graph(&g)).expect("round trip");
         assert_eq!(back, g);
+        assert_eq!(back.get(m).map(|x| x.source), Some(ModSource::Mseg(mseg)), "the shape reads back point for point");
+        assert_eq!(back.get(mc).map(|x| x.source), Some(ModSource::Macro(os_model::modulation::Macro { value: 0.42 })));
         assert!(matches!(back.get(r).map(|m| m.source), Some(ModSource::Random(os_model::modulation::Random { seed: 0xDEAD_BEEF_1234_5678, .. }))));
         assert!(back.get(f).is_some());
     }

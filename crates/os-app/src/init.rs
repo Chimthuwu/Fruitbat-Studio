@@ -176,6 +176,8 @@ pub fn name(s: &State, t: u32) -> String {
     }
     match target::decode(t) {
         Target::Tempo => "Tempo".into(),
+        // A route's own depth (a modulator shaping another's assignment).
+        Target::RouteDepth(..) => "Route depth".into(),
         Target::MainSwing => "Main swing".into(),
         Target::MainPitch => "Main pitch".into(),
         Target::ChannelVolume(ch) => format!("{} - Channel volume", channel(ch)),

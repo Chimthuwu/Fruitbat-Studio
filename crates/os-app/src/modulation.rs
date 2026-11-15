@@ -16,8 +16,8 @@ use crate::app::State;
 use crate::playlist::{Cmd, Mark, PItem};
 use crate::plugins::Plugins;
 use os_model::modulation::{
-    AudioFollower, Band, Curve, Detection, Distribution, Envelope, Lfo, LfoShape, ModSource, Modulator, ModulatorId, OwnerLocator, ParameterKey,
-    ParameterPath, ParamResolution, PersistentObjectId, Polarity, Random, Steps, Timebase,
+    AudioFollower, Band, Curve, Detection, Distribution, Envelope, Lfo, LfoShape, Macro, ModSource, Modulator, ModulatorId, Mseg, MsegPoint,
+    OwnerLocator, ParameterKey, ParameterPath, ParamResolution, PersistentObjectId, Polarity, Random, Steps, Timebase,
 };
 use os_model::target;
 
@@ -138,8 +138,9 @@ pub fn target_for(owner: OwnerLocator, key: ParameterKey, native_ids: Option<&[u
     };
     match key {
         ParameterKey::HostParameterCode(c) => Some((mk(c), ParamResolution::Unique(0))),
-        // A route into the graph is not a device parameter: `resolve_path` handles it before asking the registry.
-        ParameterKey::ModulatorParam(..) => None,
+        // A route inside the graph (a modulator's parameter or a route's depth) is not a device parameter:
+        // `resolve_path` handles it before asking the registry.
+        ParameterKey::ModulatorParam(..) | ParameterKey::RouteDepth(_) => None,
         ParameterKey::LegacyPluginIndex(i) => {
             let lower = plugin_lower(i)?;
             Some((mk(lower), ParamResolution::Unique(i)))
@@ -164,6 +165,13 @@ pub fn resolve_path(s: &State, plugins: &Plugins, path: ParameterPath) -> Option
     if let ParameterKey::ModulatorParam(id, param) = path.parameter {
         s.modulation.get(id)?;
         return Some((target::modulator_param(id.0, param.code()), ParamResolution::Unique(0)));
+    }
+    // A route's depth names one of the graph's own assignments: the modulator that makes it, and where it sits among
+    // its targets (which is how the engine addresses it).
+    if let ParameterKey::RouteDepth(route) = path.parameter {
+        let owner = s.modulation.route_owner(route)?;
+        let index = s.modulation.get(owner)?.targets.iter().position(|t| t.route == route)?;
+        return Some((target::route_depth(owner.0, index as u16)?, ParamResolution::Unique(0)));
     }
     let owner = s.identity.owners.get(&path.owner).copied()?;
     let native_ids = hosted_native_ids(plugins, owner);
@@ -202,10 +210,21 @@ fn modulator_path(target: u32) -> Option<ParameterPath> {
     Some(ParameterPath::on_modulator(os_model::modulation::ModulatorId(id), param))
 }
 
+/// A route's depth as a path: the assignment the engine target names, read back to its own identity in the graph.
+fn route_path(s: &State, target: u32) -> Option<ParameterPath> {
+    let target::Target::RouteDepth(owner, index) = target::decode(target) else { return None };
+    let m = s.modulation.get(os_model::modulation::ModulatorId(owner))?;
+    let route = m.targets.get(usize::from(index))?.route;
+    Some(ParameterPath::on_route(route))
+}
+
 /// `target` as a [`ParameterPath`] against the current registry: `None` when the owner has no id yet.
 pub fn path_in(s: &State, target: u32) -> Option<ParameterPath> {
     if let Some(path) = modulator_path(target) {
         s.modulation.get(path.modulator()?.0)?;
+        return Some(path);
+    }
+    if let Some(path) = route_path(s, target) {
         return Some(path);
     }
     let (owner, parameter) = path_of(target)?;
@@ -215,6 +234,9 @@ pub fn path_in(s: &State, target: u32) -> Option<ParameterPath> {
 /// `target` as a [`ParameterPath`], giving its owner an identity if it has none: what an assignment stores.
 pub fn target_path(s: &mut State, target: u32) -> Option<ParameterPath> {
     if let Some(path) = modulator_path(target) {
+        return Some(path);
+    }
+    if let Some(path) = route_path(s, target) {
         return Some(path);
     }
     let (owner, parameter) = path_of(target)?;
@@ -233,6 +255,13 @@ pub fn path_label(s: &State, path: ParameterPath) -> String {
             None => "Missing parameter".into(),
         };
     }
+    // A route's depth reads as the route it shapes: "LFO 1 - depth of Mixer 2 - Volume".
+    if let Some(route) = path.route() {
+        let Some(owner) = s.modulation.route_owner(route) else { return "Missing parameter".into() };
+        let name = s.modulation.get(owner).map_or_else(|| "Missing modulator".to_string(), name_of);
+        let destination = s.modulation.route_path(route).map_or_else(|| "Missing parameter".to_string(), |p| path_label(s, p));
+        return format!("{name} - depth of {destination}");
+    }
     let Some(loc) = s.identity.owners.get(&path.owner).copied() else { return "Missing parameter".into() };
     let key = match loc {
         OwnerLocator::Channel(ch) => Some(usize::from(ch)),
@@ -245,7 +274,7 @@ pub fn path_label(s: &State, path: ParameterPath) -> String {
         match path.parameter {
             ParameterKey::LegacyPluginIndex(i) => l.params.get(usize::from(i)),
             ParameterKey::PluginNativeId(native) => l.params.iter().find(|e| e.id == native),
-            ParameterKey::HostParameterCode(_) | ParameterKey::ModulatorParam(..) => None,
+            ParameterKey::HostParameterCode(_) | ParameterKey::ModulatorParam(..) | ParameterKey::RouteDepth(_) => None,
         }
         .map(|e| e.name.clone())
     });
@@ -270,6 +299,8 @@ pub fn name_of(m: &Modulator) -> String {
         os_model::modulation::ModSource::Envelope(_) => "ENV",
         os_model::modulation::ModSource::Random(_) => "RANDOM",
         os_model::modulation::ModSource::AudioFollower(_) => "FOLLOWER",
+        os_model::modulation::ModSource::Mseg(_) => "MSEG",
+        os_model::modulation::ModSource::Macro(_) => "MACRO",
     };
     format!("{kind} {}", m.id.0)
 }
@@ -288,6 +319,8 @@ pub enum Kind {
     Lfo,
     Random,
     Follower,
+    Mseg,
+    Macro,
     Steps,
     Envelope,
 }
@@ -301,6 +334,8 @@ impl Kind {
             ModSource::Envelope(_) => Kind::Envelope,
             ModSource::Random(_) => Kind::Random,
             ModSource::AudioFollower(_) => Kind::Follower,
+            ModSource::Mseg(_) => Kind::Mseg,
+            ModSource::Macro(_) => Kind::Macro,
         }
     }
 
@@ -309,14 +344,22 @@ impl Kind {
             Kind::Lfo => "LFO",
             Kind::Random => "Random",
             Kind::Follower => "Audio Follower",
+            Kind::Mseg => "MSEG",
+            Kind::Macro => "Macro",
             Kind::Steps => "Steps",
             Kind::Envelope => "Envelope",
         }
     }
 
-    /// The three types the project slots offer (the handoff's v1 set). Steps and Envelope stay readable in
-    /// old projects and keep their knob-menu entries, but a new slot starts as one of these.
-    pub const PROJECT: [Kind; 3] = [Kind::Lfo, Kind::Random, Kind::Follower];
+    /// The types a new slot can be made as (the strip's add menu). Steps and Envelope are not here: they stay readable
+    /// in old projects and keep their knob-menu entries, but a new modulator starts as one of these.
+    pub const PROJECT: [Kind; 5] = [Kind::Lfo, Kind::Random, Kind::Follower, Kind::Mseg, Kind::Macro];
+
+    /// The type buttons the editor draws, as many as fit its title row (the rest are in its menu's Source list).
+    pub const EDITOR: [Kind; 3] = [Kind::Lfo, Kind::Random, Kind::Follower];
+
+    /// The kinds the editor's menu offers, including the ones from old projects.
+    pub const MENU: [Kind; 7] = [Kind::Lfo, Kind::Random, Kind::Follower, Kind::Mseg, Kind::Macro, Kind::Steps, Kind::Envelope];
 }
 
 /// `src` as `kind`, keeping the rate it had where the new kind has one: an LFO and a step pattern are both timed, so a
@@ -326,20 +369,25 @@ pub fn set_kind(src: ModSource, kind: Kind) -> ModSource {
         ModSource::Lfo(l) => Some(l.period),
         ModSource::Steps(s) => Some(s.period),
         ModSource::Random(r) => Some(r.period),
-        ModSource::Envelope(_) | ModSource::AudioFollower(_) => None,
+        ModSource::Mseg(m) => Some(m.period),
+        ModSource::Envelope(_) | ModSource::AudioFollower(_) | ModSource::Macro(_) => None,
     };
     match (kind, src) {
         (Kind::Lfo, ModSource::Lfo(_))
         | (Kind::Steps, ModSource::Steps(_))
         | (Kind::Envelope, ModSource::Envelope(_))
         | (Kind::Random, ModSource::Random(_))
-        | (Kind::Follower, ModSource::AudioFollower(_)) => src,
+        | (Kind::Follower, ModSource::AudioFollower(_))
+        | (Kind::Mseg, ModSource::Mseg(_))
+        | (Kind::Macro, ModSource::Macro(_)) => src,
         (Kind::Lfo, _) => ModSource::Lfo(Lfo { period: period.unwrap_or(Timebase::Sync(4)), ..Lfo::default() }),
         // A pattern, not sixteen zeros: a step source that came in silent would read as a broken modulator.
         (Kind::Steps, _) => ModSource::Steps(Steps { values: step_preset(1), period: period.unwrap_or(Timebase::Sync(1)), smooth: false }),
         (Kind::Envelope, _) => ModSource::Envelope(envelope_preset(0)),
         (Kind::Random, _) => ModSource::Random(Random { period: period.unwrap_or(Timebase::Sync(4)), seed: os_model::modulation::fresh_seed(ModulatorId(0)), ..Random::default() }),
         (Kind::Follower, _) => ModSource::AudioFollower(AudioFollower::default()),
+        (Kind::Mseg, _) => ModSource::Mseg(Mseg { period: period.unwrap_or(Timebase::Sync(16)), ..Mseg::default() }),
+        (Kind::Macro, _) => ModSource::Macro(Macro::default()),
     }
 }
 
@@ -424,7 +472,31 @@ pub fn source_text(src: ModSource) -> String {
         ModSource::Envelope(_) => "envelope".into(),
         ModSource::Random(r) => format!("random {}", rate_text(r.period)),
         ModSource::AudioFollower(_) => "audio follower".into(),
+        ModSource::Mseg(m) => format!("MSEG {}", rate_text(m.period)),
+        ModSource::Macro(_) => "macro".into(),
     }
+}
+
+/// The shapes the MSEG menu lays, keeping the source's own rate, amount and polarity.
+fn mseg_preset(m: &Mseg, k: u8) -> Mseg {
+    let mut out = Mseg { points: [MsegPoint::default(); os_model::modulation::MSEG_POINTS], ..*m };
+    let shape: &[(f32, f32)] = match k {
+        0 => &[(0.0, -1.0), (1.0, 1.0)],
+        1 => &[(0.0, -1.0), (0.02, 1.0), (0.35, -1.0), (1.0, -1.0)],
+        2 => &[(0.0, -1.0), (0.2, -1.0), (0.21, 1.0), (0.4, 1.0), (0.41, -1.0), (1.0, -1.0)],
+        3 => &[(0.0, 0.0), (0.25, 1.0), (0.5, 0.0), (0.75, -1.0), (1.0, 0.0)],
+        _ => &[(0.0, -1.0), (0.5, 1.0), (1.0, -1.0)],
+    };
+    for (i, &(at, value)) in shape.iter().take(os_model::modulation::MSEG_POINTS).enumerate() {
+        out.points[i] = MsegPoint { at, value };
+    }
+    out.used = shape.len().min(os_model::modulation::MSEG_POINTS) as u8;
+    out
+}
+
+/// Whether two MSEGs describe the same shape (the menu ticks the preset a modulator is on).
+fn same_mseg(a: &Mseg, b: &Mseg) -> bool {
+    a.used == b.used && a.smooth == b.smooth && a.looped == b.looped && a.points == b.points
 }
 
 /// A sixteen-step pattern the editor can lay: clear, stairs up, stairs down, alternating, and a fixed scatter (fixed so
@@ -487,7 +559,7 @@ pub fn editor_menu(s: &State, id: ModulatorId, target: u32) -> Option<PItem> {
         PItem::sep(),
         PItem::head("Source"),
     ];
-    for kind in [Kind::Lfo, Kind::Steps, Kind::Envelope] {
+    for kind in Kind::MENU {
         items.push(PItem::new(kind.label(), Cmd::Mod(ModCmd::SetKind(id, kind))).mark(Mark::Radio(Kind::of(source) == kind)));
     }
     match source {
@@ -540,6 +612,28 @@ pub fn editor_menu(s: &State, id: ModulatorId, target: u32) -> Option<PItem> {
             let seed = Cmd::Mod(ModCmd::RerollSeed(id));
             items.push(PItem::new("Reroll seed", seed));
             rate_items(&mut items, id, r.period, |period| ModSource::Random(Random { period, ..r }));
+        }
+        ModSource::Mseg(m) => {
+            items.push(PItem::head("Shape"));
+            for (k, label) in [(0, "Ramp up"), (1, "Pluck"), (2, "Pulse"), (3, "Zigzag"), (4, "Wave")] {
+                let preset = mseg_preset(&m, k);
+                let cmd = Cmd::Mod(ModCmd::SetSource(id, ModSource::Mseg(preset)));
+                items.push(PItem::new(label, cmd).mark(Mark::Check(same_mseg(&m, &preset))));
+            }
+            let looped = Cmd::Mod(ModCmd::SetSource(id, ModSource::Mseg(Mseg { looped: !m.looped, ..m })));
+            items.push(PItem::new("Loop", looped).mark(Mark::Check(m.looped)));
+            let smooth = Cmd::Mod(ModCmd::SetSource(id, ModSource::Mseg(Mseg { smooth: !m.smooth, ..m })));
+            items.push(PItem::new("Lines between points", smooth).mark(Mark::Check(m.smooth)));
+            let bipolar = Cmd::Mod(ModCmd::SetSource(id, ModSource::Mseg(Mseg { bipolar: !m.bipolar, ..m })));
+            items.push(PItem::new("Bipolar", bipolar).mark(Mark::Check(m.bipolar)));
+            rate_items(&mut items, id, m.period, |period| ModSource::Mseg(Mseg { period, ..m }));
+        }
+        ModSource::Macro(mc) => {
+            items.push(PItem::head("Value"));
+            for (v, label) in [(0.0, "0%"), (0.25, "25%"), (0.5, "50%"), (0.75, "75%"), (1.0, "100%")] {
+                let cmd = Cmd::Mod(ModCmd::SetSource(id, ModSource::Macro(Macro { value: v })));
+                items.push(PItem::new(label, cmd).mark(Mark::Check((mc.value - v).abs() < 0.005)));
+            }
         }
         ModSource::AudioFollower(f) => {
             items.push(PItem::head("Detection"));
@@ -1272,12 +1366,14 @@ pub fn key(app: &mut crate::app::App, key: &winit::keyboard::Key, ctrl: bool, al
 /// Puts the route at `depth` on the graph and hands the pointer a depth drag for it. The graph as it was goes into
 /// the drag, so a release is one undo step and Esc restores it exactly.
 fn depth_drag(app: &mut crate::app::App, id: ModulatorId, path: ParameterPath, depth: f32, before: os_model::modulation::ModGraph) {
-    if let Some(m) = app.state.modulation.get_mut(id) {
-        if let Some(t) = m.targets.iter_mut().find(|t| t.path == path) {
+    let existing = app.state.modulation.get(id).is_some_and(|m| m.targets.iter().any(|t| t.path == path));
+    if existing {
+        if let Some(t) = app.state.modulation.get_mut(id).and_then(|m| m.targets.iter_mut().find(|t| t.path == path)) {
             *t = t.with_depth(depth);
-        } else {
-            m.targets.push(os_model::modulation::ModTarget::new(path).with_depth(depth));
         }
+    } else {
+        // Through the graph, so the new assignment is given its own route identity (a depth destination names it).
+        app.state.modulation.assign(id, os_model::modulation::ModTarget::new(path).with_depth(depth));
     }
     app.drag = Some(crate::app::Drag::ModDepth { id, path, y0: app.mouse.1, depth, before });
     sync(app);
@@ -1317,6 +1413,39 @@ pub fn begin_route_drag(app: &mut crate::app::App, from: ModulatorId, to: Modula
     true
 }
 
+/// Routing mode, on another modulator's assignment arc: the armed modulator starts driving **that route's depth**, so it
+/// shapes how far that modulator drives the parameter. False when the graph would refuse.
+pub fn begin_route_depth_drag(app: &mut crate::app::App, from: ModulatorId, owner: ModulatorId, target: u32) -> bool {
+    let Some(destination) = path_in(&app.state, target) else { return false };
+    let Some(route) = app.state.modulation.route_between(owner, destination) else { return false };
+    if !can_route_depth(&app.state, from, route) {
+        return false;
+    }
+    let path = ParameterPath::on_route(route);
+    let before = app.state.modulation.clone();
+    let depth = app
+        .state
+        .modulation
+        .get(from)
+        .and_then(|m| m.targets.iter().find(|t| t.path == path))
+        .map_or(os_model::modulation::ModTarget::DEPTH_DEFAULT, |t| t.depth);
+    depth_drag(app, from, path, depth, before);
+    true
+}
+
+/// Whether modulator `from` may drive the depth of route `route`: the route has to be in the graph, its own destination
+/// may not itself be a depth (no depth of a depth), and it may not shape a route on its own side of the chain — the
+/// same loop rule as a route into a modulator's parameter. An existing route's depth is always allowed.
+pub fn can_route_depth(s: &State, from: ModulatorId, route: os_model::modulation::RouteId) -> bool {
+    let Some(owner) = s.modulation.route_owner(route) else { return false };
+    if s.modulation.route_path(route).is_some_and(|p| p.route().is_some()) || s.modulation.get(from).is_none() {
+        return false;
+    }
+    let path = ParameterPath::on_route(route);
+    let driving = s.modulation.get(from).is_some_and(|m| m.targets.iter().any(|t| t.path == path));
+    from != owner && (driving || !s.modulation.reaches(owner, from))
+}
+
 /// Whether the graph would accept modulator `from` driving `param` of modulator `to`: the destination has that
 /// parameter, and the route is neither a self-drive nor one that closes a loop (`ModGraph::route` refuses exactly
 /// these). An existing route is always allowed, because its row is how it is taken away again.
@@ -1332,8 +1461,9 @@ pub fn can_route(s: &State, from: ModulatorId, to: ModulatorId, param: os_model:
     driving || !s.modulation.reaches(to, from)
 }
 
-/// The graph parameter a knob of the editor stands for. A knob the graph cannot address (a follower's attack, say)
-/// is not a routing destination.
+/// The graph parameter a knob of the editor stands for. Every knob of the editor is a routing destination; whether a
+/// given source has that parameter is [`os_model::modulation::ModParam::applies_to`]'s answer, which is what the
+/// destination's menu and [`can_route`] ask.
 pub fn knob_param(field: KnobField) -> Option<os_model::modulation::ModParam> {
     use os_model::modulation::ModParam;
     match field {
@@ -1341,7 +1471,11 @@ pub fn knob_param(field: KnobField) -> Option<os_model::modulation::ModParam> {
         KnobField::Amount => Some(ModParam::Amount),
         KnobField::Phase => Some(ModParam::Phase),
         KnobField::Offset => Some(ModParam::Offset),
-        KnobField::Attack | KnobField::Release | KnobField::Gain | KnobField::Smooth => None,
+        KnobField::Attack => Some(ModParam::Attack),
+        KnobField::Release => Some(ModParam::Release),
+        KnobField::Gain => Some(ModParam::Gain),
+        KnobField::Smooth => Some(ModParam::Smooth),
+        KnobField::Value => Some(ModParam::Value),
     }
 }
 
@@ -1424,6 +1558,10 @@ pub enum ModAct {
     RateStep(ModulatorId, i32),
     /// The rate knob's mode button: tempo-synced rates and free hertz.
     RateMode(ModulatorId),
+    /// An MSEG's loop switch: run the shape again every period, or play it once and hold its last point.
+    ToggleLoop(ModulatorId),
+    /// An MSEG's interpolation: lines between its points, or a hold on each one.
+    ToggleSmooth(ModulatorId),
     ToggleBipolar(ModulatorId),
     ToggleDistribution(ModulatorId),
     ToggleInterpolate(ModulatorId),
@@ -1477,6 +1615,8 @@ pub enum KnobField {
     Release,
     Gain,
     Smooth,
+    /// A macro's position (its whole output).
+    Value,
 }
 
 /// The value a knob shows, `0..=1`.
@@ -1494,6 +1634,9 @@ pub fn knob_value(source: ModSource, field: KnobField) -> f32 {
         (ModSource::AudioFollower(f), KnobField::Release) => (f.release / 10.0).clamp(0.0, 1.0),
         (ModSource::AudioFollower(f), KnobField::Gain) => (f.gain_db + 24.0) / 48.0,
         (ModSource::Steps(s), KnobField::Rate) => rate_pos(s.period),
+        (ModSource::Mseg(m), KnobField::Rate) => rate_pos(m.period),
+        (ModSource::Mseg(m), KnobField::Amount) => m.amount,
+        (ModSource::Macro(mc), KnobField::Value) => mc.value,
         _ => 0.5,
     }
 }
@@ -1514,6 +1657,9 @@ pub fn with_knob(source: ModSource, field: KnobField, v: f32) -> ModSource {
         (ModSource::AudioFollower(f), KnobField::Release) => ModSource::AudioFollower(AudioFollower { release: (0.001 + v * 10.0).max(0.001), ..f }),
         (ModSource::AudioFollower(f), KnobField::Gain) => ModSource::AudioFollower(AudioFollower { gain_db: v * 48.0 - 24.0, ..f }),
         (ModSource::Steps(st), KnobField::Rate) => ModSource::Steps(Steps { period: period_at(st.period, v), ..st }),
+        (ModSource::Mseg(m), KnobField::Rate) => ModSource::Mseg(Mseg { period: period_at(m.period, v), ..m }),
+        (ModSource::Mseg(m), KnobField::Amount) => ModSource::Mseg(Mseg { amount: v, ..m }),
+        (ModSource::Macro(_), KnobField::Value) => ModSource::Macro(Macro { value: v }),
         (s, _) => s,
     }
 }
@@ -1664,6 +1810,7 @@ pub fn act(app: &mut crate::app::App, a: ModAct) {
                 ModSource::Lfo(l) => ModSource::Lfo(Lfo { period: toggle_period(l.period), ..l }),
                 ModSource::Random(r) => ModSource::Random(Random { period: toggle_period(r.period), ..r }),
                 ModSource::Steps(st) => ModSource::Steps(Steps { period: toggle_period(st.period), ..st }),
+                ModSource::Mseg(m) => ModSource::Mseg(Mseg { period: toggle_period(m.period), ..m }),
                 other => other,
             });
             if let Some(src) = next {
@@ -1683,6 +1830,7 @@ pub fn act(app: &mut crate::app::App, a: ModAct) {
                     ModSource::Lfo(l) => ModSource::Lfo(Lfo { period: step(l.period), ..l }),
                     ModSource::Random(r) => ModSource::Random(Random { period: step(r.period), ..r }),
                     ModSource::Steps(st) => ModSource::Steps(Steps { period: step(st.period), ..st }),
+                    ModSource::Mseg(m) => ModSource::Mseg(Mseg { period: step(m.period), ..m }),
                     other => other,
                 }
             });
@@ -1695,6 +1843,27 @@ pub fn act(app: &mut crate::app::App, a: ModAct) {
             let next = s.modulation.get(id).map(|m| match m.source {
                 ModSource::Lfo(l) => ModSource::Lfo(Lfo { bipolar: !l.bipolar, ..l }),
                 ModSource::Random(r) => ModSource::Random(Random { bipolar: !r.bipolar, ..r }),
+                ModSource::Mseg(m) => ModSource::Mseg(Mseg { bipolar: !m.bipolar, ..m }),
+                other => other,
+            });
+            if let Some(src) = next {
+                run(app, ModCmd::SetSource(id, src));
+                return;
+            }
+        }
+        ModAct::ToggleLoop(id) => {
+            let next = s.modulation.get(id).map(|m| match m.source {
+                ModSource::Mseg(mseg) => ModSource::Mseg(Mseg { looped: !mseg.looped, ..mseg }),
+                other => other,
+            });
+            if let Some(src) = next {
+                run(app, ModCmd::SetSource(id, src));
+                return;
+            }
+        }
+        ModAct::ToggleSmooth(id) => {
+            let next = s.modulation.get(id).map(|m| match m.source {
+                ModSource::Mseg(mseg) => ModSource::Mseg(Mseg { smooth: !mseg.smooth, ..mseg }),
                 other => other,
             });
             if let Some(src) = next {
@@ -1767,6 +1936,13 @@ pub fn act(app: &mut crate::app::App, a: ModAct) {
             return;
         }
         ModAct::DepthDrag(id, target) => {
+            // With routing mode armed on another modulator, this assignment's depth is the destination: the armed
+            // modulator shapes how far this one drives, instead of the depth being dragged.
+            if let Some(from) = s.mod_routing.filter(|from| *from != id)
+                && begin_route_depth_drag(app, from, id, target)
+            {
+                return;
+            }
             begin_routing_drag(app, id, target);
             return;
         }
@@ -1826,7 +2002,7 @@ pub fn engine_spec(s: &State, plugins: &Plugins) -> (Vec<os_engine::Modulator>, 
                     let target = target::decode(target);
                     // A route into the graph is an edge, not a project parameter: the engine applies it while it evaluates
                     // and never publishes a value for it, so the snapshot must not offer one (a cursor pinned at zero).
-                    if !matches!(target, target::Target::ModulatorParam(..)) && !targets.contains(&target) {
+                    if !matches!(target, target::Target::ModulatorParam(..) | target::Target::RouteDepth(..)) && !targets.contains(&target) {
                         targets.push(target);
                     }
                     Some(os_engine::ModTarget { target, depth: t.depth, curve: t.curve, polarity: t.polarity, enabled: t.enabled })
@@ -1927,7 +2103,11 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(offered, ModParam::ALL.to_vec(), "every parameter an LFO has");
+        assert_eq!(
+            offered,
+            vec![ModParam::Rate, ModParam::Amount, ModParam::Phase, ModParam::Offset],
+            "every parameter an LFO has"
+        );
         assert!(rows.iter().any(|(label, _)| label.starts_with("LFO 1")), "the rows name the driver: {rows:?}");
         // A row routes the armed modulator into that parameter of this one.
         crate::modulation::act(&mut app, ModAct::DriveParam(b, a, ModParam::Rate));
@@ -1995,6 +2175,121 @@ mod tests {
         crate::modulation::act(&mut app, ModAct::Knob(a, KnobField::Rate));
         assert!(app.state.modulation.get(steps).unwrap().targets.is_empty(), "no loop was drawn");
         assert!(matches!(app.drag, Some(crate::app::Drag::ModKnob { .. })), "the knob edited itself instead");
+    }
+
+    /// A follower's attack, release and gain are destinations like any other: its menu offers them (and not a rate),
+    /// and a press on its knob while routing mode is armed draws the route into it, with the arc a device parameter gets.
+    #[test]
+    fn a_followers_own_knobs_take_routes() {
+        use os_model::modulation::{AudioFollower, ModParam};
+        let mut app = crate::app::App::new(None);
+        let driver = app.state.modulation.add(ModSource::default());
+        let follower = app.state.modulation.add(ModSource::AudioFollower(AudioFollower::default()));
+        crate::modulation::act(&mut app, ModAct::Route(driver));
+        let offered: Vec<ModParam> = menu_items(&app.state, app.state.modulation.get(follower).unwrap())
+            .into_iter()
+            .filter_map(|(_, act)| match act {
+                ModAct::DriveParam(_, _, p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(offered, vec![ModParam::Amount, ModParam::Attack, ModParam::Release, ModParam::Gain]);
+        // The press on the attack knob routes there, at the default depth, and the arc is drawn for it.
+        crate::modulation::act(&mut app, ModAct::Knob(follower, KnobField::Attack));
+        let path = os_model::modulation::ParameterPath::on_modulator(follower, ModParam::Attack);
+        let target = app.state.modulation.get(driver).and_then(|m| m.targets.first()).copied().expect("the route");
+        assert_eq!(target.path, path);
+        assert_eq!(target.depth, os_model::modulation::ModTarget::DEPTH_DEFAULT);
+        app.drag = None;
+        assert_eq!(
+            app.state.modulation.targets_on(path).len(),
+            1,
+            "the route is on the graph, so the knob's own arc finds it"
+        );
+        // The engine gets it as the graph's own edge, naming the parameter's own byte.
+        let (spec, _) = engine_spec(&app.state, &app.plugins);
+        assert!(spec.iter().find(|m| m.id == driver.0).is_some_and(|m| m
+            .targets
+            .iter()
+            .any(|t| matches!(t.target, target::Target::ModulatorParam(id, code) if id == follower.0 && code == ModParam::Attack.code()))));
+    }
+
+    /// Task 2's two graph-native sources: an MSEG and a macro are kinds of their own in the add menu, they take editor
+    /// knobs (a rate and an amount; a value), their switches are undo steps, and a switch of kind keeps the rate.
+    #[test]
+    fn an_mseg_and_a_macro_are_kinds_of_their_own() {
+        use os_model::modulation::{Macro, ModParam, Mseg};
+        let mut app = crate::app::App::new(None);
+        assert!(Kind::PROJECT.contains(&Kind::Mseg) && Kind::PROJECT.contains(&Kind::Macro), "both are in the add menu");
+        act(&mut app, ModAct::AddKind(0, Kind::Mseg));
+        let id = app.state.modulation.modulator_at_slot(0).map(|m| m.id).expect("the new modulator");
+        let source = app.state.modulation.get(id).unwrap().source;
+        assert_eq!(Kind::of(source), Kind::Mseg);
+        assert!(matches!(source, ModSource::Mseg(_)));
+        assert!(source_text(source).starts_with("MSEG"), "{}", source_text(source));
+        // Its rate knob moves the shape's period, and its amount knob its gain.
+        let at = knob_value(source, KnobField::Rate);
+        let slower = with_knob(source, KnobField::Rate, at - 0.2);
+        let slower_period = match slower {
+            ModSource::Mseg(m) => m.period,
+            _ => panic!("an MSEG"),
+        };
+        assert!(matches!(with_knob(source, KnobField::Amount, 0.3), ModSource::Mseg(m) if (m.amount - 0.3).abs() < 1e-6));
+        // A switch to a kind that has a rate keeps it.
+        assert!(matches!(set_kind(slower, Kind::Lfo), ModSource::Lfo(Lfo { period, .. }) if period == slower_period));
+        // Loop and lines are switches on the source, each its own undo step.
+        act(&mut app, ModAct::ToggleLoop(id));
+        assert!(matches!(app.state.modulation.get(id).unwrap().source, ModSource::Mseg(m) if !m.looped));
+        act(&mut app, ModAct::ToggleSmooth(id));
+        assert!(matches!(app.state.modulation.get(id).unwrap().source, ModSource::Mseg(m) if !m.smooth));
+        assert!(crate::history::undo(&mut app.state).is_some(), "the lines switch was one undo step");
+        assert!(matches!(app.state.modulation.get(id).unwrap().source, ModSource::Mseg(m) if m.smooth));
+        // A macro is a source whose position is both its output and a routing destination.
+        let mac = app.state.modulation.add(ModSource::Macro(Macro::default()));
+        assert_eq!(Kind::of(app.state.modulation.get(mac).unwrap().source), Kind::Macro);
+        let turned = with_knob(app.state.modulation.get(mac).unwrap().source, KnobField::Value, 0.75);
+        assert!(matches!(turned, ModSource::Macro(m) if (m.value - 0.75).abs() < 1e-6));
+        assert_eq!(knob_param(KnobField::Value), Some(ModParam::Value));
+        assert!(can_route(&app.state, id, mac, ModParam::Value), "an MSEG can turn the macro");
+        assert!(!can_route(&app.state, mac, mac, ModParam::Value), "but a modulator cannot drive itself");
+        assert!(matches!(set_kind(ModSource::Mseg(Mseg::default()), Kind::Macro), ModSource::Macro(_)));
+    }
+
+    /// With routing mode armed, a press on another modulator's assignment arc routes into *that route's depth*: the
+    /// armed modulator shapes how far the other one drives, the assignment keeps its authored depth, and the row the
+    /// browser lists reads as "depth of ...".
+    #[test]
+    fn a_press_on_an_arc_routes_into_the_routes_depth() {
+        use os_model::modulation::ModParam;
+        let mut app = crate::app::App::new(None);
+        let from = app.state.modulation.add(ModSource::default());
+        let owner = app.state.modulation.add(ModSource::default());
+        let target = os_model::target::modulator_param(owner.0, ModParam::Amount.code());
+        let path = ParameterPath::on_modulator(owner, ModParam::Amount);
+        assert!(app.state.modulation.assign(owner, os_model::modulation::ModTarget::new(path).with_depth(0.4)));
+        let route = app.state.modulation.route_between(owner, path).expect("a route identity");
+        // Armed on `from`, a press on the arc's endpoint routes the depth instead of dragging it.
+        act(&mut app, ModAct::Route(from));
+        app.mouse = (4.0, 4.0);
+        act(&mut app, ModAct::DepthDrag(owner, target));
+        let driver = app.state.modulation.get(from).unwrap();
+        let assignment = driver.targets.first().copied().expect("the depth route");
+        assert_eq!(assignment.path, ParameterPath::on_route(route));
+        assert_eq!(assignment.depth, os_model::modulation::ModTarget::DEPTH_DEFAULT);
+        assert!(matches!(app.drag, Some(crate::app::Drag::ModDepth { .. })), "the press drags the new route's depth");
+        assert_eq!(app.state.modulation.get(owner).unwrap().targets[0].depth, 0.4, "the shaped route keeps its depth");
+        // It reads as the route it shapes, and the engine gets it as that assignment's depth.
+        assert_eq!(path_label(&app.state, ParameterPath::on_route(route)), "LFO 2 - depth of LFO 2 - Amount");
+        let (spec, _) = engine_spec(&app.state, &app.plugins);
+        assert!(spec.iter().find(|m| m.id == from.0).is_some_and(|m| m
+            .targets
+            .iter()
+            .any(|t| t.target == os_model::target::Target::RouteDepth(owner.0, 0))), "the engine names the assignment");
+        // A modulator cannot shape the depth of its own route.
+        app.drag = None;
+        app.state.mod_routing = None;
+        assert!(!can_route_depth(&app.state, owner, route));
+        assert!(can_route_depth(&app.state, from, route));
     }
 
     /// A route into the graph resolves from the graph itself (no device identity) and reaches the engine as the

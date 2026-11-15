@@ -67,6 +67,9 @@ pub enum ParameterKey {
     /// path's owner is unused ([`PERSISTENT_NONE`]): a modulator is not a device and never moves, so its id is the
     /// whole identity.
     ModulatorParam(ModulatorId, ModParam),
+    /// The depth of one route — one assignment a modulator has ([`ModTarget::route`]) — so a modulator can shape how
+    /// far another one drives a parameter. The path's owner is unused, like [`ParameterKey::ModulatorParam`].
+    RouteDepth(RouteId),
 }
 
 /// A parameter of a modulator that another modulator can drive (the handoff's modulator-to-modulator routing).
@@ -84,19 +87,45 @@ pub enum ModParam {
     Phase,
     /// An LFO's constant shift added to its output.
     Offset,
+    /// A follower's rise time, in seconds.
+    Attack,
+    /// A follower's fall time, in seconds.
+    Release,
+    /// A follower's detector gain, in decibels.
+    Gain,
+    /// A random source's slew from the previous cycle's value: `0` is a hard step, `1` glides the whole cycle.
+    Smooth,
+    /// A macro's position, `0..=1`.
+    Value,
 }
 
 impl ModParam {
-    /// Every parameter, in menu order.
-    pub const ALL: [ModParam; 4] = [ModParam::Rate, ModParam::Amount, ModParam::Phase, ModParam::Offset];
+    /// Every parameter, in menu order. Not every source has every one of them: see [`ModParam::applies_to`].
+    pub const ALL: [ModParam; 9] = [
+        ModParam::Rate,
+        ModParam::Amount,
+        ModParam::Phase,
+        ModParam::Offset,
+        ModParam::Attack,
+        ModParam::Release,
+        ModParam::Gain,
+        ModParam::Smooth,
+        ModParam::Value,
+    ];
 
-    /// The byte a `.lemon` file stores for it.
+    /// The byte a `.lemon` file stores for it. The first four are the original handoff's; the rest arrived with the
+    /// followers' and the random source's own parameters.
     pub fn code(self) -> u8 {
         match self {
             ModParam::Rate => 0,
             ModParam::Amount => 1,
             ModParam::Phase => 2,
             ModParam::Offset => 3,
+            ModParam::Attack => 4,
+            ModParam::Release => 5,
+            ModParam::Gain => 6,
+            ModParam::Smooth => 7,
+            ModParam::Value => 8,
         }
     }
 
@@ -107,6 +136,11 @@ impl ModParam {
             1 => ModParam::Amount,
             2 => ModParam::Phase,
             3 => ModParam::Offset,
+            4 => ModParam::Attack,
+            5 => ModParam::Release,
+            6 => ModParam::Gain,
+            7 => ModParam::Smooth,
+            8 => ModParam::Value,
             _ => return None,
         })
     }
@@ -118,19 +152,29 @@ impl ModParam {
             ModParam::Amount => "Amount",
             ModParam::Phase => "Phase",
             ModParam::Offset => "Offset",
+            ModParam::Attack => "Attack",
+            ModParam::Release => "Release",
+            ModParam::Gain => "Gain",
+            ModParam::Smooth => "Smooth",
+            ModParam::Value => "Value",
         }
     }
 
-    /// Whether `source` has this parameter at all. A step sequence has a rate but no amount, phase or offset; a
-    /// one-shot envelope has none of the four (it follows the transport, not a period).
+    /// Whether `source` has this parameter at all.
+    ///
+    /// An LFO has all of its four (rate, amount, phase, offset); a random source has a rate, an amount and its
+    /// smoothing; a step sequence has a rate alone; an MSEG has a rate and an amount (its shape is its own); a macro has
+    /// nothing but its position; a follower has an amount, an attack, a release and a gain (it follows the master
+    /// rather than a period, so it has no rate); a one-shot envelope has none of them, since it follows the transport.
     pub fn applies_to(self, source: &ModSource) -> bool {
-        match (self, source) {
-            (_, ModSource::Envelope(_)) => false,
-            (ModParam::Rate, _) => true,
-            (ModParam::Amount, ModSource::Steps(_)) => false,
-            (ModParam::Amount, _) => true,
-            (ModParam::Phase | ModParam::Offset, ModSource::Lfo(_)) => true,
-            (ModParam::Phase | ModParam::Offset, _) => false,
+        match source {
+            ModSource::Lfo(_) => matches!(self, ModParam::Rate | ModParam::Amount | ModParam::Phase | ModParam::Offset),
+            ModSource::Random(_) => matches!(self, ModParam::Rate | ModParam::Amount | ModParam::Smooth),
+            ModSource::Steps(_) => matches!(self, ModParam::Rate),
+            ModSource::Mseg(_) => matches!(self, ModParam::Rate | ModParam::Amount),
+            ModSource::Macro(_) => matches!(self, ModParam::Value),
+            ModSource::AudioFollower(_) => matches!(self, ModParam::Amount | ModParam::Attack | ModParam::Release | ModParam::Gain),
+            ModSource::Envelope(_) => false,
         }
     }
 }
@@ -152,12 +196,31 @@ impl ParameterPath {
         ParameterPath { owner: PERSISTENT_NONE, parameter: ParameterKey::ModulatorParam(id, param) }
     }
 
+    /// The path to the depth of route `route` ([`ModTarget::route`]): a route's own depth as a destination.
+    pub fn on_route(route: RouteId) -> ParameterPath {
+        ParameterPath { owner: PERSISTENT_NONE, parameter: ParameterKey::RouteDepth(route) }
+    }
+
     /// The modulator and its parameter this path names, if it is a route inside the graph.
     pub fn modulator(&self) -> Option<(ModulatorId, ModParam)> {
         match self.parameter {
             ParameterKey::ModulatorParam(id, param) => Some((id, param)),
             _ => None,
         }
+    }
+
+    /// The route whose depth this path names, if it is one.
+    pub fn route(&self) -> Option<RouteId> {
+        match self.parameter {
+            ParameterKey::RouteDepth(route) => Some(route),
+            _ => None,
+        }
+    }
+
+    /// Whether this path names something inside the modulation graph (a modulator's parameter or a route's depth)
+    /// rather than a device parameter.
+    pub fn in_graph(&self) -> bool {
+        matches!(self.parameter, ParameterKey::ModulatorParam(..) | ParameterKey::RouteDepth(_))
     }
 }
 
@@ -435,6 +498,74 @@ impl Default for Steps {
     }
 }
 
+/// How many breakpoints an [`Mseg`] can hold.
+pub const MSEG_POINTS: usize = 16;
+
+/// One breakpoint of an [`Mseg`]: where it sits in the shape (`0..=1`) and what it is worth (`-1..=1`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MsegPoint {
+    pub at: f32,
+    pub value: f32,
+}
+
+impl Default for MsegPoint {
+    fn default() -> Self {
+        MsegPoint { at: 0.0, value: 0.0 }
+    }
+}
+
+/// A multi-segment envelope: up to [`MSEG_POINTS`] breakpoints across one period, played once (holding the last point)
+/// or looped.
+///
+/// Like the LFO and the random source it is a pure function of the transport's position, so an offline render matches
+/// live playback and a seek lands on the point the shape has there. A point's value is `-1..=1`; [`Mseg::bipolar`]
+/// reads that as a swing either side of the middle, otherwise it is lifted above the middle the way an LFO's unipolar
+/// output is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Mseg {
+    pub points: [MsegPoint; MSEG_POINTS],
+    /// How many of `points` are in use, `2..=MSEG_POINTS` (anything less reads as the default shape).
+    pub used: u8,
+    /// The length of one pass through the shape.
+    pub period: Timebase,
+    /// `true`: run the shape again every period. `false`: play it once and hold the last point.
+    pub looped: bool,
+    /// `true`: a straight line between neighbouring points. `false`: each point holds until the next.
+    pub smooth: bool,
+    /// The output gain, `0..=1`.
+    pub amount: f32,
+    pub bipolar: bool,
+}
+
+impl Mseg {
+    /// The points in use (at least two, never more than the array).
+    pub fn used_points(&self) -> &[MsegPoint] {
+        &self.points[..usize::from(self.used).clamp(2, MSEG_POINTS)]
+    }
+}
+
+impl Default for Mseg {
+    /// A full swing over one bar: down, up, down again.
+    fn default() -> Self {
+        let mut points = [MsegPoint::default(); MSEG_POINTS];
+        points[0] = MsegPoint { at: 0.0, value: -1.0 };
+        points[1] = MsegPoint { at: 0.5, value: 1.0 };
+        points[2] = MsegPoint { at: 1.0, value: -1.0 };
+        Mseg { points, used: 3, period: Timebase::Sync(16), looped: true, smooth: true, amount: 1.0, bipolar: true }
+    }
+}
+
+/// A macro: a control the user turns, saved with the project, that drives whatever it is assigned to.
+///
+/// It is a source like any other, so one modulator can drive another modulator's macro (an LFO turning a macro that
+/// drives ten parameters at ten different depths), and its position is a routing destination of its own
+/// ([`ModParam::Value`]). Its output is the value itself, so an assignment's polarity and depth decide how it reads.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Macro {
+    /// `0..=1`, the knob's position.
+    pub value: f32,
+}
+
 /// A one-shot shape: rises over `attack`, falls to `sustain` over `decay`, holds, falls to nothing over `release`.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Envelope {
@@ -448,8 +579,8 @@ pub struct Envelope {
 
 /// What drives a modulator.
 ///
-/// `Steps` and `Envelope` predate the project-level slots (M1) and stay in the format so old projects load. The eight
-/// project slots offer the handoff's three sources: [`Lfo`], [`Random`] and [`AudioFollower`].
+/// `Steps` and `Envelope` predate the project-level slots (M1) and stay in the format so old projects load. The project
+/// slots offer the handoff's sources — [`Lfo`], [`Random`], [`AudioFollower`], [`Mseg`] and [`Macro`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ModSource {
     Lfo(Lfo),
@@ -457,6 +588,8 @@ pub enum ModSource {
     Envelope(Envelope),
     Random(Random),
     AudioFollower(AudioFollower),
+    Mseg(Mseg),
+    Macro(Macro),
 }
 
 impl Default for ModSource {
@@ -474,7 +607,9 @@ impl ModSource {
             ModSource::Lfo(l) => l.amount,
             ModSource::Random(r) => r.amount,
             ModSource::AudioFollower(f) => f.amount,
-            ModSource::Steps(_) | ModSource::Envelope(_) => 1.0,
+            ModSource::Mseg(m) => m.amount,
+            // A macro at 0 is still on: the whole point of it is to be turned up.
+            ModSource::Steps(_) | ModSource::Envelope(_) | ModSource::Macro(_) => 1.0,
         }
     }
 
@@ -507,11 +642,31 @@ pub enum Polarity {
     Unipolar,
 }
 
+/// A route's identity in the project's graph: minted from [`ModGraph::next_route`], never reused, saved with the
+/// assignment it names. `0` means "not assigned" ([`ROUTE_NONE`]).
+///
+/// A route is an assignment (a modulator, a parameter, a depth), so its identity has to live on the assignment itself;
+/// that is what lets another modulator drive the route's depth ([`ParameterKey::RouteDepth`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub struct RouteId(pub u32);
+
+/// The reserved value for "no route".
+pub const ROUTE_NONE: RouteId = RouteId(0);
+
+impl RouteId {
+    pub fn is_none(self) -> bool {
+        self == ROUTE_NONE
+    }
+}
+
 /// One parameter a modulator drives, and how far.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModTarget {
     /// The parameter, by its persistent identity ([`ParameterPath`]).
     pub path: ParameterPath,
+    /// The route's own identity, minted by [`ModGraph::assign`]; the handle another modulator drives when it shapes
+    /// how far this route goes ([`ParameterKey::RouteDepth`]).
+    pub route: RouteId,
     /// `-DEPTH_MAX..=DEPTH_MAX` of the parameter's range; negative inverts the source.
     pub depth: f32,
     pub curve: Curve,
@@ -526,9 +681,10 @@ impl ModTarget {
     /// What an assignment gets before the user moves it: a quarter of the range, so a new target is audible.
     pub const DEPTH_DEFAULT: f32 = 0.25;
 
-    /// A target at [`ModTarget::DEPTH_DEFAULT`], linear, bipolar, on.
+    /// A target at [`ModTarget::DEPTH_DEFAULT`], linear, bipolar, on, with no route identity yet (the graph mints one
+    /// when it is assigned).
     pub fn new(path: ParameterPath) -> Self {
-        ModTarget { path, depth: Self::DEPTH_DEFAULT, curve: Curve::Linear, polarity: Polarity::Bipolar, enabled: true }
+        ModTarget { path, route: ROUTE_NONE, depth: Self::DEPTH_DEFAULT, curve: Curve::Linear, polarity: Polarity::Bipolar, enabled: true }
     }
 
     /// With its depth set and clamped to `-DEPTH_MAX..=DEPTH_MAX` (a value that is not a number is 0).
@@ -572,6 +728,8 @@ pub struct ModGraph {
     pub modulators: Vec<Modulator>,
     /// Next [`ModulatorId`] to mint (monotonic, never reused).
     pub next: u32,
+    /// Next [`RouteId`] to mint (monotonic, never reused).
+    pub next_route: u32,
     /// Rows of project slots the strip shows: one until the user asks for another row. A project written before rows
     /// existed reads as 0, which is one row.
     pub rows: u8,
@@ -660,18 +818,57 @@ impl ModGraph {
     /// Takes a modulator out (and its assignments with it). Ids are never reused, so `next` stays where it is.
     ///
     /// Every route *into* it goes too: a target naming a modulator that is gone would be an edge to nothing, and it
-    /// would keep the graph from being a DAG (the id is never minted again, so nothing could ever reach it).
+    /// would keep the graph from being a DAG (the id is never minted again, so nothing could ever reach it). The same
+    /// goes for a target naming the depth of one of its routes, which is going with it.
     pub fn remove(&mut self, id: ModulatorId) -> Option<Modulator> {
         let at = self.modulators.iter().position(|m| m.id == id)?;
-        self.drop_routes_to(id);
-        Some(self.modulators.remove(at))
+        let gone = self.modulators.remove(at);
+        self.drop_routes_to(id, &gone.targets.iter().map(|t| t.route).collect::<Vec<_>>());
+        Some(gone)
     }
 
-    /// Every assignment anywhere in the graph that drives modulator `gone` (or any modulator it names).
-    fn drop_routes_to(&mut self, gone: ModulatorId) {
+    /// Every assignment anywhere in the graph that drives modulator `gone`, or the depth of one of the routes in
+    /// `routes` (`gone`'s own assignments, which go with it).
+    fn drop_routes_to(&mut self, gone: ModulatorId, routes: &[RouteId]) {
         for m in &mut self.modulators {
-            m.targets.retain(|t| !matches!(t.path.modulator(), Some((to, _)) if to == gone));
+            m.targets.retain(|t| match t.path.parameter {
+                ParameterKey::ModulatorParam(to, _) => to != gone,
+                ParameterKey::RouteDepth(route) => !routes.contains(&route),
+                _ => true,
+            });
         }
+    }
+
+    /// The modulator a path lives on: a modulator's own parameter names it, and a route's depth names the modulator
+    /// that makes the route. `None` for a device parameter, and for a route the graph no longer holds.
+    pub fn lives_on(&self, path: ParameterPath) -> Option<ModulatorId> {
+        match path.parameter {
+            ParameterKey::ModulatorParam(id, _) => self.get(id).map(|m| m.id),
+            ParameterKey::RouteDepth(route) => self.route_owner(route),
+            _ => None,
+        }
+    }
+
+    /// The modulator whose assignment carries route `route`.
+    pub fn route_owner(&self, route: RouteId) -> Option<ModulatorId> {
+        self.modulators
+            .iter()
+            .find(|m| m.targets.iter().any(|t| t.route == route))
+            .map(|m| m.id)
+    }
+
+    /// The parameter route `route` drives.
+    pub fn route_path(&self, route: RouteId) -> Option<ParameterPath> {
+        self.modulators
+            .iter()
+            .flat_map(|m| m.targets.iter())
+            .find(|t| t.route == route)
+            .map(|t| t.path)
+    }
+
+    /// The route one modulator has into `path`.
+    pub fn route_between(&self, id: ModulatorId, path: ParameterPath) -> Option<RouteId> {
+        self.get(id)?.targets.iter().find(|t| t.path == path).map(|t| t.route)
     }
 
     /// Routes modulator `from` into parameter `param` of modulator `to` at `depth`: the handoff's
@@ -713,7 +910,9 @@ impl ModGraph {
             seen.push(x);
             let Some(m) = self.get(x) else { continue };
             for t in &m.targets {
-                let Some((down, _)) = t.path.modulator() else { continue };
+                // A route inside the graph names either a modulator's parameter or a route's depth, which belongs to
+                // the modulator making that route: both are edges to that modulator.
+                let Some(down) = self.lives_on(t.path) else { continue };
                 if down == to {
                     return true;
                 }
@@ -740,7 +939,7 @@ impl ModGraph {
                 let driven = self.modulators.iter().any(|o| {
                     o.id != m.id
                         && !order.contains(&o.id)
-                        && o.targets.iter().any(|t| matches!(t.path.modulator(), Some((down, _)) if down == m.id))
+                        && o.targets.iter().any(|t| self.lives_on(t.path) == Some(m.id))
                 });
                 if !driven {
                     order.push(m.id);
@@ -761,22 +960,50 @@ impl ModGraph {
 
     /// Assigns `target` to modulator `id`: `false` for an unknown modulator, or when it already drives that
     /// parameter (one assignment per parameter per modulator — a second would be two depths for one value).
-    /// The depth is clamped ([`ModTarget::with_depth`]).
+    /// The depth is clamped ([`ModTarget::with_depth`]) and a route that has no identity yet is given one.
+    ///
+    /// A route's depth is a destination too ([`ParameterPath::on_route`]), with three rules that keep the graph a
+    /// DAG: the route has to exist, its own destination may not be another route's depth (no depth of a depth), and a
+    /// modulator cannot drive a depth on its own side of the chain (itself, or a modulator upstream of it) — the same
+    /// loop check [`ModGraph::route`] makes.
     pub fn assign(&mut self, id: ModulatorId, target: ModTarget) -> bool {
+        if let Some(route) = target.path.route() {
+            let Some(owner) = self.route_owner(route) else { return false };
+            if self.route_path(route).is_some_and(|p| p.route().is_some()) {
+                return false;
+            }
+            if id == owner || self.reaches(owner, id) {
+                return false;
+            }
+        }
+        let route = if target.route.is_none() {
+            // 16 bits: that is what the engine's target encoding carries for a route.
+            let route = RouteId(self.next_route.max(1) & 0xFFFF);
+            self.next_route = route.0 + 1;
+            route
+        } else {
+            target.route
+        };
         let Some(m) = self.get_mut(id) else { return false };
         if m.targets.iter().any(|t| t.path == target.path) {
             return false;
         }
-        m.targets.push(target.with_depth(target.depth));
+        m.targets.push(ModTarget { route, ..target.with_depth(target.depth) });
         true
     }
 
-    /// Stops modulator `id` driving `path`; `false` when it did not.
+    /// Stops modulator `id` driving `path`; `false` when it did not. A route's depth that named it goes too: the route
+    /// it shaped no longer exists.
     pub fn unassign(&mut self, id: ModulatorId, path: ParameterPath) -> bool {
         let Some(m) = self.get_mut(id) else { return false };
-        let before = m.targets.len();
-        m.targets.retain(|t| t.path != path);
-        m.targets.len() != before
+        let Some(at) = m.targets.iter().position(|t| t.path == path) else { return false };
+        let gone = m.targets.remove(at).route;
+        if !gone.is_none() {
+            for m in &mut self.modulators {
+                m.targets.retain(|t| t.path.route() != Some(gone));
+            }
+        }
+        true
     }
 
     /// Every assignment driving `path`, as (`modulator`, its assignment), in graph order. A parameter may be driven
@@ -1120,6 +1347,103 @@ mod tests {
         assert!(g.route(a, steps, ModParam::Rate, 0.5), "but it has a rate");
         let envelope = g.add(ModSource::Envelope(Envelope::default()));
         assert!(!g.route(a, envelope, ModParam::Rate, 0.5), "a one-shot envelope follows the transport, not a rate");
+    }
+
+    /// A follower's attack, release and gain and a random source's smoothing are destinations like any other, and a
+    /// source without one refuses the route (a follower has no rate: it follows the master, not a period). Every
+    /// parameter keeps a stable byte, so a route saved by this version reads back as the same parameter.
+    #[test]
+    fn a_followers_and_a_random_sources_own_parameters_take_routes() {
+        let follower = AudioFollower::default();
+        let random = Random::default();
+        for param in [ModParam::Amount, ModParam::Attack, ModParam::Release, ModParam::Gain] {
+            assert!(param.applies_to(&ModSource::AudioFollower(follower)), "a follower has a {param:?}");
+        }
+        assert!(!ModParam::Rate.applies_to(&ModSource::AudioFollower(follower)), "a follower has no rate");
+        for param in [ModParam::Rate, ModParam::Amount, ModParam::Smooth] {
+            assert!(param.applies_to(&ModSource::Random(random)), "a random source has a {param:?}");
+        }
+        assert!(!ModParam::Attack.applies_to(&ModSource::Random(random)));
+        assert!(!ModParam::Smooth.applies_to(&ModSource::Lfo(Lfo::default())), "an LFO does not slew");
+        for (i, param) in ModParam::ALL.iter().enumerate() {
+            assert_eq!(param.code() as usize, i, "{param:?} keeps its byte");
+            assert_eq!(ModParam::of(param.code()), Some(*param));
+        }
+        assert_eq!(ModParam::of(9), None, "a byte this version does not know is not a parameter");
+        let mut g = ModGraph::default();
+        let driver = g.add(ModSource::Lfo(Lfo::default()));
+        let f = g.add(ModSource::AudioFollower(AudioFollower::default()));
+        let r = g.add(ModSource::Random(Random::default()));
+        assert!(g.route(driver, f, ModParam::Attack, 0.5), "a follower's attack is a destination");
+        assert!(g.route(driver, f, ModParam::Gain, 0.5));
+        assert!(!g.route(driver, f, ModParam::Rate, 0.5), "a follower has no rate to drive");
+        assert!(g.route(driver, r, ModParam::Smooth, 0.5), "a random source's smoothing is a destination");
+        // The routes live on the driver, naming the destination's parameter.
+        assert_eq!(g.get(driver).unwrap().targets[1].path, ParameterPath::on_modulator(f, ModParam::Gain));
+    }
+
+    /// A macro's position is a destination of its own (so an LFO can turn it), and an MSEG takes a rate and an amount
+    /// but nothing else: its shape is its own. Both are sources like any other, so they join the same graph.
+    #[test]
+    fn a_macro_and_an_mseg_have_their_own_addressable_parameters() {
+        let macro_source = ModSource::Macro(Macro { value: 0.25 });
+        assert!(ModParam::Value.applies_to(&macro_source));
+        assert_eq!(macro_source.amount(), 1.0, "a macro at any position drives");
+        assert!(!ModParam::Rate.applies_to(&macro_source));
+        let mseg = ModSource::Mseg(Mseg::default());
+        for param in [ModParam::Rate, ModParam::Amount] {
+            assert!(param.applies_to(&mseg), "an MSEG has a {param:?}");
+        }
+        assert!(!ModParam::Value.applies_to(&mseg));
+        assert!(!ModParam::Attack.applies_to(&mseg));
+        assert_eq!(ModParam::Value.code(), 8, "after the follower's and the random source's");
+        assert_eq!(ModParam::of(8), Some(ModParam::Value));
+        let mut g = ModGraph::default();
+        let lfo = g.add(ModSource::Lfo(Lfo::default()));
+        let mac = g.add(ModSource::Macro(Macro { value: 0.0 }));
+        assert!(g.route(lfo, mac, ModParam::Value, 0.5), "an LFO turns the macro");
+        assert!(!g.route(mac, lfo, ModParam::Amount, 0.5), "and a route back would close the loop");
+        assert_eq!(g.evaluation_order(), vec![lfo, mac], "the LFO is evaluated first");
+        let shape = g.add(ModSource::Mseg(Mseg::default()));
+        assert!(!g.route(mac, shape, ModParam::Value, 0.5), "an MSEG has no value to turn");
+        assert!(g.route(mac, shape, ModParam::Rate, 0.5));
+    }
+
+    /// Every assignment carries its own route identity, and a route's depth is a destination: another modulator can shape
+    /// how far it drives. Three rules keep the graph a DAG — the depth's own driver cannot shape it, a route that is
+    /// itself a depth takes no depth, and a loop is refused — and removing the route (or its modulator) takes the depth
+    /// routes with it.
+    #[test]
+    fn a_route_has_an_identity_and_its_depth_takes_routes() {
+        let mut g = ModGraph::default();
+        let a = g.add(ModSource::Lfo(Lfo::default()));
+        let b = g.add(ModSource::Lfo(Lfo::default()));
+        let path = track_path(0x0100);
+        assert!(g.assign(b, ModTarget::new(path)));
+        let route = g.route_between(b, path).expect("the assignment has a route");
+        assert!(!route.is_none());
+        assert_eq!((g.route_owner(route), g.route_path(route)), (Some(b), Some(path)));
+        assert_eq!(g.next_route, route.0 + 1, "ids are minted and never reused");
+        // A shapes how far B drives that parameter: an edge into B, so it is evaluated first.
+        let deeper = ParameterPath::on_route(route);
+        assert!(g.assign(a, ModTarget::new(deeper).with_depth(0.5)));
+        assert_eq!(g.lives_on(deeper), Some(b));
+        assert!(g.reaches(a, b) && !g.reaches(b, a), "the depth is an edge into the modulator making the route");
+        assert_eq!(g.evaluation_order(), vec![a, b]);
+        // The three refusals: B shaping its own route, a depth of a depth, and a loop formed by shaping a depth upstream.
+        assert!(!g.assign(b, ModTarget::new(deeper)), "a route's own driver cannot shape its depth");
+        let inner = g.route_between(a, deeper).expect("A's own route");
+        assert!(!g.assign(b, ModTarget::new(ParameterPath::on_route(inner))), "a depth is not itself a destination");
+        // Removing B takes its route, and A's route into that route's depth with it.
+        g.remove(b);
+        assert!(g.get(a).is_some_and(|m| m.targets.is_empty()), "the depth route went with the route it shaped");
+        // Taking an assignment away does the same.
+        let b2 = g.add(ModSource::Lfo(Lfo::default()));
+        assert!(g.assign(b2, ModTarget::new(path)));
+        let route2 = g.route_between(b2, path).unwrap();
+        assert!(g.assign(a, ModTarget::new(ParameterPath::on_route(route2))));
+        assert!(g.unassign(b2, path));
+        assert!(g.get(a).is_some_and(|m| m.targets.is_empty()), "the depth route went with the assignment");
     }
 
     /// The evaluation order puts everything after what drives it, even when the driven modulator was created first;

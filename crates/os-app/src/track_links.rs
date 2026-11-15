@@ -319,6 +319,7 @@ pub fn track_of_target(s: &State, tgt: u32) -> Option<usize> {
         | os_model::target::Target::MainSwing
         | os_model::target::Target::MainPitch
         | os_model::target::Target::ModulatorParam(..)
+        | os_model::target::Target::RouteDepth(..)
         | os_model::target::Target::Other(_) => None,
     }
 }

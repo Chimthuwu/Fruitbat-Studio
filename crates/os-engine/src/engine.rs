@@ -1905,7 +1905,7 @@ impl Engine {
             Target::ChannelOn(c) => self.switch_channel(usize::from(c), os_model::target::channel_on(v)),
             // A modulator's own parameter is driven inside the modulation graph (`Modulation::evaluate`), never
             // through the automation path.
-            Target::ChannelParam(..) | Target::SlotParam(..) | Target::ModulatorParam(..) | Target::Other(_) => {}
+            Target::ChannelParam(..) | Target::SlotParam(..) | Target::ModulatorParam(..) | Target::RouteDepth(..) | Target::Other(_) => {}
         }
     }
 

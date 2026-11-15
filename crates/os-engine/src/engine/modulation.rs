@@ -27,7 +27,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use os_model::modulation::{AudioFollower, Curve, Detection, Distribution, Envelope, Lfo, LfoShape, ModParam, ModSource, Polarity, Random, Steps, Timebase};
+use os_model::modulation::{AudioFollower, Curve, Detection, Distribution, Envelope, Lfo, LfoShape, Macro, ModParam, ModSource, Mseg, Polarity, Random, Steps, Timebase};
 use os_model::target::Target;
 
 use super::param_auto::{ParamAuto, PARAM_STEP};
@@ -228,9 +228,14 @@ pub(super) struct Modulation {
     last: Vec<(Target, f64, f64)>,
     /// The audio followers in the graph, by modulator id (rebuilt when the graph is installed).
     followers: Vec<Follower>,
-    /// The routes inside the graph (a modulator driving another's rate, amount, phase or offset), as indices into
-    /// `modulators`. Rebuilt when the graph is installed, never while it runs.
+    /// The routes inside the graph (a modulator driving another's rate, amount, phase or offset, or the depth of one
+    /// of its assignments), as indices into `modulators`. Rebuilt when the graph is installed, never while it runs.
     edges: Vec<Edge>,
+    /// Every assignment's depth as it stands this tick: its own depth moved by whatever drives it. Indexed by
+    /// `at[modulator] + target`. Recomputed at the start of every evaluation.
+    depths: Vec<f32>,
+    /// Where each modulator's targets start in `depths`.
+    at: Vec<usize>,
     /// The modulators in dependency order, by index: each comes after everything that drives it, so one pass gives
     /// every modulator its driven value. Rebuilt when the graph is installed.
     order: Vec<u32>,
@@ -243,13 +248,18 @@ pub(super) struct Modulation {
     pub(super) snapshot: Option<Arc<ModSnapshot>>,
 }
 
-/// One route inside the graph: modulator `from` drives parameter `param` of modulator `to` (indices into the graph's
-/// modulators), at `depth`, through its own `curve` and `polarity`.
+/// One route inside the graph: modulator `from` drives parameter `param` of modulator `to` — or, with no `param`, the
+/// depth of assignment `target` of modulator `to` (indices into the graph's modulators and that modulator's targets),
+/// through its own `curve` and `polarity`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Edge {
     from: u32,
     to: u32,
-    param: ModParam,
+    /// The index of this assignment among `from`'s targets: its effective depth lives in that `depths` slot.
+    slot: usize,
+    /// What it drives on `to`: a parameter, or (with `None`) the depth of target `target`.
+    param: Option<ModParam>,
+    target: usize,
     depth: f32,
     curve: Curve,
     polarity: Polarity,
@@ -267,15 +277,46 @@ impl Modulation {
                 _ => None,
             })
             .collect();
-        // The graph's own edges: an assignment whose target is a modulator's parameter is not a project parameter at
-        // all, so it never reaches the parameter-event path.
+        // The graph's own edges: an assignment whose target is inside the graph (a modulator's parameter or a route's
+        // depth) is not a project parameter at all, so it never reaches the parameter-event path.
         self.edges.clear();
+        self.depths.clear();
+        self.at.clear();
+        let mut at = 0usize;
+        for m in &modulators {
+            self.at.push(at);
+            at += m.targets.len();
+        }
+        self.depths.resize(at, 0.0);
         for (i, m) in modulators.iter().enumerate() {
-            for t in &m.targets {
-                let Target::ModulatorParam(id, code) = t.target else { continue };
-                let Some(param) = ModParam::of(code) else { continue };
-                let Some(to) = modulators.iter().position(|o| o.id == id) else { continue };
-                self.edges.push(Edge { from: i as u32, to: to as u32, param, depth: t.depth, curve: t.curve, polarity: t.polarity, enabled: t.enabled });
+            for (k, t) in m.targets.iter().enumerate() {
+                self.depths[self.at[i] + k] = t.depth;
+                let (to, param, target) = match t.target {
+                    Target::ModulatorParam(id, code) => {
+                        let Some(param) = ModParam::of(code) else { continue };
+                        let Some(to) = modulators.iter().position(|o| o.id == id) else { continue };
+                        (to, Some(param), 0)
+                    }
+                    Target::RouteDepth(owner, index) => {
+                        let Some(to) = modulators.iter().position(|o| o.id == owner) else { continue };
+                        if usize::from(index) >= modulators[to].targets.len() {
+                            continue;
+                        }
+                        (to, None, usize::from(index))
+                    }
+                    _ => continue,
+                };
+                self.edges.push(Edge {
+                    from: i as u32,
+                    to: to as u32,
+                    slot: k,
+                    param,
+                    target,
+                    depth: t.depth,
+                    curve: t.curve,
+                    polarity: t.polarity,
+                    enabled: t.enabled,
+                });
             }
         }
         self.order = topological(&modulators, &self.edges);
@@ -309,8 +350,34 @@ impl Modulation {
     /// Allocates nothing: `order` and `outputs` were sized when the graph was installed.
     pub(super) fn evaluate(&mut self, beats: f64, secs: f64) {
         let snap = self.snapshot.clone();
+        // Every depth starts the tick at what the user set: nothing builds on last tick's swing.
+        for (i, m) in self.modulators.iter().enumerate() {
+            let Some(start) = self.at.get(i).copied() else { break };
+            for (k, t) in m.targets.iter().enumerate() {
+                if let Some(d) = self.depths.get_mut(start + k) {
+                    *d = t.depth;
+                }
+            }
+        }
         for k in 0..self.order.len() {
             let j = self.order[k] as usize;
+            // Routes into this modulator's own assignments: a modulator driving how far one of them goes. Their
+            // drivers come before it, so their values are already this tick's.
+            for i in 0..self.edges.len() {
+                let e = self.edges[i];
+                if e.to as usize != j || e.param.is_some() || !e.enabled {
+                    continue;
+                }
+                let (Some(u), Some(depth)) = (self.outputs.get(e.from as usize).copied(), self.slot(e.from as usize, e.slot)) else {
+                    continue;
+                };
+                let by = offset_values(depth, e.curve, e.polarity, u);
+                if let Some(slot) = self.at.get(j).and_then(|start| self.depths.get_mut(start + e.target)) {
+                    // A depth is a fraction of the parameter's range either way, so it moves like a normalized value:
+                    // -1..=1 read as 0..=1, moved, and read back.
+                    *slot = (((f64::from(*slot) + 1.0) / 2.0 + by).clamp(0.0, 1.0) * 2.0 - 1.0) as f32;
+                }
+            }
             let (id, mut source) = match self.modulators.get(j) {
                 Some(m) => (m.id, m.source),
                 None => continue,
@@ -320,8 +387,11 @@ impl Modulation {
                 if e.to as usize != j || e.from as usize == j || !e.enabled {
                     continue;
                 }
-                let Some(&u) = self.outputs.get(e.from as usize) else { continue };
-                apply_param(&mut source, e.param, offset_values(e.depth, e.curve, e.polarity, u));
+                let Some(param) = e.param else { continue };
+                let (Some(u), Some(depth)) = (self.outputs.get(e.from as usize).copied(), self.slot(e.from as usize, e.slot)) else {
+                    continue;
+                };
+                apply_param(&mut source, param, offset_values(depth, e.curve, e.polarity, u));
             }
             let u = self.value_of(&source, id, beats, secs);
             if let Some(slot) = self.outputs.get_mut(j) {
@@ -331,6 +401,16 @@ impl Modulation {
                 snap.write_output(j, u);
             }
         }
+    }
+
+    /// One assignment's effective depth (`None` for a target index the graph does not have).
+    fn slot(&self, m: usize, k: usize) -> Option<f32> {
+        self.at.get(m).and_then(|start| self.depths.get(start + k)).copied()
+    }
+
+    /// An assignment's depth as it stands after this tick's evaluation (its own depth moved by whatever drives it).
+    fn depth_of(&self, m: usize, k: usize) -> f32 {
+        self.slot(m, k).unwrap_or(0.0)
     }
 
     /// Feeds every follower the master output of the tick that just finished. Called once a tick, after the master's
@@ -350,10 +430,52 @@ pub fn source_value(source: &ModSource, id: u32, beats: f64, secs: f64) -> f32 {
         ModSource::Steps(s) => steps_value(s, cycles(s.period, beats, secs)),
         ModSource::Envelope(e) => envelope_value(e, secs),
         ModSource::Random(r) => random_value(r, cycles(r.period, beats, secs)),
+        ModSource::Mseg(m) => mseg_value(m, cycles(m.period, beats, secs)),
+        // A macro is where the user put it: no clock is involved at all.
+        ModSource::Macro(m) => m.value.clamp(0.0, 1.0),
         // A follower's value comes from the master detector, not from the position: `Modulation::value` reads it.
         // With no detector (a preview of a stopped transport) it is the neutral middle, not the bottom.
         ModSource::AudioFollower(_) => 0.5,
     }
+}
+
+/// An MSEG's value at `cycles` (one cycle is one pass through the shape), `0..=1`.
+///
+/// The shape's points are normalized in time, so the rate scales the whole thing and a seek lands where the shape says.
+/// A shape that does not loop holds its last point once the pass is over, which is what makes it an envelope rather
+/// than an LFO.
+fn mseg_value(m: &Mseg, cycles: f64) -> f32 {
+    let at = if m.looped { cycles.rem_euclid(1.0) } else { cycles.clamp(0.0, 1.0) } as f32;
+    let points = m.used_points();
+    let first = points.first().copied().unwrap_or_default();
+    let mut value = first.value;
+    // The point the shape has reached: the last segment whose start is behind the position.
+    for w in points.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if at < a.at.max(0.0) {
+            break;
+        }
+        if b.at <= a.at {
+            // Two points on one instant: the later one wins from there on.
+            value = b.value;
+            continue;
+        }
+        let span = b.at - a.at;
+        value = if at >= b.at {
+            b.value
+        } else if m.smooth {
+            let t = (at - a.at) / span;
+            a.value + (b.value - a.value) * t
+        } else {
+            a.value
+        };
+    }
+    // The same reading of a -1..=1 value the LFO gives its wave: bipolar swings either side of the middle, unipolar
+    // is lifted above it. The amount is a gain around the middle, applied after that, so 0 is a flat middle.
+    let centered = (f64::from(value.clamp(-1.0, 1.0)) + 1.0) / 2.0;
+    let shaped = if m.bipolar { centered } else { 0.5 + centered * 0.5 };
+    let gained = 0.5 + (shaped - 0.5) * f64::from(m.amount.clamp(0.0, 1.0));
+    gained.clamp(0.0, 1.0) as f32
 }
 
 /// How many periods (an LFO's cycles, a step sequence's steps) have gone by at a position.
@@ -502,8 +624,12 @@ fn offset_values(depth: f32, curve: Curve, polarity: Polarity, u: f32) -> f64 {
 ///
 /// A rate is scaled rather than added: `by` multiplies the period by `2^(4 by)`, so a full-depth route on a slow
 /// modulator moves it by two octaves up or down in hertz and the motion is musically even. A sync period is a count of
-/// sixteenths, so it divides instead and never reaches zero. A parameter the source does not have is left alone — the
-/// graph refuses to route to one ([`os_model::modulation::ModGraph::route`]), so this only guards hand-made graphs.
+/// sixteenths, so it divides instead and never reaches zero. A follower's attack and release are times, so they scale
+/// the same way (a full-depth route is two octaves of time either side) and are kept inside the range the editor's knob
+/// covers, rather than running into a negative time constant. A gain is a level, so it moves in
+/// decibels over its own 48 dB range, and a smoothing amount is a fraction of the cycle, so it is added. A parameter
+/// the source does not have is left alone — the graph refuses to route to one
+/// ([`os_model::modulation::ModGraph::route`]), so this only guards hand-made graphs.
 fn apply_param(source: &mut ModSource, param: ModParam, by: f64) {
     let scale = 2f64.powf(4.0 * by);
     let add = |own: f32| (f64::from(own) + by).clamp(-1.0, 1.0) as f32;
@@ -513,10 +639,12 @@ fn apply_param(source: &mut ModSource, param: ModParam, by: f64) {
             ModParam::Amount => l.amount = add(l.amount).clamp(0.0, 1.0),
             ModParam::Phase => l.phase = (f64::from(l.phase) + by).rem_euclid(1.0) as f32,
             ModParam::Offset => l.offset = add(l.offset),
+            _ => {}
         },
         ModSource::Random(r) => match param {
             ModParam::Rate => r.period = scale_period(r.period, scale),
             ModParam::Amount => r.amount = add(r.amount).clamp(0.0, 1.0),
+            ModParam::Smooth => r.smooth = add(r.smooth).clamp(0.0, 1.0),
             _ => {}
         },
         ModSource::Steps(s) => match param {
@@ -525,10 +653,31 @@ fn apply_param(source: &mut ModSource, param: ModParam, by: f64) {
         },
         ModSource::AudioFollower(f) => match param {
             ModParam::Amount => f.amount = add(f.amount).clamp(0.0, 1.0),
+            // The editor's own ranges: attack to 2 s, release to 10 s, gain ±24 dB.
+            ModParam::Attack => f.attack = scale_time(f.attack, scale, 0.0005, 2.0),
+            ModParam::Release => f.release = scale_time(f.release, scale, 0.001, 10.0),
+            ModParam::Gain => f.gain_db = (f64::from(f.gain_db) + by * 48.0).clamp(-24.0, 24.0) as f32,
             _ => {}
         },
+        ModSource::Mseg(m) => match param {
+            ModParam::Rate => m.period = scale_period(m.period, scale),
+            ModParam::Amount => m.amount = add(m.amount).clamp(0.0, 1.0),
+            _ => {}
+        },
+        // A macro's position is the one thing another modulator can move: it is the source's whole output.
+        ModSource::Macro(m) => {
+            if param == ModParam::Value {
+                m.value = add(m.value).clamp(0.0, 1.0);
+            }
+        }
         ModSource::Envelope(_) => {}
     }
+}
+
+/// A time constant scaled by `scale` (a route's `2^(4 by)`) and kept inside the range the editor's knob covers, so a
+/// routed attack cannot reach a negative or silent time.
+fn scale_time(seconds: f32, scale: f64, min: f32, max: f32) -> f32 {
+    (f64::from(seconds) * scale).clamp(f64::from(min), f64::from(max)) as f32
 }
 
 /// A period scaled by `scale`: free hertz multiply (clamped to an audible-to-slow buzzer range), synced sixteenths
@@ -590,12 +739,12 @@ pub(super) fn step_values(params: &mut ParamAuto, mods: &mut Modulation, pos: f6
     offsets.clear();
     for (i, m) in mods.modulators.iter().enumerate().filter(|(_, m)| m.enabled) {
         let u = mods.outputs.get(i).copied().unwrap_or(0.0);
-        for t in m.targets.iter().filter(|t| t.enabled) {
+        for (k, t) in m.targets.iter().enumerate().filter(|(_, t)| t.enabled) {
             // A route inside the graph is not a project parameter: the engine already applied it while evaluating.
-            if matches!(t.target, Target::ModulatorParam(..)) {
+            if matches!(t.target, Target::ModulatorParam(..) | Target::RouteDepth(..)) {
                 continue;
             }
-            let by = offset(t, u);
+            let by = offset_values(mods.depth_of(i, k), t.curve, t.polarity, u);
             match offsets.iter_mut().find(|(x, _)| *x == t.target) {
                 Some((_, v)) => *v += by,
                 None => offsets.push((t.target, by)),
@@ -703,9 +852,9 @@ impl Engine {
         offsets.clear();
         for (i, m) in self.mods.modulators.iter().enumerate().filter(|(_, m)| m.enabled) {
             let u = self.mods.outputs.get(i).copied().unwrap_or(0.0);
-            for t in m.targets.iter().filter(|t| t.enabled) {
+            for (k, t) in m.targets.iter().enumerate().filter(|(_, t)| t.enabled) {
                 let Some((track, param)) = host_target(t.target) else { continue };
-                let by = offset(t, u);
+                let by = offset_values(self.mods.depth_of(i, k), t.curve, t.polarity, u);
                 match offsets.iter_mut().find(|(x, p, ..)| *x == track && *p == param) {
                     Some((_, _, _, v)) => *v += by,
                     None => offsets.push((track, param, t.target, by)),
@@ -1386,5 +1535,120 @@ mod tests {
         assert_eq!(e.tracks[1].eq.settings(0)[0], 0);
         assert_eq!(e.tracks[1].mod_slot_mix[0], None);
         assert_eq!(e.tracks[1].routes.iter().find(|r| r.dest == 2).and_then(|r| r.mod_level), None);
+    }
+
+    /// A follower's own parameters take routes like a device parameter does: an attack and a release scale in time (two
+    /// octaves at a quarter depth, kept inside the knob's range), a gain moves in decibels over its 48 dB span, and a
+    /// random source's smoothing is a fraction of its cycle. A parameter the source does not have (
+    /// an LFO's attack) is left alone.
+    #[test]
+    fn a_route_moves_a_followers_own_parameters_and_a_random_sources_smoothing() {
+        let mut follower = ModSource::AudioFollower(AudioFollower { attack: 0.1, release: 1.0, gain_db: 0.0, ..AudioFollower::default() });
+        apply_param(&mut follower, ModParam::Attack, 0.25);
+        apply_param(&mut follower, ModParam::Release, -0.25);
+        apply_param(&mut follower, ModParam::Gain, 0.25);
+        let ModSource::AudioFollower(f) = follower else { panic!("a follower") };
+        assert!((f.attack - 0.2).abs() < 1e-6, "a quarter depth doubles the attack: {}", f.attack);
+        assert!((f.release - 0.5).abs() < 1e-6, "and halves the release: {}", f.release);
+        assert!((f.gain_db - 12.0).abs() < 1e-6, "a quarter of the 48 dB span: {}", f.gain_db);
+        assert!((f.amount - 1.0).abs() < 1e-6, "its amount is not touched");
+        // A full depth either way is two octaves, and the knob's limits still hold: a time never goes negative, a gain
+        // never passes the knob's +24 dB.
+        apply_param(&mut follower, ModParam::Attack, -1.0);
+        apply_param(&mut follower, ModParam::Gain, 1.0);
+        let ModSource::AudioFollower(f) = follower else { panic!("a follower") };
+        assert!((f.attack - 0.0125).abs() < 1e-7, "a sixteenth of 0.2 s: {}", f.attack);
+        assert_eq!(f.gain_db, 24.0);
+        let mut short = ModSource::AudioFollower(AudioFollower { attack: 0.0005, ..AudioFollower::default() });
+        apply_param(&mut short, ModParam::Attack, -1.0);
+        assert!(matches!(short, ModSource::AudioFollower(f) if f.attack == 0.0005), "kept at the knob's shortest attack");
+        // A random source's smoothing: added, inside 0..1.
+        let mut random = ModSource::Random(Random { smooth: 0.0, ..Random::default() });
+        apply_param(&mut random, ModParam::Smooth, 0.5);
+        assert!(matches!(random, ModSource::Random(r) if (r.smooth - 0.5).abs() < 1e-6));
+        apply_param(&mut random, ModParam::Smooth, 1.0);
+        assert!(matches!(random, ModSource::Random(r) if r.smooth == 1.0), "clamped to a whole cycle");
+        // A parameter the source does not have changes nothing at all.
+        let lfo = ModSource::Lfo(Lfo::default());
+        let mut moved = lfo;
+        apply_param(&mut moved, ModParam::Attack, 1.0);
+        apply_param(&mut moved, ModParam::Smooth, 1.0);
+        assert_eq!(moved, lfo, "an LFO has neither an attack nor a smoothing");
+    }
+
+    /// An MSEG is a pure function of the position: straight lines between its points (or a hold when it is not smooth),
+    /// looping or holding its last point, with the amount shrinking the swing around the middle.
+    #[test]
+    fn an_mseg_reads_its_points_at_a_position() {
+        let mut m = Mseg::default();
+        assert!((mseg_value(&m, 0.0) - 0.0).abs() < 1e-6, "the first point is the bottom");
+        assert!((mseg_value(&m, 0.25) - 0.5).abs() < 1e-6, "halfway up the first segment");
+        assert!((mseg_value(&m, 0.5) - 1.0).abs() < 1e-6, "the middle point is the top");
+        assert!((mseg_value(&m, 0.75) - 0.5).abs() < 1e-6);
+        assert!((mseg_value(&m, 1.0) - 0.0).abs() < 1e-6, "one pass is one cycle");
+        m.looped = false;
+        assert!((mseg_value(&m, 1.5) - 0.0).abs() < 1e-6, "a shape that does not loop holds its last point");
+        m.smooth = false;
+        assert!((mseg_value(&m, 0.25) - 0.0).abs() < 1e-6, "a held shape keeps the point it is on");
+        m.smooth = true;
+        m.amount = 0.0;
+        assert!((mseg_value(&m, 0.5) - 0.5).abs() < 1e-6, "an amount of zero is the middle");
+    }
+
+    /// A route's depth is a destination: a macro shaping how far a step sequence drives a fader changes the swing, and
+    /// with nothing shaping it the assignment keeps exactly the depth the user set.
+    #[test]
+    fn a_modulator_shapes_how_far_another_route_drives() {
+        let mut e = Engine::new(&project(0), &mut SampleLibrary::new(None), 48000, PlayMode::Pattern(1));
+        let steps = || Modulator {
+            id: 2,
+            source: ModSource::Steps(Steps { values: [50; 16], period: Timebase::Sync(1), smooth: false }),
+            enabled: true,
+            targets: vec![ModTarget { target: Target::MixerVolume(1), depth: -0.25, curve: Curve::Linear, polarity: Polarity::Unipolar, enabled: true }],
+        };
+        let shape = |value| Modulator {
+            id: 1,
+            source: ModSource::Macro(Macro { value }),
+            enabled: true,
+            targets: vec![ModTarget { target: Target::RouteDepth(2, 0), depth: 1.0, curve: Curve::Linear, polarity: Polarity::Bipolar, enabled: true }],
+        };
+        // The authored depth alone: a quarter down from the fader's own value.
+        e.set_modulation(vec![steps()]);
+        run(&mut e, 1000, 1000);
+        assert_eq!(e.tracks[1].mod_vol, Some(9800), "0.8 minus a quarter of 0.75");
+        assert_eq!(e.tracks[1].vol, 12800, "the authored fader is still the base");
+        // A macro at the bottom of its travel drives the route's depth to its negative end...
+        e.set_modulation(vec![shape(0.0), steps()]);
+        run(&mut e, 1000, 1000);
+        assert_eq!(e.tracks[1].mod_vol, Some(800), "the whole depth down is the bottom");
+        // ...and at the top, to its positive one.
+        e.set_modulation(vec![shape(1.0), steps()]);
+        run(&mut e, 1000, 1000);
+        assert_eq!(e.tracks[1].mod_vol, Some(16000), "the whole depth up is the top");
+    }
+
+    /// A macro is a source like any other and it can be driven: an LFO turning a macro's value moves everything the
+    /// macro drives, at each assignment's own depth.
+    #[test]
+    fn a_route_turns_a_macro_which_drives_the_rest() {
+        let mut e = Engine::new(&project(0), &mut SampleLibrary::new(None), 48000, PlayMode::Pattern(1));
+        e.set_modulation(vec![
+            Modulator { id: 1, source: ModSource::Lfo(Lfo::default()), enabled: true, targets: vec![
+                ModTarget { target: Target::ModulatorParam(2, ModParam::Value.code()), depth: 0.5, curve: Curve::Linear, polarity: Polarity::Unipolar, enabled: true },
+            ] },
+            Modulator { id: 2, source: ModSource::Macro(Macro { value: 0.0 }), enabled: true, targets: vec![
+                ModTarget { target: Target::MixerVolume(1), depth: 0.5, curve: Curve::Linear, polarity: Polarity::Unipolar, enabled: true },
+            ] },
+        ]);
+        run(&mut e, 1000, 1000);
+        let turned = e.tracks[1].mod_vol.expect("the macro drives the fader");
+        assert!(turned > 12800 && turned <= 16000, "the macro sits somewhere up its range: {turned}");
+        assert_eq!(e.tracks[1].vol, 12800, "the authored fader is still the base");
+        // A macro that nothing drives sits exactly where the user put it.
+        e.set_modulation(vec![Modulator { id: 1, source: ModSource::Macro(Macro { value: 0.5 }), enabled: true, targets: vec![
+            ModTarget { target: Target::MixerVolume(1), depth: 0.5, curve: Curve::Linear, polarity: Polarity::Unipolar, enabled: true },
+        ] }]);
+        run(&mut e, 1000, 1000);
+        assert_eq!(e.tracks[1].mod_vol, Some(16000), "half up plus half the range is the top");
     }
 }

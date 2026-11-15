@@ -71,15 +71,65 @@
       cannot make them show the base instead of the modulated value (and must not freeze them: that is the plugin's
       window). Every control the app draws itself — the device rack's tiles, which mirror an editor's parameters — does
       follow automation while a source drives it and never follows the source (`hold_modulated`).
-- [ ] **More routable parameters**: only rate, amount, phase and offset are addressable today. Depth-shaping
-      a route (the assignment's depth as a destination), a follower's attack/release/gain, and a random source's
-      smoothness are the obvious next ones.
-- [ ] **Task 2, the modulator suite**: per-voice ADSR, velocity and key tracking, an MSEG, macros, an XY pad, and
-      the operator nodes (math, polynomial, quantize, map, slew) on top of the DAG. None of it exists yet.
-- [ ] **A `.lemon` layout for routes**: a route is written with a new parameter tag inside the existing graph
-      layout, because bumping the global layout would make every other event unreadable. A build from before this
-      change stops reading the graph at a route (unknowable tag length), so the graph events need their own layout
-      version next time the format opens up.
+- [x] **More routable parameters: a follower's own knobs and a random source's smoothing** (2026-11-15):
+      `ModParam` gained Attack, Release, Gain and Smooth (bytes 4–7, so an old file's routes still read), and every
+      knob of the editor is a destination now (`modulation::knob_param`), so routing mode rings a follower's
+      attack/release/gain and a random source's smoothing, the options menu lists them, and the depth arc is the same
+      one a device parameter gets. `apply_param` moves a time by the rate's two-octaves-per-full-depth scaling, kept
+      inside the knob's own range (attack 0.5 ms–2 s, release 1 ms–10 s), a gain in decibels over its 48 dB span, and
+      a smoothing amount by addition — so no route can ask for a negative time constant. `applies_to` also stopped
+      claiming a rate for a follower, which follows the master rather than a period and silently ignored one
+      (`a_followers_and_a_random_sources_own_parameters_take_routes`, `a_route_moves_a_followers_own_parameters_and_a_random_sources_smoothing`,
+      `a_followers_own_knobs_take_routes`).
+- [x] **A route's own depth as a destination** (2026-11-15): every assignment now carries its own identity
+      (`ModTarget::route`, minted from `ModGraph::next_route`, never reused, saved with the graph), and its depth is a
+      parameter of the graph in its own right (`ParameterPath::on_route`, `ParameterKey::RouteDepth`). With routing
+      mode armed, a press on another modulator's assignment arc routes into that route's depth instead of dragging it
+      (`begin_route_depth_drag`), so A shapes how far B drives a parameter: B's authored depth stays what the user
+      set, and A's own depth/curve/polarity decide the swing. The engine evaluates a depth route as an edge into the
+      modulator that makes the route — before it, so a driven depth lands in the same tick — moves the depth as the
+      normalized value it is (`2×` its fraction minus one), and uses each assignment's effective depth both for the
+      graph's own edges and for device and mixer offsets (`a_modulator_shapes_how_far_another_route_drives`). The graph
+      refuses a depth's own driver shaping it, a depth of a depth, and a loop — the same rules as a route into a
+      modulator's parameter — and takes depth routes with the assignment or modulator they named
+      (`a_route_has_an_identity_and_its_depth_takes_routes`). The browser lists the row as "LFO 2 - depth of LFO 2 -
+      Amount" (`a_press_on_an_arc_routes_into_the_routes_depth`), and `target::route_depth(owner, index)` addresses it
+      in the engine's `0x6100` range.
+- [x] **Task 2, first slice: macros and an MSEG** (2026-11-15): two sources the project-level graph can carry
+      exactly as it carries an LFO. `ModSource::Macro` is a saved 0..1 control whose position is its output and a
+      routing destination of its own (`ModParam::Value`, byte 8), so an LFO can turn a macro that drives ten
+      parameters at ten depths and no loop can form (`a_route_turns_a_macro_which_drives_the_rest`).
+      `ModSource::Mseg` is up to 16 breakpoints over a `Timebase` period, looping or holding its last point, linear or
+      held, bipolar or lifted above the middle, with rate and amount as destinations (`ModParam::Rate`/`Amount`) and
+      the amount a gain around the middle like every other source. Both are pure functions of the transport's
+      position — no sample rate, no clock of their own — so a render equals live playback and a seek lands where the
+      shape says. The add menu lists five kinds now, the editor draws their controls (MSEG: rate, loop / lines /
+      bipolar, amount; macro: its value knob), the menu lays five MSEG shapes, and both travel in `.lemon`
+      (`the_new_sources_round_trip`, `an_mseg_and_a_macro_are_kinds_of_their_own`,
+      `an_mseg_reads_its_points_at_a_position`). A new source kind is a graph tag an older build stops reading at —
+      the trade-off routes already took, and what the layout item below is for.
+- [ ] **Task 2, the note sources**: per-voice ADSR, velocity and key tracking. These are the ones the project graph
+      cannot carry yet: a target is a device or mixer parameter, and the engine has no per-voice modulation — its
+      voices are the sampler's (`engine/voice.rs`), not an instrument's, and no built-in instrument has a voice pool
+      until FreqBat (see the device handoff below). The step before per-voice is a note context for the graph (the
+      newest note at least: key, velocity, gate) and per-channel modulator values, since one global output cannot
+      differ per note. Design it together with FreqBat's `os-dsp` voice pool rather than twice.
+- [ ] **Task 2, the XY pad**: two axes, one drag. The graph's modulator has one output, so a pad is a pair of macros
+      dragged together (`MacroId` × `MacroId`, saved with the graph and drawn as a pad in the editor of either) rather
+      than a new source with two outputs — decided, not built.
+- [ ] **Task 2, the operator nodes**: math, polynomial, quantize, map and slew on top of the DAG. Each is a source
+      with two inputs (a route each) or one input and a curve, so they slot into the existing evaluation order once
+      the note sources do; the graph's edges already carry depth/curve/polarity.
+- [x] **The `.lemon` layout for routes** (2026-11-15): the modulation graph event now carries **its own** layout
+      byte (`GRAPH_LAYOUT = 3`) instead of sharing the file's (`LAYOUT`, which stays 2 — the graph is the one event that
+      has opened up since the format froze, so bumping the file's would have made every other event unreadable to an
+      older build; that is a bug I introduced and fixed the same day). `apply` reads the graph event without the file
+      layout's filter, and `read_graph` accepts the graph's own version plus the two it shared with the file's before
+      (2 and 1), giving their assignments route ids in graph order. Layout 3 writes each assignment's route identity, a
+      target that may name a route's depth (`ROUTE_DEPTH` tag) and the header's `next_route`, so ids are never reused
+      across saves. An older build reads every other event as before and ignores just this one event, rather than
+      stopping at a route and keeping the modulators before it — the trade-off the previous item described, now paid
+      only for the graph (`the_graph_has_its_own_layout_version`).
 - [ ] **Then the device handoff** (pasted 2026-11-14): FreqBat as an `os-dsp` polyphonic instrument with a
       preallocated voice pool and a native rack panel, then Batshit's 60-second lock-free rolling sampler with
       peak/RMS meters and its `tiny-skia` visualizer. FreqBat's per-voice modulators depend on Task 2 above.
