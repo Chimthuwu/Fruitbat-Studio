@@ -105,12 +105,13 @@ fn files_under(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// The files of data folder `dir` the project does not use (`used`: the files it refers to): those in its Samples,
 /// What Save writes: Lemon Studio's own project file (spec: project/lemon-format.md).
-pub const EXT: &str = "lemon";
+/// Projects are saved as [DAWproject](https://github.com/bitwig/dawproject) files (`crate::dawproject`).
+pub const EXT: &str = "dawproject";
 
-/// The project files Lemon Studio opens: its own, and the legacy projects it migrates from (spec: project/lemon-format.md).
-pub const PROJECT_EXTS: [&str; 2] = [EXT, "flp"];
+/// The project files Fruitbat Studio opens: its own, and the legacy projects it can read (`crate::dawproject`).
+pub const PROJECT_EXTS: [&str; 3] = [EXT, "lemon", "flp"];
 
-/// Whether `p` is a project file by its extension (`.lemon` or `.flp`).
+/// Whether `p` is a project file by its extension (`.dawproject`, an old `.lemon`, or a legacy `.flp`).
 pub fn is_project(p: &Path) -> bool {
     p.extension().is_some_and(|e| PROJECT_EXTS.iter().any(|x| e.eq_ignore_ascii_case(x)))
 }
@@ -121,7 +122,7 @@ pub fn is_flp(p: &Path) -> bool {
     p.extension().is_some_and(|e| e.eq_ignore_ascii_case("flp"))
 }
 
-/// `p` with the `.lemon` extension.
+/// `p` with the project extension (`.dawproject`; a file saved before the change is named `.lemon`).
 pub fn as_lemon(p: &Path) -> PathBuf {
     p.with_extension(EXT)
 }
@@ -402,10 +403,10 @@ mod tests {
     #[test]
     fn template_listing() {
         let root = scratch("tpl");
-        assert_eq!(template_target(&root, &root.join("User").join("Mine.lemon")), root.join("User").join("Mine").join("Mine.lemon"));
-        assert_eq!(template_target(&root, &root.join("Beats").join("Trap.lemon")), root.join("Beats").join("Trap").join("Trap.lemon"));
-        assert_eq!(template_target(&root, &root.join("Beats").join("Trap").join("Trap.lemon")), root.join("Beats").join("Trap").join("Trap.lemon"));
-        assert_eq!(template_target(&root, &std::env::temp_dir().join("Elsewhere.lemon")), root.join("User").join("Elsewhere").join("Elsewhere.lemon"));
+        assert_eq!(template_target(&root, &root.join("User").join("Mine.dawproject")), root.join("User").join("Mine").join("Mine.dawproject"));
+        assert_eq!(template_target(&root, &root.join("Beats").join("Trap.dawproject")), root.join("Beats").join("Trap").join("Trap.dawproject"));
+        assert_eq!(template_target(&root, &root.join("Beats").join("Trap").join("Trap.dawproject")), root.join("Beats").join("Trap").join("Trap.dawproject"));
+        assert_eq!(template_target(&root, &std::env::temp_dir().join("Elsewhere.dawproject")), root.join("User").join("Elsewhere").join("Elsewhere.dawproject"));
         crate::templates::TEST_DIR.with(|d| *d.borrow_mut() = Some(root.clone()));
         let rows = template_items(&App::new(None).state);
         // The built-ins: Linear (spec: model/track-model.md §2), then Empty; no user templates yet.
@@ -414,11 +415,11 @@ mod tests {
         let mut app = App::new(None);
         app.state.tempo = 97.0;
         let work = scratch("tpl_work");
-        let song = work.join("song.lemon");
+        let song = work.join("song.dawproject");
         app.save_to(song.clone());
-        app.template_chosen(root.join("User").join("Slow.lemon"));
+        app.template_chosen(root.join("User").join("Slow.dawproject"));
         assert_eq!(app.state.path.as_deref(), Some(song.as_path()), "the project keeps its file");
-        assert!(root.join("User").join("Slow").join("Slow.lemon").is_file(), "{:?}", app.state.message);
+        assert!(root.join("User").join("Slow").join("Slow.dawproject").is_file(), "{:?}", app.state.message);
         let rows = template_items(&app.state);
         assert_eq!(rows.iter().map(|r| r.label.to_string()).collect::<Vec<_>>(), ["User", "Linear", "Empty"]);
         assert_eq!(rows[0].children.len(), 1);
@@ -451,7 +452,7 @@ mod tests {
         let mut app = App::new(None);
         app.save_to(dir.join("Tune.flp"));
         app.new_folder_chosen(dir.clone());
-        let file = dir.join("Tune").join("Tune.lemon");
+        let file = dir.join("Tune").join("Tune.dawproject");
         assert_eq!(app.state.path.as_deref(), Some(file.as_path()), "{:?}", app.state.message);
         assert!(file.is_file());
         assert_eq!(crate::data_folder::folder(&app.state), Some(dir.join("Tune")));

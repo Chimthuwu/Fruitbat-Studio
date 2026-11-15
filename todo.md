@@ -759,6 +759,19 @@ tests stay untouched. To bring it back, rebuild it as ONE self-contained group i
       (`TrackSetInstrument { track, index | none }`) that owns lane link + channel routing + mirror +
       hosting, and make the ADD-tab / classic paths delegate to it.
 
+- [x] **Projects are saved as DAWproject files** (2026-11-15): the program's own format is now the interchange
+      format (https://github.com/bitwig/dawproject, 1.0), a ZIP with `project.xml` — `Application`, `Transport` (tempo,
+      time signature), `Structure` (a `Track` + `Channel` per mixer track: name, colour, fader, pan, mute, sends, the
+      channel's instrument and the track's effect slots as `BuiltinDevice`s by name, master with `role="master"`), and
+      the arrangement's `Clip`s with their pattern notes (`crate::dawproject`). What the format cannot express — plugin
+      state bytes, strip, equaliser, modulation graph, patterns' own settings — rides beside it as
+      `fruitbat/project.flp`, which the rest of the program already reads and writes, so reopening here is exact while
+      other DAWs ignore the unreferenced file. Save, Save as, Save new version, backups and the `.dawproject` file
+      association follow (`mod: dawproject`, `the_archive_holds_the_standard_project_and_the_original`). Legacy `.flp`
+      and `.lemon` files still open; saving one asks for a `.dawproject` name. Not yet: opening a `.dawproject` written
+      by another DAW (the archive's own payload is what this build reads), audio clips' file lengths, and plugin
+      identities (devices are named, never given fake IDs).
+
 ## Standing rules
 - Clean-room only: no decompiled code or pseudocode derived from decompilation (see README contributing).
 - Keep `THIRD-PARTY-NOTICES.txt` in sync with Cargo.lock (`cargo run -p notices`) — cargo test enforces it.

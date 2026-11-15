@@ -450,7 +450,7 @@ mod tests {
         assert_eq!(pack.missing, vec!["Gone.wav".to_string()]);
         let (done, total) = (AtomicU64::new(0), AtomicU64::new(0));
         write_zip(&zip, &flp, &pack, &done, &total).unwrap();
-        assert_eq!(names(&zip), vec!["Song.lemon", "Kick.wav", "Kick_2.wav"], "the project goes in as a .lemon file");
+        assert_eq!(names(&zip), vec!["Song.dawproject", "Kick.wav", "Kick_2.wav"], "the project goes in as a .lemon file");
         assert!(!d.join("out").join("Song.zip.part").exists());
         // On another computer: the original folders are gone.
         std::fs::remove_dir_all(d.join("one")).unwrap();

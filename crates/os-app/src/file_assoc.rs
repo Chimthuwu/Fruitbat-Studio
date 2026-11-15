@@ -17,9 +17,11 @@ use crate::app::App;
 pub const PROG_ID: &str = "LemonStudio.Project";
 /// The extension it registers.
 pub const EXT: &str = ".flp";
-/// Lemon Studio's own project files (spec: project/lemon-format.md): no other program has them, so they are simply ours
-/// while the box is ticked.
+/// Fruitbat Studio's project files: the DAWproject archive this version saves (`crate::dawproject`), and the old
+/// `.lemon` files it still opens.
 pub const LEMON_EXT: &str = ".lemon";
+/// The extension projects are saved with now (spec: the DAWproject 1.0 format).
+pub const PROJECT_EXT: &str = ".dawproject";
 /// The type's description and the open verb's name (spec).
 const DESCRIPTION: &str = "Fruitbat Studio project";
 const FRIENDLY_NAME: &str = "Fruitbat Studio";
@@ -139,6 +141,8 @@ pub fn tick(program: &str, seen: &Seen) -> Vec<Op> {
         Op::Set { key: format!(r"{EXT}\OpenWithProgids"), name: PROG_ID, data: String::new() },
         set(LEMON_EXT.into(), "", PROG_ID.into()),
         Op::Set { key: format!(r"{LEMON_EXT}\OpenWithProgids"), name: PROG_ID, data: String::new() },
+        set(PROJECT_EXT.into(), "", PROG_ID.into()),
+        Op::Set { key: format!(r"{PROJECT_EXT}\OpenWithProgids"), name: PROG_ID, data: String::new() },
     ]);
     ops
 }
@@ -157,6 +161,8 @@ pub fn untick(seen: &Seen) -> Vec<Op> {
     ops.push(Op::DeleteValue { key: format!(r"{EXT}\OpenWithProgids"), name: PROG_ID });
     ops.push(Op::DeleteValue { key: LEMON_EXT.into(), name: "" });
     ops.push(Op::DeleteValue { key: format!(r"{LEMON_EXT}\OpenWithProgids"), name: PROG_ID });
+    ops.push(Op::DeleteValue { key: PROJECT_EXT.into(), name: "" });
+    ops.push(Op::DeleteValue { key: format!(r"{PROJECT_EXT}\OpenWithProgids"), name: PROG_ID });
     ops.push(Op::DeleteTree { key: PROG_ID.into() });
     ops
 }
@@ -401,6 +407,8 @@ mod tests {
                 set(r".flp\OpenWithProgids", PROG_ID, ""),
                 set(".lemon", "", PROG_ID),
                 set(r".lemon\OpenWithProgids", PROG_ID, ""),
+                set(".dawproject", "", PROG_ID),
+                set(r".dawproject\OpenWithProgids", PROG_ID, ""),
             ]
         );
         assert!(reg::apply(&ops));
@@ -414,6 +422,8 @@ mod tests {
                 Op::DeleteValue { key: r".flp\OpenWithProgids".into(), name: PROG_ID },
                 Op::DeleteValue { key: ".lemon".into(), name: "" },
                 Op::DeleteValue { key: r".lemon\OpenWithProgids".into(), name: PROG_ID },
+                Op::DeleteValue { key: ".dawproject".into(), name: "" },
+                Op::DeleteValue { key: r".dawproject\OpenWithProgids".into(), name: PROG_ID },
                 Op::DeleteTree { key: PROG_ID.into() },
             ]
         );

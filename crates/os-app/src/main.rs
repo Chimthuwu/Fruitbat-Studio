@@ -67,6 +67,7 @@ mod icons;
 mod init;
 mod knobs;
 mod layout;
+mod dawproject;
 mod lemon_state;
 mod modulation;
 mod loading;
