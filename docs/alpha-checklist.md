@@ -1,6 +1,6 @@
 # Alpha checklist
 
-What stands between Lemon Studio and its first alpha: a fully functional DAW at the original parity. Third-party plugins
+What stands between Fruitbat Studio and its first alpha: a fully functional DAW at the original parity. Third-party plugins
 (CLAP, VST3, VST2) are not part of the alpha bar; hosting them already works, and the rest of that work comes later.
 
 The list started from an assessment of `main` at `a637e72` on 2026-10-24 and was checked again against `fb4382e` on
@@ -37,12 +37,12 @@ Systems a fully functional DAW can't ship without.
   DSP), and the mixer's separation term in single precision. The other engine pages (the arpeggiator, echo delay,
   tracking, gate time, time shift, glides on all five levels, control points on sends, tempo by control point) come
   after the alpha, under "After the alpha". The engine's own voice (the browser's previews, the engine's tests and
-  `os-render`) stays Lemon Studio's own and is not held to the voice pages. Lemon Trio keeps FL 26's averaged edges
+  `os-render`) stays Fruitbat Studio's own and is not held to the voice pages. Lemon Trio keeps FL 26's averaged edges
   with HQ off: FL 24.1's exports show a plain table lookup, and the specs leave open which version is right
 
 ## Built-in instruments and effects
 
-Without third-party plugins, the built-in ones are the whole sound palette. Lemon Studio has three instruments,
+Without third-party plugins, the built-in ones are the whole sound palette. Fruitbat Studio has three instruments,
 sixteen effects and the Tesla audio editor; these are the gaps a project made in the original runs into most.
 
 - [x] **Drum sampler (FPC).** A pad-based drum instrument. Lemon Drum Sampler plays projects' FPC channels with their
@@ -68,7 +68,7 @@ sixteen effects and the Tesla audio editor; these are the gaps a project made in
   plugin window, turns and types in its wet and dry levels on knobs that follow automation, and removes, moves and
   adds effects, one undo step each
   ([container.rs](../crates/os-app/src/container.rs), [chain.rs](../crates/os-engine/src/chain.rs)). Containers are
-  saved in Lemon Studio's projects. The effects inside are automated and linked as a slot's effect is, their wet and
+  saved in Fruitbat Studio's projects. The effects inside are automated and linked as a slot's effect is, their wet and
   dry levels too (clips and controller links name the member by its container's slot and its id, so they follow it
   when it moves and are saved with the project), and their windows have their presets, a slot effect's menu
   (Replace, Delete) and undo steps for their edits and presets (2026-10-30). The channel rack's Patcherize (Wrap in
@@ -113,7 +113,7 @@ Greyed-out controls and partial features. These can land alongside the blockers.
   layout combo's seven other layouts ([mixer.rs](../crates/os-app/src/mixer.rs))
 - [x] **Playlist right-click menus.** None greyed out since 2026-10-30: the last five, the picker's Change icon and
   the plugin window's Link all parameters..., Change icon..., Save channel state as... and Browse channel states, work
-  as Lemon Studio's design (Change icon is kept for the session only)
+  as Fruitbat Studio's design (Change icon is kept for the session only)
   ([playlist.rs](../crates/os-app/src/playlist.rs), [channel_states.rs](../crates/os-app/src/channel_states.rs))
 - [x] **Channel rack right-click menus.** 6 of the rack's own entries greyed out on 2026-11-02, counted entry by
   entry after 29 more were enabled (Receive notes from ▸ Unlock and Computer keyboard, Switch auto-bypass for all
@@ -135,7 +135,7 @@ Greyed-out controls and partial features. These can land alongside the blockers.
   no lane for the main swing, a channel's mixer track or its switch; greyed in the original too, which also greys Edit
   events in new window there, 2026-11-02)
   ([rack.rs](../crates/os-app/src/rack.rs), [burn_midi.rs](../crates/os-app/src/burn_midi.rs)). These stay greyed
-  for the alpha (decided 2026-11-02): each waits on something Lemon Studio does not have yet or on what the original
+  for the alpha (decided 2026-11-02): each waits on something Fruitbat Studio does not have yet or on what the original
   does, listed under "After the alpha"
 - [x] **Main menu bar.** 2 of its 137 entries greyed out on 2026-10-30, counted entry by entry after Save audio
   clipboard to browser, VIEW > Remote control, HELP > Tutorials ▸, Diagnostics, TOOLS > Set up for live performance,
@@ -148,7 +148,7 @@ Greyed-out controls and partial features. These can land alongside the blockers.
 - [x] **TOOLS ▸ Audio logger and Dump to audio editor.** Enabled (on by default, as in the original) keeps the last 1 to
   10 minutes of what the device plays, the header showing the memory used; Dump puts them into the master track's
   Tesla. At its time limit Tesla now keeps the last minutes, as Edison does. What the original's logger records and how
-  long was not measured: Lemon Studio's design
+  long was not measured: Fruitbat Studio's design
 - [x] **Tesla's later tools** (group 5 of Tesla's roadmap in the specs). Time stretch / pitch shift with formant
   preservation (2026-10-29); the envelope modes with Mixdown amp envelopes, heard while playing, the envelope tools
   (with their dialogs: Scale levels, Decimate points, Filter, Smooth up, Create sequence; Turn all points smooth and
@@ -157,12 +157,12 @@ Greyed-out controls and partial features. These can land alongside the blockers.
   grid-slicing, Detect beats, Detect pitch regions, Set first downbeat, Convert to score and dump to piano roll and
   the zero-cross check, Send to new Lemon Slicer channel, drum(loop) stretch and noise gating (Acquire noise
   threshold, Gate noise, Trim side noise, Trim all noise & slice up, the threshold mark) work (2026-10-30). Most of
-  it is Lemon Studio's design, with measurement requests open in the specs. Vocal denoise / isolator and Deverb have
+  it is Fruitbat Studio's design, with measurement requests open in the specs. Vocal denoise / isolator and Deverb have
   their own item below
 - [x] **Tesla's Vocal denoise / isolator and Deverb.** Tools > Spectral's last two entries (group 5 of Tesla's
   roadmap in the specs) work (2026-10-30): Vocal denoise / isolator's MIX goes from the noise alone through the
   original to the voice alone, Deverb takes the late reverb out (General or Vocal, with a MIX) at a reverb time it
-  reads from the selection. Both are Lemon Studio's spectral design, not the original's trained model; what the
+  reads from the selection. Both are Fruitbat Studio's spectral design, not the original's trained model; what the
   entries do is from the original's manual. Edit > Undo mix (envelope) came with them
 - [x] **Value boxes.** All of them work, the last two being the autosave Maximum and Metronome track, and MIDI
   settings' Performance mode MIDI channel (2026-10-30)
@@ -172,7 +172,7 @@ Greyed-out controls and partial features. These can land alongside the blockers.
   held), column, clip group and track group scenes and +Scenes (Ctrl+click, notes 125 / 126 held), sub-clips (velocity), each track's Performance
   settings, Ctrl+P, Prepare for performance mode, the clip and track progress displays, the clock counting bars
   from the Start marker and recording a performance (Record armed) work (2026-10-30; the typing keyboard last)
-- [x] **Recording settings page.** Settings ▸ Recording, Lemon Studio's own page (the original keeps these in the
+- [x] **Recording settings page.** Settings ▸ Recording, Fruitbat Studio's own page (the original keeps these in the
   Record button's menus): the recording filter, the Record options and quantize, Start on input, Loop record, Blend,
   Count-in and its length, Auto-create audio clips and the External input question's answer, shared with the menus
   and buttons that also set them
@@ -202,7 +202,7 @@ Left out of the alpha on 2026-11-02; each stays open here until it is done.
   Override global mapping... on the knob, mixer box and LED menus (what the original's override does is not
   described), and Edit automation in piano roll on the swing knob, the mixer box and the LED (no piano roll lane for
   them; greyed in the original too)
-- [ ] **TOOLS > Control builder and VIEW > Script output.** Lemon Studio has neither a control builder nor scripting
+- [ ] **TOOLS > Control builder and VIEW > Script output.** Fruitbat Studio has neither a control builder nor scripting
 
 ## Shipping a build
 
@@ -210,11 +210,11 @@ What has to exist before anyone outside can run the alpha. Builds ship once the 
 (decided 2026-10-29), so these come last: until then nothing is packaged or released, and contributions that add
 installers or release packaging are declined.
 
-- [ ] **Prebuilt binaries for Windows, macOS and Linux.** Today Lemon Studio is built from source only
+- [ ] **Prebuilt binaries for Windows, macOS and Linux.** Today Fruitbat Studio is built from source only
 - [x] **Complete [THIRD-PARTY-NOTICES.txt](../THIRD-PARTY-NOTICES.txt).** Every crate that goes into a build is
   listed with its licence text, generated by `cargo run -p notices`; `cargo test` fails when one is missing
 - [ ] **macOS signing and notarization.** Builds and plugin bundles are signed ad hoc only
 - [ ] **Plugin crashes contained on macOS and Linux.** Calls into plugins run under a signal guard there, with the
   same handling of a stopped plugin as on Windows (its crash tests pass in CI on both), and so do CLAP and VST3
   editors' run loop callbacks on Linux. Left: macOS editors, which the system's run loop calls outside any host
-  call: a crash in a plugin's editor on macOS still closes Lemon Studio
+  call: a crash in a plugin's editor on macOS still closes Fruitbat Studio

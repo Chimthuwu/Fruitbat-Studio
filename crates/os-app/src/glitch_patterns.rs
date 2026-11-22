@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! The glitch grid's saved patterns (Lemon Studio's design): the strip menu's Glitch Strip ▸ Pattern ▸ saves the
+//! The glitch grid's saved patterns (Fruitbat Studio's design): the strip menu's Glitch Strip ▸ Pattern ▸ saves the
 //! sixteen steps and the amount to a file of the user folder's `Glitch patterns`, named by the user in the save box,
 //! and lists the ones saved there to put on a grid again.
 //!
@@ -112,7 +112,7 @@ pub fn save_as(app: &mut App, n: u16) -> Option<String> {
         "glitch pattern",
         crate::dialog::Then::SaveGlitchPattern(n),
     )
-    .filter("Lemon Studio glitch pattern", &[EXT])
+    .filter("Fruitbat Studio glitch pattern", &[EXT])
     .start(Some(&d))
     .name(&format!("{name}.{EXT}"));
     app.file_dialog(dlg);

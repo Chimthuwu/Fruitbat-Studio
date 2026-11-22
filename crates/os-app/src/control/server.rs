@@ -209,7 +209,7 @@ pub fn serve_headless(at: &str, level: Level, token: Option<String>, project: Op
     let mut server = match start(at, level, || {}) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Lemon Studio: could not listen at {at}: {e}");
+            eprintln!("Fruitbat Studio: could not listen at {at}: {e}");
             std::process::exit(1);
         }
     };
@@ -217,7 +217,7 @@ pub fn serve_headless(at: &str, level: Level, token: Option<String>, project: Op
     if token.is_some() {
         server.token = token;
     }
-    eprintln!("Lemon Studio: control plane {} ({level:?})", server.describe());
+    eprintln!("Fruitbat Studio: control plane {} ({level:?})", server.describe());
     app.listen(server);
     loop {
         app.tick();

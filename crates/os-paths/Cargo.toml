@@ -1,6 +1,6 @@
 [package]
 name = "os-paths"
-description = "Where Lemon Studio keeps its own files (settings, themes, presets) on each platform"
+description = "Where Fruitbat Studio keeps its own files (settings, themes, presets) on each platform"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

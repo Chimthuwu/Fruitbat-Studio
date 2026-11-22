@@ -1,6 +1,6 @@
 [package]
 name = "lemon-formula-controller"
-description = "Lemon Formula Controller: Lemon Studio's formula controller as a VST3 / CLAP plugin"
+description = "Lemon Formula Controller: Fruitbat Studio's formula controller as a VST3 / CLAP plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

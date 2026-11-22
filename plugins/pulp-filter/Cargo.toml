@@ -1,6 +1,6 @@
 [package]
 name = "pulp-filter"
-description = "Pulp Filter: Lemon Studio's pattern-controlled multi-filter as a VST3 / CLAP plugin"
+description = "Pulp Filter: Fruitbat Studio's pattern-controlled multi-filter as a VST3 / CLAP plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

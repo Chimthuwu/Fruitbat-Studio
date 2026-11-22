@@ -1,6 +1,6 @@
 [package]
 name = "lemon-peak-controller"
-description = "Lemon Peak Controller: Lemon Studio's peak follower and LFO controller as a VST3 / CLAP plugin"
+description = "Lemon Peak Controller: Fruitbat Studio's peak follower and LFO controller as a VST3 / CLAP plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

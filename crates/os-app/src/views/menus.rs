@@ -184,7 +184,7 @@ pub const FILE_OPEN: usize = 2;
 pub const FILE_SAVE: usize = 4;
 pub const FILE_SAVE_AS: usize = 5;
 pub const FILE_SAVE_VERSION: usize = 6;
-/// FILE > Export audio (Ctrl+R; the toolbar's render button) and Export MP3 (Shift+Ctrl+R): the Export form (spec:
+/// FILE > Export audio (the toolbar's render button) and Export MP3 (Shift+Ctrl+R): the Export form (spec:
 /// audio/export.md §2).
 pub const FILE_EXPORT: usize = 12;
 pub const FILE_EXPORT_MP3: usize = 13;
@@ -252,7 +252,7 @@ const FILE: &[Item] = &[
     it(DELETE_UNUSED_LABEL, "").on().cmd(MenuCmd::DeleteUnused),
     SEP,
     it("Import", "").sub().cmd(MenuCmd::Sub(Sub::Import)),
-    it("Export audio...", "Ctrl+R").on(),
+    it("Export audio...", "").on(),
     it("Export MP3...", "Shift+Ctrl+R").on(),
     it("Export MIDI...", "Shift+Ctrl+M").on(),
     it(EXPORT_ZIP_LABEL, "").on().cmd(MenuCmd::ExportZip),
@@ -379,7 +379,7 @@ const OPTIONS: &[Item] = &[
     it("Enable MIDI master sync", "").on().tick().cmd(MenuCmd::Midi(crate::midi_cfg::Switch::MasterSync)),
     head("Switches"),
     it("Computer MIDI keyboard", "").on().tick().cmd(MenuCmd::Typing),
-    it(METRONOME_LABEL, "Ctrl+M").on().tick().cmd(MenuCmd::Metronome),
+    it(METRONOME_LABEL, "").on().tick().cmd(MenuCmd::Metronome),
     it(PRECOUNT_LABEL, "Ctrl+P").on().tick().cmd(MenuCmd::Record(crate::record::Opt::Precount)),
     it(WAIT_LABEL, "Ctrl+I").on().tick().cmd(MenuCmd::Record(crate::record::Opt::Wait)),
     it(BLEND_LABEL, "Ctrl+B").on().tick().cmd(MenuCmd::Record(crate::record::Opt::Blend)),

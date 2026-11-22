@@ -1501,9 +1501,10 @@ pub fn knob_param(field: KnobField) -> Option<os_model::modulation::ModParam> {
 /// live values. Every edit path ends here, so nothing has to be restarted.
 pub fn sync(app: &mut crate::app::App) {
     let (spec, snapshot) = engine_spec(&app.state, &app.plugins);
-    app.state.mod_snapshot = snapshot.clone();
     let bases = mod_bases(&app.state, &app.plugins);
-    app.transport.set_modulation(spec, snapshot, bases);
+    // The snapshot playback publishes into, which an unchanged graph leaves as it was: storing the fresh one here
+    // would leave the plots reading a snapshot nothing writes (they froze while the sound carried on).
+    app.state.mod_snapshot = app.transport.set_modulation(spec, snapshot, bases);
 }
 
 /// The value each parameter the graph drives has when its modulation is taken away: what the engine moves from.
@@ -2349,8 +2350,7 @@ mod tests {
         app.tick();
         let damage = app.take_damage().expect("the strip asked for a frame");
         let s = &app.state;
-        let h = crate::device_rack::height(s);
-        let rack = os_ui::Rect::new(0.0, s.screen.1 - h, s.screen.0, h);
+        let rack = crate::views::device_rack::panel_rect(s, s.screen.0, s.screen.1);
         let row = crate::views::device_rack::mod_row_rect(s, rack);
         if let Some(rects) = damage {
             assert!(rects.iter().any(|r| !r.intersect(&row).is_empty()), "the modulator strip is in the damage: {rects:?}");
@@ -2468,6 +2468,25 @@ mod tests {
         crate::playlist::run(&mut app, crate::playlist::Cmd::Undo);
         assert!(app.state.modulation.get(id).is_some_and(|m| m.enabled));
         assert_eq!(depth_on(&app.state, t), Some(0.5));
+    }
+
+    /// A graph edit that leaves the engine's graph as it was (a rename) keeps the snapshot playback publishes into.
+    /// Storing the freshly built one instead left the plots reading a snapshot nothing wrote, so they froze while the
+    /// sound carried on — the report was an LFO whose speed audibly followed a Random while its tile plot never moved.
+    #[test]
+    fn an_edit_that_keeps_the_graph_keeps_the_live_snapshot() {
+        let mut app = crate::app::App::new(None);
+        app.state.project = crate::app::test_project();
+        app.state.control.settle(&mut app.state.project);
+        let t = target::channel_param(0, 1);
+        run(&mut app, ModCmd::New(t)).expect("a modulator");
+        let id = app.state.modulation.modulators[0].id;
+        let before = app.state.mod_snapshot.clone();
+        run(&mut app, ModCmd::Rename(id, "Wobble".into())).expect("renamed");
+        assert!(
+            std::sync::Arc::ptr_eq(&before, &app.state.mod_snapshot),
+            "the UI still reads the snapshot playback publishes into"
+        );
     }
 
     /// While the transport is stopped the tile's plot still moves: the history falls back to evaluating the source

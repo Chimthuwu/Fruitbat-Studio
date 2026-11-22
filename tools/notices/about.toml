@@ -1,6 +1,6 @@
 # cargo-about's settings for the Rust crates' section of THIRD-PARTY-NOTICES.txt (`cargo run -p notices`).
 
-# The licences Lemon Studio takes the crates under, all compatible with the GPL version 3. For a crate that offers a
+# The licences Fruitbat Studio takes the crates under, all compatible with the GPL version 3. For a crate that offers a
 # choice ("MIT OR Apache-2.0"), the first one here that it offers is the one whose text the notices carry.
 accepted = [
     "MIT",

@@ -1,6 +1,6 @@
 [package]
 name = "lemon-note-selector"
-description = "Lemon Note Selector: Lemon Studio's MIDI selector container as a VST3 / CLAP MIDI plugin"
+description = "Lemon Note Selector: Fruitbat Studio's MIDI selector container as a VST3 / CLAP MIDI plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Containers, Lemon Studio's Patcher (slices 1 and 3): a mixer slot holding a serial chain of effects, or a channel
+//! Containers, Fruitbat Studio's Patcher (slices 1 and 3): a mixer slot holding a serial chain of effects, or a channel
 //! whose instrument is such a chain led by instruments, each member with its own wet and dry levels. The slot menu's
 //! Wrap in container moves the slot's effect into a new container in the same slot; Wrap all in container moves the
 //! track's effects, in slot order, into one container in this slot and empties the others; the channel menu's Wrap in
@@ -39,7 +39,7 @@ use crate::knobs::KnobId;
 use crate::playlist::{Cmd, PItem, Popup};
 use crate::plugins::{fx_key, fx_of, Hosted, Plugins, FX_KEY, MEMBER_KEY};
 
-/// The slot plugin name a container is kept under (Lemon Studio's own; the original's Patcher slots whose patch is a
+/// The slot plugin name a container is kept under (Fruitbat Studio's own; the original's Patcher slots whose patch is a
 /// plain serial chain open as containers, [`open_patchers`]).
 pub const CONTAINER: &str = "Lemon Container";
 
@@ -359,7 +359,7 @@ pub const INSTRUMENT_LEVELS: (f32, f32) = (1.0, 1.0);
 /// The most effects a container holds (the ids its members' automation targets have room for).
 pub const MAX_MEMBERS: usize = MEMBER_IDS as usize;
 
-/// The container's window (Lemon Studio's design: spec plugins/patcher/README.md §4.3): where it is, the container it
+/// The container's window (Fruitbat Studio's design: spec plugins/patcher/README.md §4.3): where it is, the container it
 /// shows, and the levels that container's chain plays, read every tick (`App::mirror_levels`) so that an automated
 /// level turns its knob.
 #[derive(Debug, Clone)]
@@ -868,7 +868,7 @@ fn relink(s: &mut State, name: &str, moved: &Moved) {
 /// 4. else the installed native plugin of that name.
 ///
 /// A plugin not found is kept with its stream, and the chain passes it by, as a container's member that is not found
-/// always is (a plain slot keeps its bytes and plays nothing). Lemon Studio's own: the effects the engine plays for a
+/// always is (a plain slot keeps its bytes and plays nothing). Fruitbat Studio's own: the effects the engine plays for a
 /// plain slot without a plugin instance (`os_engine::effects::from_slot`, Fruity Stereo Shaper) are not found here, as
 /// a container's members are plugin instances.
 fn member_of(n: &os_project::patcher::Node, effects: &[crate::plugins::Available]) -> Member {
@@ -940,7 +940,7 @@ pub fn open_patchers(s: &mut State, effects: &[crate::plugins::Available]) -> Op
         let place = format!("{}, slot {}", crate::mixer::name(s, t), k + 1);
         let Some(slot) = crate::mixer::track_mut(s, t).and_then(|m| m.slots[usize::from(k)].as_mut()) else { continue };
         let Some(patch) = patcher::parse(&slot.state) else {
-            left.push(format!("{place} (a state Lemon Studio does not read)"));
+            left.push(format!("{place} (a state Fruitbat Studio does not read)"));
             continue;
         };
         let order = match patch.serial_chain() {
@@ -1240,7 +1240,7 @@ impl App {
     /// The browser's container entry dropped on the mixer (spec: plugins/patcher/README.md §3.3 "Shift+drop", §2.8):
     /// with Shift on a filled slot `slot` of the current track, Wrap in container on it, the same one undo step as the
     /// slot menu's; else an empty container in that slot (replacing its plugin, as an effect dropped there does) or in
-    /// the track's first free slot, one step "Add effect". Lemon Studio's own: a Shift+drop on an empty slot or beside
+    /// the track's first free slot, one step "Add effect". Fruitbat Studio's own: a Shift+drop on an empty slot or beside
     /// the slots is a plain drop, as there is no plugin to wrap.
     pub(crate) fn drop_container_on_slot(&mut self, slot: Option<u8>, shift: bool) -> Option<String> {
         let t = self.state.selected_mixer;
@@ -1258,7 +1258,7 @@ impl App {
     /// The browser's container entry dropped on the channel rack (spec: plugins/patcher/README.md §3.3 "Shift+drop",
     /// §2.8): with Shift on rack row `row`, the channel menu's Wrap in container on it (one undo step; a channel whose
     /// plugin cannot be wrapped says so and stays as it is); else a new channel at the bottom of the rack holding an
-    /// empty container, as a generator dropped on the rack adds one, one step "Add channel". Lemon Studio's own: a
+    /// empty container, as a generator dropped on the rack adds one, one step "Add channel". Fruitbat Studio's own: a
     /// Shift+drop beside the rows is a plain drop.
     pub(crate) fn drop_container_on_rack(&mut self, row: Option<usize>, shift: bool) -> Option<String> {
         if let Some(r) = row.filter(|_| shift) {
@@ -1672,7 +1672,7 @@ mod tests {
         a.follow_ids(false, true);
     }
 
-    /// An app with Lemon Studio's effects, the limiter in slot 1 and the delay in slot 2 of track 2; the two names.
+    /// An app with Fruitbat Studio's effects, the limiter in slot 1 and the delay in slot 2 of track 2; the two names.
     fn two_effects() -> (App, String, String) {
         let mut a = App::new(None);
         a.state.project = crate::app::test_project();
@@ -2107,7 +2107,7 @@ mod tests {
         assert_eq!(a.plugins.presets.get(&key), None, "and the redo takes the preset away again");
         assert_eq!(a.state.mixer.slot_names, names);
     }
-    /// An app with Lemon Studio's instruments and effects, rack row 0 played by Lemon Trio; its ticks.
+    /// An app with Fruitbat Studio's instruments and effects, rack row 0 played by Lemon Trio; its ticks.
     fn trio_channel() -> App {
         let mut a = App::new(None);
         a.plugins = crate::plugins::Plugins::default();
@@ -2580,7 +2580,7 @@ mod tests {
 
     // spec: plugins/patcher/state.md "7. What slice 5 can do with this"; plugins/patcher/README.md "4. Implementation slices (proposed, smallest first)" (slice 5)
     /// An opened project's Patcher slot whose patch is a plain serial chain becomes a container in chain order: an FL
-    /// effect Lemon Studio recreates is that effect with its reader's state, a wrapped plugin the plugin found with its
+    /// effect Fruitbat Studio recreates is that effect with its reader's state, a wrapped plugin the plugin found with its
     /// own state, anything else kept with its stream and passed by. A patch with link levels, and a Patcher channel,
     /// stay as they were; the hint names each.
     #[test]

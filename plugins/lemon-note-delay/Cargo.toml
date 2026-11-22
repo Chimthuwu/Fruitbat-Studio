@@ -1,6 +1,6 @@
 [package]
 name = "lemon-note-delay"
-description = "Lemon Note Delay: Lemon Studio's note delay as a VST3 / CLAP MIDI plugin"
+description = "Lemon Note Delay: Fruitbat Studio's note delay as a VST3 / CLAP MIDI plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -38,7 +38,7 @@ pub enum Msg {
     Spp(u16),
 }
 
-/// The message in `bytes` (one whole short message), if it is one Lemon Studio uses. Note on with velocity 0 is a note
+/// The message in `bytes` (one whole short message), if it is one Fruitbat Studio uses. Note on with velocity 0 is a note
 /// off; clock, active sensing, SysEx and MTC are not messages here (the clock is `ExtClock`'s).
 pub fn parse(bytes: &[u8]) -> Option<Msg> {
     let (&status, rest) = bytes.split_first()?;
@@ -203,11 +203,11 @@ pub struct MidiIn {
     changed: Arc<AtomicBool>,
 }
 
-/// The name Lemon Studio's connections show in the system's MIDI routing (ALSA / JACK clients).
-pub const CLIENT: &str = "Lemon Studio";
+/// The name Fruitbat Studio's connections show in the system's MIDI routing (ALSA / JACK clients).
+pub const CLIENT: &str = "Fruitbat Studio";
 
-/// Whether `name` is one of Lemon Studio's own ports (ALSA lists the ports of its output connections as inputs too):
-/// read, it would hear everything Lemon Studio sends (its MIDI out, the clock) as if a device had played it.
+/// Whether `name` is one of Fruitbat Studio's own ports (ALSA lists the ports of its output connections as inputs too):
+/// read, it would hear everything Fruitbat Studio sends (its MIDI out, the clock) as if a device had played it.
 pub fn own(name: &str) -> bool {
     name.strip_prefix(CLIENT).is_some_and(|rest| rest.starts_with(':'))
 }
@@ -362,7 +362,7 @@ mod tests {
         assert_eq!(parse(&[0xd2, 99]), Some(Msg::Pressure { ch: 2, v: 99 }));
         assert_eq!(parse(&[0xc0, 5]), Some(Msg::Program { ch: 0, p: 5 }));
         assert_eq!(parse(&[0xf2, 0x10, 0x01]), Some(Msg::Spp(144)));
-        assert!(own("Lemon Studio:Lemon Studio 131:0") && !own("Lemon Studio test:out 130:0") && !own("Launchkey MK4 61:Launchkey MK4 61 MIDI In 24:0"));
+        assert!(own("Fruitbat Studio:Fruitbat Studio 131:0") && !own("Fruitbat Studio test:out 130:0") && !own("Launchkey MK4 61:Launchkey MK4 61 MIDI In 24:0"));
         assert_eq!(parse(&[0xfa]), Some(Msg::Start));
         assert_eq!(parse(&[0xf8]), None, "the clock is not a message here");
         assert_eq!(Msg::Bend { ch: 4, v: 8192 }.bytes(), Some([0xe0, 0, 64]), "sent on channel 1");
@@ -413,7 +413,7 @@ mod tests {
         }
         let midi = MidiIn::open(wake);
         let names = midi.open_names();
-        let out = midir::MidiOutput::new("Lemon Studio test").expect("MIDI output");
+        let out = midir::MidiOutput::new("Fruitbat Studio test").expect("MIDI output");
         let port = out.ports().into_iter().find(|p| out.port_name(p).is_ok_and(|n| names.contains(&n)));
         let Some(port) = port else { panic!("no loopback port among the inputs {names:?}") };
         let mut conn = out.connect(&port, "loopback").expect("open the loopback output");

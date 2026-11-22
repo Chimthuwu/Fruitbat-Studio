@@ -1348,6 +1348,51 @@ mod tests {
         );
     }
 
+    /// A route into a modulator's own rate shows in the output the UI plots: the driven LFO's published snapshot output
+    /// moves at the rate its driver gives it, not at its own. Regression guard for the tile strip's live plot.
+    #[test]
+    fn a_driven_modulators_output_follows_its_route() {
+        fn outputs(route: bool) -> Vec<f32> {
+            let p = project(0);
+            let mut e = Engine::new(&p, &mut SampleLibrary::new(None), 48000, PlayMode::Pattern(1));
+            let lfo = Modulator {
+                id: 2,
+                source: ModSource::Lfo(Lfo { shape: LfoShape::Sine, period: Timebase::Sync(4), ..Lfo::default() }),
+                enabled: true,
+                targets: vec![ModTarget { target: Target::ChannelParam(0, 7), depth: 0.5, curve: Curve::Linear, polarity: Polarity::Bipolar, enabled: true }],
+            };
+            // A step sequence held at its top: a deterministic driver, so the routed run's rate is a known 16x the
+            // LFO's own (a Random drives it the same way, one value a cycle).
+            let driver = Modulator {
+                id: 1,
+                source: ModSource::Steps(Steps { values: [100; 16], period: Timebase::Sync(4), smooth: false }),
+                enabled: true,
+                targets: if route {
+                    vec![ModTarget { target: Target::ModulatorParam(2, ModParam::Rate.code()), depth: 1.0, curve: Curve::Linear, polarity: Polarity::Bipolar, enabled: true }]
+                } else {
+                    Vec::new()
+                },
+            };
+            let snap = Arc::new(ModSnapshot::new(&[2, 1], &[os_model::target::decode(Target::ChannelParam(0, 7))]));
+            e.set_mod_snapshot(snap.clone());
+            e.set_modulation(vec![lfo, driver]);
+            let mut out = vec![0.0f32; 400 * 2];
+            (0..48)
+                .filter_map(|_| {
+                    e.process(&mut out);
+                    snap.output(2)
+                })
+                .collect()
+        }
+        let own = outputs(false);
+        let driven = outputs(true);
+        assert!(own.len() > 10 && own.len() == driven.len(), "both runs published: {} / {}", own.len(), driven.len());
+        assert!(
+            own.iter().zip(driven.iter()).any(|(a, b)| (a - b).abs() > 0.01),
+            "the driven LFO's output changes with the route: {own:?} / {driven:?}"
+        );
+    }
+
     /// A modulator moves the value the clips hand the parameter, not a value of its own: a step sequence at its top,
     /// bipolar, a quarter of the range, sits a quarter above the ramp (and stops at the top), and moves from the
     /// parameter's own value again once the clip has passed it.

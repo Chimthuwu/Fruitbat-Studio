@@ -1,6 +1,6 @@
 [package]
 name = "press"
-description = "Press: Lemon Studio's multiband maximiser as a VST3 / CLAP plugin"
+description = "Press: Fruitbat Studio's multiband maximiser as a VST3 / CLAP plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

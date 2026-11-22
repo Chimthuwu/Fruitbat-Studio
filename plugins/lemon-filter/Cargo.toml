@@ -1,6 +1,6 @@
 [package]
 name = "lemon-filter"
-description = "Lemon Filter: Lemon Studio's filter as a VST3 / CLAP plugin"
+description = "Lemon Filter: Fruitbat Studio's filter as a VST3 / CLAP plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

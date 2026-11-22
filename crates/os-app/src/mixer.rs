@@ -3447,7 +3447,7 @@ impl App {
             return;
         }
         if !self.plugins.hosted.contains_key(&key) {
-            self.state.message = Some("This slot's plugin is not hosted (no Lemon Studio version of it yet)".into());
+            self.state.message = Some("This slot's plugin is not hosted (no Fruitbat Studio version of it yet)".into());
             return;
         }
         #[cfg(not(plugin_windows))]

@@ -533,6 +533,10 @@ pub struct Plugins {
     /// The palette the open editors last drew with: a skin or theme change makes the next `sync_palette` repaint them,
     /// so a popped-out editor does not keep the old skin's colours.
     palette_seen: Option<os_theme::Palette>,
+    /// The Lemon Parametric EQ's project-file state as the docked editor last read it, by `hosted` key, and when
+    /// (`Plugins::eq_view_state`): a band drag repaints the docked graph on every frame, and serialising the
+    /// instance's whole state each time (which waits for the audio thread) is what made moving its bands slow.
+    eq_view: std::sync::Mutex<BTreeMap<usize, (Instant, Vec<u8>)>>,
 }
 
 /// One row's MIDI FX chain on the note path (`crate::note_fx::NoteFx`): the chain's instrument, the arpeggiator's
@@ -1128,11 +1132,18 @@ impl Plugins {
 
     /// Sets the parameter `id` of the instance under `key` to normalized `value`. False when the instance
     /// is missing or cannot be locked (the device rack's parameter rows go through this).
+    ///
+    /// A drag sets a parameter on every pointer move, so this takes the instance between two of its blocks rather than
+    /// waiting for the audio thread to give it up: a plain lock waited a whole buffer (up to ~12 ms at 44.1 kHz), which
+    /// is what made dragging a docked Parametric EQ's bands feel slow. The value is never dropped: when the moment does
+    /// not come the plain lock still waits for it, or the drag's last move would go missing.
     pub fn set_param(&self, key: usize, id: u32, value: f64) -> bool {
-        self.hosted
-            .get(&key)
-            .and_then(|h| h.plugin.lock().ok())
-            .is_some_and(|mut p| p.set_param(id, value.clamp(0.0, 1.0)))
+        let Some(h) = self.hosted.get(&key) else { return false };
+        let mut p = match h.lock_between_blocks().or_else(|| h.plugin.lock().ok()) {
+            Some(p) => p,
+            None => return false,
+        };
+        p.set_param(id, value.clamp(0.0, 1.0))
     }
 
     /// The parameters of the instance under `key`, in the plugin's order.
@@ -1286,6 +1297,34 @@ impl Plugins {
             return None;
         }
         lemon_parametric_eq_2::params::fl_from_plugin_state(&p.save_state()?)
+    }
+
+    /// How often the docked Parametric EQ re-reads its instance's state: often enough that a band switched off in the
+    /// pop-out editor shows in the tile, seldom enough that dragging a band repaints without serialising the instance —
+    /// `lock_for_state` waits up to [`STATE_WAIT`] for the audio thread, so a read per frame stalled the drag.
+    const EQ_VIEW_EVERY: Duration = Duration::from_millis(250);
+
+    /// The Lemon Parametric EQ's project-file state as the docked editor draws it, read at most every
+    /// [`Self::EQ_VIEW_EVERY`]: the save path keeps using [`Plugins::eq_file_state`], which is always current.
+    pub fn eq_view_state(&self, key: usize) -> Option<Vec<u8>> {
+        if !self.hosted.contains_key(&key) {
+            if let Ok(mut cache) = self.eq_view.lock() {
+                cache.remove(&key);
+            }
+            return None;
+        }
+        if let Ok(cache) = self.eq_view.lock() {
+            if let Some((at, bytes)) = cache.get(&key) {
+                if at.elapsed() < Self::EQ_VIEW_EVERY {
+                    return Some(bytes.clone());
+                }
+            }
+        }
+        let bytes = self.eq_file_state(key)?;
+        if let Ok(mut cache) = self.eq_view.lock() {
+            cache.insert(key, (Instant::now(), bytes.clone()));
+        }
+        Some(bytes)
     }
 
     /// Edison's state (the project file's form) of the Tesla hosted under `key`; `None` for any other plugin.
@@ -1966,7 +2005,7 @@ impl Plugins {
 /// What the user is told when instance `name` stopped after exception `code`.
 fn stopped_message(name: &str, code: u32, effect: bool) -> String {
     let now = if effect { "its slot passes the sound through" } else { "its channel is silent" };
-    format!("{}: {now}. Save your project and restart Lemon Studio to use it again", os_host::guard::stopped_text(name, code))
+    format!("{}: {now}. Save your project and restart Fruitbat Studio to use it again", os_host::guard::stopped_text(name, code))
 }
 
 /// Sizes window `w` to its freshly opened editor (`size` in device px at `scale`). A Lemon plugin answers the host
@@ -4788,7 +4827,7 @@ mod tests {
         let engine = fx.clone();
         std::thread::spawn(move || engine.lock().unwrap().process_fx(48000, &mut [0.5; 8], &mut [0.5; 8])).join().unwrap();
         let told: Vec<String> = pl.idle(|_| None).into_iter().filter_map(|r| if let Request::Stopped(k, t) = r { Some(format!("{k}: {t}")) } else { None }).collect();
-        assert_eq!(told, [format!("{key}: Faulty stopped after a memory error: its slot passes the sound through. Save your project and restart Lemon Studio to use it again")]);
+        assert_eq!(told, [format!("{key}: Faulty stopped after a memory error: its slot passes the sound through. Save your project and restart Fruitbat Studio to use it again")]);
         assert!(!pl.idle(|_| None).iter().any(|r| matches!(r, Request::Stopped(..))), "told once");
         let (mut l, mut r) = ([0.5f32; 8], [0.5f32; 8]);
         fx.lock().unwrap().process_fx(48000, &mut l, &mut r);

@@ -18,7 +18,7 @@ Reference-only clones (import queue, do not delete casually):
 
 ## C drive — clean
 
-Only `C:\Users\Serge\AppData\Roaming\Lemon Studio` (settings, plugin cache,
+Only `C:\Users\Serge\AppData\Roaming\Fruitbat Studio` (settings, plugin cache,
 project autosaves, ~324 KB) and the Desktop shortcut. Normal DAW behaviour,
 nothing stray.
 

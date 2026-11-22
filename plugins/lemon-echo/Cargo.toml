@@ -1,6 +1,6 @@
 [package]
 name = "lemon-echo"
-description = "Lemon Echo: Lemon Studio's note echo as a VST3 / CLAP MIDI plugin"
+description = "Lemon Echo: Fruitbat Studio's note echo as a VST3 / CLAP MIDI plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

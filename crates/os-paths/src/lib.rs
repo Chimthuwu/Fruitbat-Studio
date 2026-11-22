@@ -2,25 +2,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Where Lemon Studio keeps its own files: settings, the remembered theme and design, presets, browser folders.
+//! Where Fruitbat Studio keeps its own files: settings, the remembered theme and design, presets, browser folders.
 //!
 //! One folder per user, shared by the application and its own plugins (a plugin runs in its own module and reads the
 //! theme from here itself):
 //!
-//! - Windows: `%APPDATA%\Lemon Studio`
-//! - macOS: `~/Library/Application Support/Lemon Studio`
-//! - Linux and other Unix: `$XDG_CONFIG_HOME/Lemon Studio`, else `~/.config/Lemon Studio`
+//! - Windows: `%APPDATA%\Fruitbat Studio`
+//! - macOS: `~/Library/Application Support/Fruitbat Studio`
+//! - Linux and other Unix: `$XDG_CONFIG_HOME/Fruitbat Studio`, else `~/.config/Fruitbat Studio`
 //!
 //! `OPENSTUDIO_USER_DIR` overrides the folder on every platform. Targets without a file system (the web) have none.
 
 use std::path::PathBuf;
 
 /// The folder's own name inside the platform's per-user settings folder.
-const APP: &str = "Lemon Studio";
-/// Its name before the rename to Lemon Studio (`legacy_dir`).
-const LEGACY: &str = "OpenStudio";
+const APP: &str = "Fruitbat Studio";
+/// Its names before the current one, newest first: the app was Lemon Studio until the Fruitbat Studio rename and
+/// `OpenStudio` before that (`legacy_dirs`).
+const LEGACY: [&str; 2] = ["Lemon Studio", "OpenStudio"];
 
-/// Lemon Studio's per-user folder, or `None` when the platform has none (or its variables are not set). It may not
+/// Fruitbat Studio's per-user folder, or `None` when the platform has none (or its variables are not set). It may not
 /// exist yet: writers create it.
 pub fn user_dir() -> Option<PathBuf> {
     if let Some(d) = var("OPENSTUDIO_USER_DIR") {
@@ -29,13 +30,14 @@ pub fn user_dir() -> Option<PathBuf> {
     platform_dir().map(|d| d.join(APP))
 }
 
-/// The per-user folder from before the rename to Lemon Studio (`OpenStudio` in the same place), which the app moves to
-/// [`user_dir`] once. `None` when `OPENSTUDIO_USER_DIR` chooses the folder.
-pub fn legacy_dir() -> Option<PathBuf> {
+/// The per-user folders from before the current name (`Lemon Studio`, then `OpenStudio`, in the same place), newest
+/// first, which the app moves to [`user_dir`] once. Empty when `OPENSTUDIO_USER_DIR` chooses the folder.
+pub fn legacy_dirs() -> Vec<PathBuf> {
     if var("OPENSTUDIO_USER_DIR").is_some() {
-        return None;
+        return Vec::new();
     }
-    platform_dir().map(|d| d.join(LEGACY))
+    let Some(dir) = platform_dir() else { return Vec::new() };
+    LEGACY.iter().map(|name| dir.join(name)).collect()
 }
 
 /// A file or folder inside [`user_dir`].
@@ -82,10 +84,12 @@ mod tests {
             }
         }
         assert_eq!(user_file("monitor.txt").map(|f| f.file_name().unwrap().to_owned()), user_dir().map(|_| "monitor.txt".into()));
-        // The old folder sits next to it.
-        if let (Some(old), Some(new)) = (legacy_dir(), user_dir()) {
-            assert_eq!(old.parent(), new.parent());
-            assert_eq!(old.file_name().and_then(|n| n.to_str()), Some(LEGACY));
+        // The old folders sit next to it, newest first.
+        if let Some(new) = user_dir() {
+            let old = legacy_dirs();
+            let names: Vec<_> = old.iter().map(|d| d.file_name().and_then(|n| n.to_str())).collect();
+            assert_eq!(names, LEGACY.iter().map(|n| Some(*n)).collect::<Vec<_>>());
+            assert!(old.iter().all(|d| d.parent() == new.parent()));
         }
     }
 }

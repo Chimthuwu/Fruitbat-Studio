@@ -1,4 +1,4 @@
-# Handoff — Lemon Studio device rack
+# Handoff — Fruitbat Studio device rack
 
 > **2026-11-14 note:** the device-rack material below is still the reference for the rack/MIDI FX
 > path, but it is no longer the newest handoff. For the launcher correctness pass and the Audio

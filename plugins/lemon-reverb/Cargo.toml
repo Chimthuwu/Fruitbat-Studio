@@ -1,6 +1,6 @@
 [package]
 name = "lemon-reverb"
-description = "Lemon Reverb: Lemon Studio's plate reverb as a VST3 / CLAP plugin"
+description = "Lemon Reverb: Fruitbat Studio's plate reverb as a VST3 / CLAP plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

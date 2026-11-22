@@ -1,6 +1,6 @@
 [package]
 name = "lemon-stereo-enhancer"
-description = "Lemon Stereo Enhancer: Lemon Studio's stereo enhancer as a VST3 / CLAP plugin"
+description = "Lemon Stereo Enhancer: Fruitbat Studio's stereo enhancer as a VST3 / CLAP plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

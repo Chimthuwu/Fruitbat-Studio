@@ -209,7 +209,7 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, f: &FrameInfo) -> usize 
         ui.part(Seg::Browser, r, |ui| browser::paint(ui, s, r));
     }
     if bottom > 0.0 {
-        let rack = Rect::new(0.0, h - crate::device_rack::height(s), w, crate::device_rack::height(s));
+        let rack = device_rack::panel_rect(s, w, h);
         let area = if clip_editor { rack } else { Rect::new(0.0, h - bottom, w, bottom) };
         ui.part(Seg::DeviceRack, area, |ui| {
             if clip_editor {
@@ -290,7 +290,7 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, f: &FrameInfo) -> usize 
     device_rack::paint_menu(ui, s);
     // The empty-slot modulator picker is a menu over the windows too; the rack's own paint area would clip it.
     if bottom > 0.0 && !clip_editor {
-        let rack = Rect::new(0.0, h - crate::device_rack::height(s), w, crate::device_rack::height(s));
+        let rack = device_rack::panel_rect(s, w, h);
         device_rack::mod_add_menu_paint(ui, s, rack);
     }
     patterns::paint(ui, s);

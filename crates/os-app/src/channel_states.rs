@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Channel states (Lemon Studio's design): a plugin window menu's "Save channel state as..." writes the channel, its
+//! Channel states (Fruitbat Studio's design): a plugin window menu's "Save channel state as..." writes the channel, its
 //! settings and its plugin's state, to a file in the user folder's `Channel presets`; "Browse channel states" shows that
 //! folder in the browser, and a channel state file dropped (from there or the desktop) adds the channel it holds.
 //!
@@ -66,7 +66,7 @@ fn save_as(app: &mut App, row: usize) -> Option<String> {
     let _ = std::fs::create_dir_all(&dir);
     let name = crate::presets::folder_name(&crate::rack::channel_name(&app.state, row));
     let dlg = crate::filedlg::FileDlg::new(crate::filedlg::Mode::Save, "Save channel state as", "channel state", crate::dialog::Then::SaveChannelState(row))
-        .filter("Lemon Studio channel state", &[EXT])
+        .filter("Fruitbat Studio channel state", &[EXT])
         .start(Some(&dir))
         .name(&format!("{name}.{EXT}"));
     app.file_dialog(dlg);
@@ -176,7 +176,7 @@ pub(crate) mod tests {
         pub(crate) static ROOT: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
     }
 
-    /// A channel state round trip (Lemon Studio's design): Save writes the channel, Add brings it back as the last row,
+    /// A channel state round trip (Fruitbat Studio's design): Save writes the channel, Add brings it back as the last row,
     /// selected, named and set as it was, and is one undo step; Browse opens Channel presets in the browser, listing it.
     #[test]
     fn save_add_and_browse() {

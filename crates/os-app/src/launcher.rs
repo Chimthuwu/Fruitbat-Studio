@@ -449,6 +449,8 @@ pub struct Column {
     pub id: u32,
     /// The track's playlist lane, 0-based (its name and colour live there).
     pub lane: u16,
+    /// The mixer strip this track plays through: volume/pan faders in the header write here.
+    pub mixer_strip: u16,
     pub name: String,
     pub color: Option<os_model::Rgb>,
     /// A MIDI track whose instrument slot is empty: it has nothing to play its clips through, so its header says so.
@@ -591,6 +593,7 @@ pub fn columns(s: &State) -> Vec<Column> {
                 Column {
                     id: t.id.0,
                     lane,
+                    mixer_strip: t.mixer_strip,
                     name: crate::playlist::track_name(s, lane),
                     color: crate::playlist::track_info(s, lane).and_then(|i| i.color),
                     no_instrument: instrument_missing(s, t),

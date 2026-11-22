@@ -720,7 +720,7 @@ fn utilities(ui: &mut Ui, c: &Ctx) -> bool {
         (Icon::Mic, "Quick record"),
         (Icon::Help, "Help index / About..."),
         (Icon::Save, "Save as... / Save new version (Shift+Ctrl+S)"),
-        (Icon::SaveRender, "Export audio... (Ctrl+R)"),
+        (Icon::SaveRender, "Export audio..."),
         (Icon::Info, "Project info (F11)"),
     ];
     for (i, (icon, hint)) in utils.into_iter().enumerate() {

@@ -1,6 +1,6 @@
 [package]
 name = "lemon-flanger"
-description = "Lemon Flanger: Lemon Studio's flanger as a VST3 / CLAP plugin"
+description = "Lemon Flanger: Fruitbat Studio's flanger as a VST3 / CLAP plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

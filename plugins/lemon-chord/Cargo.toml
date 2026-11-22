@@ -1,6 +1,6 @@
 [package]
 name = "lemon-chord"
-description = "Lemon Chord: Lemon Studio's chord/scale mapper as a VST3 / CLAP MIDI plugin"
+description = "Lemon Chord: Fruitbat Studio's chord/scale mapper as a VST3 / CLAP MIDI plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

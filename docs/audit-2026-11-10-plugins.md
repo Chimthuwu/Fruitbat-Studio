@@ -1,4 +1,4 @@
-# Lemon Studio — Plugin Stack Audit (2026-11-10)
+# Fruitbat Studio — Plugin Stack Audit (2026-11-10)
 
 Generated from codebase audit using crate `Cargo.toml` reads, `read_file` of key source files, and the wave‑1/+2 committed code (`f42195de`, `fd73cb54`). All file:line anchors reference those commits.
 

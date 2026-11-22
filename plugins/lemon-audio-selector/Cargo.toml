@@ -1,6 +1,6 @@
 [package]
 name = "lemon-audio-selector"
-description = "Lemon Audio Selector: Lemon Studio's stereo audio selector as a VST3 / CLAP plugin"
+description = "Lemon Audio Selector: Fruitbat Studio's stereo audio selector as a VST3 / CLAP plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

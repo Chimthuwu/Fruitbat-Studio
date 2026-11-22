@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! FILE > Export audio (Ctrl+R) and Export MP3 (Shift+Ctrl+R): the Export form (`project_forms::Form::Export`), what
+//! FILE > Export audio and Export MP3 (Shift+Ctrl+R): the Export form (`project_forms::Form::Export`), what
 //! its parts do, and the export it starts. `views::export_form` paints it; `export` writes the files.
 // spec: audio/export.md §2-3
 
@@ -262,7 +262,7 @@ fn top(app: &mut App) -> Option<&mut ExportForm> {
 }
 
 impl App {
-    /// FILE > Export audio (Ctrl+R; `mp3`: Export MP3, Shift+Ctrl+R, with MP3 the only format): the Export form with
+    /// FILE > Export audio (`mp3`: Export MP3, Shift+Ctrl+R, with MP3 the only format): the Export form with
     /// the last choices, unless there is nothing to render (spec §2).
     // spec: audio/export.md §2
     pub(crate) fn open_export(&mut self, mp3: bool) {

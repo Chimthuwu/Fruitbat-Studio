@@ -1,4 +1,4 @@
-# Fruitbat Studios / Lemon Studio — full audit, 2026-11-14
+# Fruitbat Studios / Fruitbat Studio — full audit, 2026-11-14
 
 This audit is written against the tree that became commit `cf52e2be` on
 `chimthuwu/main` (parent `1d4c4091`, branch `modulation-m0`). It is deliberately

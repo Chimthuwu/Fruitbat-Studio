@@ -1,6 +1,6 @@
 [package]
 name = "lemon-fast-distortion"
-description = "Lemon Fast Distortion: Lemon Studio's fast distortion as a VST3 / CLAP plugin"
+description = "Lemon Fast Distortion: Fruitbat Studio's fast distortion as a VST3 / CLAP plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

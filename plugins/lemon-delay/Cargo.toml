@@ -1,6 +1,6 @@
 [package]
 name = "lemon-delay"
-description = "Lemon Delay: Lemon Studio's stereo delay as a VST3 / CLAP plugin"
+description = "Lemon Delay: Fruitbat Studio's stereo delay as a VST3 / CLAP plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "lemon-transient-processor"
-description = "Lemon Transient Processor: Lemon Studio's transient processor as a VST3 / CLAP plugin"
+description = "Lemon Transient Processor: Fruitbat Studio's transient processor as a VST3 / CLAP plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! WASAPI output of Lemon Studio's own (Windows), for the two modes cpal does not open (it plays plain shared mode,
-//! `super::open_system`): exclusive mode, where Lemon Studio has the device to itself and the system's mixer is
+//! WASAPI output of Fruitbat Studio's own (Windows), for the two modes cpal does not open (it plays plain shared mode,
+//! `super::open_system`): exclusive mode, where Fruitbat Studio has the device to itself and the system's mixer is
 //! bypassed, and the low-latency shared mode of IAudioClient3, where the system's mixer runs at a shorter period on
 //! that device for every program.
 //!
@@ -37,7 +37,7 @@ use crate::audio_cfg::{RATES, SMALLEST};
 /// How a stream shares its device.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Mode {
-    /// The device to Lemon Studio alone (event-driven exclusive mode).
+    /// The device to Fruitbat Studio alone (event-driven exclusive mode).
     Exclusive,
     /// Shared, with the system's mixer at a period shorter than the device's default (IAudioClient3).
     Small,
@@ -129,7 +129,7 @@ impl Format {
         }
     }
 
-    /// The format `w` describes, if Lemon Studio writes it.
+    /// The format `w` describes, if Fruitbat Studio writes it.
     fn of(w: &WAVEFORMATEXTENSIBLE) -> Option<Format> {
         let f = w.Format;
         let (tag, bits) = (u32::from(f.wFormatTag), f.wBitsPerSample);
@@ -549,7 +549,7 @@ fn exclusive(
         // A rate the device does not run at itself: its own.
         None => match pick(m.rate)? {
             Some(f) => (m.rate, f),
-            None => return Err(Refused::Other("it takes none of the sample formats Lemon Studio writes".into())),
+            None => return Err(Refused::Other("it takes none of the sample formats Fruitbat Studio writes".into())),
         },
     };
     let w = wave(format, rate, m.channels, m.mask);
@@ -588,7 +588,7 @@ fn small(d: &IMMDevice, m: &MixFormat, rate: Option<u32>, buffer: Option<u32>) -
         if rate.is_some_and(|r| r != m.rate) {
             return Err(Refused::OwnRate(m.rate));
         }
-        let format = m.format.ok_or_else(|| Refused::Other("the system mixer's sample format is not one Lemon Studio writes".into()))?;
+        let format = m.format.ok_or_else(|| Refused::Other("the system mixer's sample format is not one Fruitbat Studio writes".into()))?;
         c3.InitializeSharedAudioStream(AUDCLNT_STREAMFLAGS_EVENTCALLBACK, period, &m.wave.Format, None).map_err(|e| Refused::of(&e))?;
         let client: IAudioClient = c3.cast().map_err(|e| Refused::Other(text(&e)))?;
         Ok((client, format, m.rate, (min, def)))
@@ -633,7 +633,7 @@ mod tests {
         assert_eq!(mono, [0x00, 0x40, 0x00, 0x20]);
     }
 
-    /// The formats Lemon Studio asks for read back as themselves; formats it does not write are not taken.
+    /// The formats Fruitbat Studio asks for read back as themselves; formats it does not write are not taken.
     #[test]
     fn a_format_reads_back() {
         for f in Format::ALL {

@@ -367,7 +367,9 @@ impl Ui {
             }
             Ui::Eq => {
                 use lemon_parametric_eq_2::params;
-                let extra = plugins.eq_file_state(key).unwrap_or_else(params::default_state);
+                // Cached: this runs on every frame of a band drag, and serialising the instance each time waited on
+                // the audio thread (the docked EQ's bands moved visibly slower than its own window's).
+                let extra = plugins.eq_view_state(key).unwrap_or_else(params::default_state);
                 let settings = eq_settings(&vals, &extra);
                 let look = lemon_parametric_eq_2::view::Look {
                     s: settings,

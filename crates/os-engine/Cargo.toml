@@ -1,6 +1,6 @@
 [package]
 name = "os-engine"
-description = "Lemon Studio audio engine: sample loading, mixing and rendering"
+description = "Fruitbat Studio audio engine: sample loading, mixing and rendering"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

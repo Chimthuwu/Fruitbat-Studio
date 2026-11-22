@@ -144,18 +144,18 @@ clicking it does nothing. The full, item-by-item roadmap lives on the
   on the rendering thread. All saved in the project as the original saves them
 - Mixer track states: the track menu's File ▸ Save mixer track state keeps a track's levels, switches, equaliser and
   effects with their settings in the user folder's Mixer states; File ▸ Open mixer track state ▸ puts one on a track
-  (it keeps its name and colour) and Insert from state ▸ inserts a new track from one. Lemon Studio's own files
+  (it keeps its name and colour) and Insert from state ▸ inserts a new track from one. Fruitbat Studio's own files
   (`.lemontrack`), not the original's
 - Mixer options ▸ View ▸ Waveforms (Alt+W, also the title bar's button) draws each track's recent peaks as a scrolling
   waveform in place of its meter; Extra properties (the title bar's other button) shows or hides the polarity, swap
   and separation controls. Both saved in `.lemon` projects
-- The mixer slot menu's Help opens the plugin's own help page (CLAP and VST3 plugins that name one; Lemon Studio's
+- The mixer slot menu's Help opens the plugin's own help page (CLAP and VST3 plugins that name one; Fruitbat Studio's
   own effects open the list of built-in effects), and Scaling ▸ sizes a hosted plugin's window: Main (the program's
   scale) or 100 % to 200 %, saved in `.lemon` projects
 - Change icon... in the mixer track menu draws an icon under the track's name, and in the slot menu before the
   slot's name and on its plugin window; the icons move with their tracks and slots and are saved in `.lemon` projects. The slot menu's
   Link all parameters... links the effect's parameters to consecutive controllers, as its window menu's
-- Containers (a first part of the original's Patcher, in Lemon Studio's own form): the slot menu's Wrap in container
+- Containers (a first part of the original's Patcher, in Fruitbat Studio's own form): the slot menu's Wrap in container
   moves the slot's effect into a container in the same slot, and Wrap all in container moves all of the track's
   effects into one container in that slot, in slot order. One undo step each. A container plays its effects one
   after the other, each with its own wet and dry levels (taken from the slot's mix knob and switch), and its delay
@@ -189,14 +189,14 @@ clicking it does nothing. The full, item-by-item roadmap lives on the
 
 - CLAP, VST3 and VST2 instruments and effects, with their editors and saved state
 - A plugin's right-click menu on a parameter offers "Create automation clip" (CLAP and VST3); a VST3 plugin that asks
-  the host to show its menu gets one of Lemon Studio's own menus, docked or detached
+  the host to show its menu gets one of Fruitbat Studio's own menus, docked or detached
 - The parameter menu (a parameter in the browser after "Browse parameters", TOOLS ▸ Last tweaked): create or edit
   the parameter's automation clip, link a controller, copy, paste, type in or set a value (a submenu of its steps, or
   its default and minimum to maximum), remove an initial value read from a file
 - Not yet in the parameter menu: Init song with this position on a plugin parameter
 - VST2 shells (one file offering several plugins); a VST2 plugin's state is saved in the layout the original's projects use
-- A plugin that crashes is stopped (its slot passes the sound through) instead of closing Lemon Studio. On macOS
-  and Linux this is new, and on macOS a crash in a plugin's editor still closes Lemon Studio
+- A plugin that crashes is stopped (its slot passes the sound through) instead of closing Fruitbat Studio. On macOS
+  and Linux this is new, and on macOS a crash in a plugin's editor still closes Fruitbat Studio
 - Not yet: 32-bit plugins, and Intel-only plugins on Apple silicon (they need a bridge)
 
 ## 🚧 Plugin delay compensation
@@ -221,7 +221,7 @@ clicking it does nothing. The full, item-by-item roadmap lives on the
   selected mixer track, an instrument to the bottom of the channel rack.
 - A plugin manager in Settings with your own search folders
 - A background scan at startup; each file is tried in a separate scanner process, so a broken plugin
-  cannot take Lemon Studio down
+  cannot take Fruitbat Studio down
 - Favourites and hidden plugins
 - The browser's Favorites: right-click a file or a plugin ▸ Favorite; favorite rows show a star, and the Favorites
   tab lists favorite plugins, then files. A plugin's favorite is its plugin-manager star, also toggled by "Add to
@@ -234,7 +234,7 @@ clicking it does nothing. The full, item-by-item roadmap lives on the
 - The browser's arrow keys, with the mouse over it: Up / Down select the row above / below, Right opens a folder and
   steps into it, Left closes it and goes to the parent; a sample the selection lands on plays, and Right plays it again
 - One menu entry per plugin installed in several formats (VST3, CLAP, VST2: your preferred format wins)
-- Presets in the plugin window's title bar: your own presets, then factory presets (compiled in for Lemon Studio's
+- Presets in the plugin window's title bar: your own presets, then factory presets (compiled in for Fruitbat Studio's
   own plugins), stepped with the arrows or the wheel; Save preset as..., Rename, Delete and Browse presets
 - The mixer's slot menu lists the effect's presets and has Browse presets and Save preset as..., as its window
   menu does
@@ -305,9 +305,10 @@ dropouts. Its right-click menu has refresh rates, a frames-per-second view and h
 counts. Double-clicking it opens the plugin performance monitor: each plugin's processing time, peak, total
 and voices, with sorting, find and freeze.
 
-**Metronome.** The toolbar button, OPTIONS > Metronome or Ctrl+M: a click on every quarter note while playing,
-accented as FL does (the first beat of each bar in 4/4 and 3/4), through the master track or the insert track that
-Audio settings ▸ Mixer ▸ Metronome track picks (the count-in and the Tempo tapper's clicks too). Right-click the
+**Metronome.** The toolbar button or OPTIONS > Metronome (Ctrl+M is the modulator strip's now): a click on every
+quarter note while playing, accented as FL does (the first beat of each bar in 4/4 and 3/4), through the master track
+or the insert track that Audio settings ▸ Mixer ▸ Metronome track picks (the count-in and the Tempo tapper's clicks
+too). Right-click the
 button for five sounds and the volume (-12 to +12 dB; above 0 dB the click is soft-limited, not clipped). It is never in an export, and it is remembered between sessions. It follows the time-signature markers: the
 arrangement's in SONG mode, the current pattern's in PAT mode, each marker starting a bar of its own beats.
 
@@ -336,10 +337,10 @@ audio clipboard to browser does the same with the audio on the clipboard (what T
 VIEW > Remote control opens the browser's Remote control section, one row per controller link.
 TOOLS > Set up for live performance prepares the arranger for performance mode. TOOLS > Switch auto-bypass for all
 plugins switches every plugin's Auto-bypass when silent.
-TOOLS > Chord progression tool... (Lemon Studio's design) asks for a progression, one chord a bar, as chord names
+TOOLS > Chord progression tool... (Fruitbat Studio's design) asks for a progression, one chord a bar, as chord names
 (C G Am F7 Dm/F) or numerals (I V vi IV, with "Am:" first for the key) and writes it into the piano roll's pattern
 after its last note, as one undo step. TOOLS > Set keyboard focus of all plugins to ▸ Disabled keeps plugin editors
-from taking typed keys, which then play and steer Lemon Studio instead (Windows and macOS; saved in `.lemon` projects). TOOLS >
+from taking typed keys, which then play and steer Fruitbat Studio instead (Windows and macOS; saved in `.lemon` projects). TOOLS >
 Lock all tracks to their clips locks each playlist track whose clips share one source to it, so Draw and Paint place
 that source there whatever the current one is (a lock shows in the track header); Unlock all tracks from their
 clips clears the locks. Both are one undo step, and the locks are saved in `.lemon` projects.
@@ -348,7 +349,7 @@ channel (MIDI channel 1, 2, 3 … in rack order, port 0, patch 1, on the master 
 own; names, places and notes kept), as one undo step that brings the channels and their instruments back.
 Not yet (greyed in the menu bar): TOOLS > Control builder; VIEW > Script output.
 
-**Window positions.** Where the windows were when Lemon Studio closed comes back at the next start: the main
+**Window positions.** Where the windows were when Fruitbat Studio closed comes back at the next start: the main
 window (its place and size, and whether it was maximized; brought back onto a screen if its screen is gone) and the
 Playlist, Mixer, Piano roll (floating, maximized or collapsed), Channel rack, Plugin performance monitor, Tempo tapper
 and Touch controller. Kept with the program's settings, not the project. Which windows are open is not kept.
@@ -384,7 +385,7 @@ and Touch controller. Kept with the program's settings, not the project. Which w
   on the last event). Each edit is an undo step
 - Edit automation in a window, on the same menus, opens a second event editor window on that control, in front of
   the first, which keeps its control; a click on the one behind brings it in front, the editors share a clipboard, and
-  closing one leaves the other (Lemon Studio's design)
+  closing one leaves the other (Fruitbat Studio's design)
 - A knob's menu (channel volume and pan, mixer and main knobs): Edit automation clip... shows the clip that drives it,
   as on a plugin parameter, and Set... puts it at its default, the minimum, 25, 50 or 75% or the maximum, each listed
   with the knob's value there (one undo step)
@@ -392,7 +393,7 @@ and Touch controller. Kept with the program's settings, not the project. Which w
 
 ## 🚧 Project files
 
-- Saves projects as `.lemon` files: Lemon Studio's own format, laid out like an FLP with room for Lemon Studio's own
+- Saves projects as `.lemon` files: Fruitbat Studio's own format, laid out like an FLP with room for Fruitbat Studio's own
   data (the channel, mixer track and slot icons, the slots' names and colours, Performance mode's ▸ menu checks, the
   mixer's Plugin delay compensation ▸ Automatic and View ▸ checks, plugin windows' Scaling ▸, the channels' waveform
   preview and MIDI channel through checks, the plugins' keyboard focus, the playlist tracks' locks and the channels'
@@ -401,14 +402,14 @@ and Touch controller. Kept with the program's settings, not the project. Which w
   from an FLP is never saved over: Save asks for a name, offering the FLP's name with `.lemon`. Backups, new versions,
   templates and zipped projects are `.lemon` too; FLP backups and templates still open. General ▸ System ▸
   Associate project files covers `.lemon` along with `.flp`. An opened FLP shows its channels' and mixer tracks' icons
-  where Lemon Studio has the same picture (drum, keys, microphone, wave, note, speaker, plug; the others show none);
+  where Fruitbat Studio has the same picture (drum, keys, microphone, wave, note, speaker, plug; the others show none);
   a `.lemon` save keeps the FLP's icon numbers and stores the icons shown beside them
 - Projects saved by the original 10 to 24.1 open too: they are converted to the current layout as they open (channel
   blocks, step sequencer dots as notes, playlist clip and track records, mixer places, send levels and slot
   markers, a 105-track mixer grown to 127) and are saved in that layout, as the original does with an older file.
   Fruity effects that an old project hosts through the plugin wrapper stay wrapped, and a 3x Osc saved before FL
   Studio 21 opens with its envelope and filter settings at their defaults
-- Anything in a file that Lemon Studio does not understand yet is kept and written back unchanged
+- Anything in a file that Fruitbat Studio does not understand yet is kept and written back unchanged
 - An opened project's samples load behind a progress panel, one file at a time or on up to 4 threads
   (General settings ▸ Advanced ▸ Threaded project sample loading)
 - A save that writes a file over General settings ▸ Hints and warnings ▸ Project data size warning (100 MB
@@ -442,7 +443,7 @@ and Touch controller. Kept with the program's settings, not the project. Which w
 - Lemon Limiter (Fruity Limiter: limiter, compressor and noise gate), Lemon Reverb (Fruity Reeverb 2) and Lemon
   Delay (Fruity Delay 3), also VST3 and CLAP plugins. A project's Fruity Reeverb 2, Fruity Delay 3 and Fruity Limiter
   slots play through the same sound (the Limiter's compressor, gate, look-ahead and sidechain included)
-- Every Lemon plugin is built into Lemon Studio, so none needs a plugin file; the VST3 and CLAP bundles are for other
+- Every Lemon plugin is built into Fruitbat Studio, so none needs a plugin file; the VST3 and CLAP bundles are for other
   hosts. A project stores the built-in effects other than the EQ as wrapped CLAP plugins, as it stored their bundles
 - Lemon Soft Clipper, Lemon Fast Distortion, Lemon Balance, Lemon Stereo Enhancer, Lemon Transient Processor, Lemon
   Chorus and Lemon Stereo Shaper as VST3 and CLAP plugins; a project's Fruity Soft Clipper, Fruity Fast Dist, Fruity
@@ -465,7 +466,7 @@ and Touch controller. Kept with the program's settings, not the project. Which w
   track and the synth from another track, or the other way round. A project's Vocodex slots open as it and save back
   unchanged. It plays the wet level, the pass-throughs, added noise, hold, attack and release (peak or RMS), band
   count, width and order; the original's built-in synth carrier, unison, pitch shift, contour and the band curves
-  (other than where the bands start and end) are kept but not played. Its sound is Lemon Studio's own, not compared
+  (other than where the bands start and end) are kept but not played. Its sound is Fruitbat Studio's own, not compared
   with the original's exports. Changing its input selectors reroutes the track only after the project is saved and
   opened again
 - Peak Controller: a project's Fruity Peak Controller slots open as Lemon Peak Controller (VST3 and CLAP, Pith editor)
@@ -490,7 +491,7 @@ and Touch controller. Kept with the program's settings, not the project. Which w
   delay compensation); Lemon Stereo Shaper as a plugin keeps the setting but has no output for it
 - Lemon Parametric EQ plays FL's Parametric EQ 2 in every quality mode, in a project's mixer slots and as a plugin:
   plain, HQ Legacy, HQ+, HQ Enhanced and linear phase (LIN) with its sizes and crossfade speeds. The plugin tells the
-  host LIN's and HQ Enhanced's delay, and Lemon Studio compensates it in a project's mixer slots as for any plugin
+  host LIN's and HQ Enhanced's delay, and Fruitbat Studio compensates it in a project's mixer slots as for any plugin
 - The sampler plays a project's sample settings (start and length, the sample file's loop, the sample
   effects, the channel filter, declicking) and each note's own pan and filter offsets
 - A file of 30 s or more loaded into a sampler channel turns its Keep on disk on (General settings ▸
@@ -502,13 +503,13 @@ and Touch controller. Kept with the program's settings, not the project. Which w
   small buffer per voice stay in memory. It applies to uncompressed WAV and AIFF files played as they are; compressed
   files, the sample tools and effects, reverse and the Stretch / Stretch Pro methods keep the sample in memory, and
   the sampler says which ("in RAM" or "on disk"). Exports wait for the disk, so they sound exactly as from memory
-- Inside Lemon Studio the playback engine keeps only the length of a WAV or AIFF sample that the sampler plays, not
+- Inside Fruitbat Studio the playback engine keeps only the length of a WAV or AIFF sample that the sampler plays, not
   a decoded copy of its own, so a sample playing from disk takes no memory for its file there either. Opening a project still decodes each
   sampler file once while it loads; that copy is let go when loading ends
 
 ## ✅ Audio editing
 
-- Tesla, Lemon Studio's audio editor and recorder (its counterpart to FL's Edison), sits in a mixer slot and is also
+- Tesla, Fruitbat Studio's audio editor and recorder (its counterpart to FL's Edison), sits in a mixer slot and is also
   a VST3 and CLAP plugin for other hosts. It records what reaches its slot (now, on input, while input is present,
   or while the song plays, for a set time or size), holds one sample with markers, regions and a loop, and edits it:
   cut, copy, paste, trim, silence, normalize, fades and declicks, reverse, channel tools, Amp, with undo
@@ -522,7 +523,7 @@ and Touch controller. Kept with the program's settings, not the project. Which w
   editor instances (mixer options, TOOLS) clears them after asking
 - At its time limit Tesla keeps recording and holds the last minutes (a rolling log, as Edison)
 - Tesla's Time stretch / pitch shift... (Alt+T, the tool grid's stretch button) changes the selection's pitch by up
-  to 24 semitones either way and its length from a quarter to four times, with a preview, on Lemon Studio's
+  to 24 semitones either way and its length from a quarter to four times, with a preview, on Fruitbat Studio's
   stretcher, with formant preservation (the formants kept, or moved by their own knob); the drum(loop) stretch comes
   later
 - TOOLS ▸ Audio logger: on by default, it keeps the last 1 to 10 minutes of what the audio device plays (Settings ▸;
@@ -574,8 +575,9 @@ and Touch controller. Kept with the program's settings, not the project. Which w
 
 ## ✅ Exporting audio
 
-- FILE ▸ Export audio (Ctrl+R) and Export MP3 (Shift+Ctrl+R) open the Export form: a name and folder, then the song
-  or the current pattern, the whole of it or the time selection, and the tail cut, rung out or wrapped to the start
+- FILE ▸ Export audio and Export MP3 (Shift+Ctrl+R; Ctrl+R is the device rack's) open the Export form: a name and
+  folder, then the song or the current pattern, the whole of it or the time selection, and the tail cut, rung out or
+  wrapped to the start
 - Several formats at once: WAV (16 or 24-bit, 32-bit float), FLAC (16 or 24-bit, levels 0-8), MP3 and OGG Vorbis
   (64-320 kbps)
 - Sample rate (the device's, or 44.1-192 kHz by resampling the mix), stereo or mono (merged, left, right),
@@ -658,14 +660,14 @@ and Touch controller. Kept with the program's settings, not the project. Which w
 - FILE ▸ Import ▸ MIDI file into the open project
 - The tempo (the toolbar's box; the tempo tapper's taps, one step per count), Settings ▸ Project's timebase (its
   ticks come back exactly), time signature, panning law, Play truncated notes in clips and Automatic crossfades, and Settings ▸ Info's boxes
-- Plugin parameters Lemon Studio sets ("Plugin parameter": Type in value, Set..., Paste value), and those changed in a
+- Plugin parameters Fruitbat Studio sets ("Plugin parameter": Type in value, Set..., Paste value), and those changed in a
   plugin's own window: one step per gesture (mouse down to up on its knob), or per run of values from a plugin that
   sends them without one; mixer faders and parameters follow "Undo knob tweaks"
 - Presets loaded into a plugin ("Plugin preset": its window's Presets box, ◀ ▶ and window menu, Import preset..., a
   preset file dropped on the window, its channel or its slot), one step each, by the owner's id so it follows moves:
   the undo brings back the plugin's state, the preset its window showed and the name the load gave its channel or
   slot; the redo the state as the undo found it. A preset that goes into an instance made for it is part of that
-  step. Lemon Studio's choice; the original's behaviour was not looked at
+  step. Fruitbat Studio's choice; the original's behaviour was not looked at
 - Changes made through the control plane (see Scripting and assistants), named after the client that made them
 - The browser's Current project ▸ History lists the steps from "Last reset"; undone steps are grey, and a click
   on one goes back or forward to it
@@ -689,7 +691,7 @@ and Touch controller. Kept with the program's settings, not the project. Which w
 ## 🚧 Audio drivers
 
 - WASAPI on Windows, in shared mode (with the shorter periods a device offers there, where Windows says) or
-  exclusive mode (Settings > Audio ▸ Mode: Lemon Studio alone on the device, at its own rate and down to its smallest
+  exclusive mode (Settings > Audio ▸ Mode: Fruitbat Studio alone on the device, at its own rate and down to its smallest
   period); a device that refuses exclusive mode plays in shared mode, and the page says why
 - ASIO® on Windows, output only: the installed drivers are in Settings > Audio's Output device list; the master plays
   to the driver's first two outputs, and Show ASIO panel opens the driver's own settings
@@ -699,7 +701,7 @@ and Touch controller. Kept with the program's settings, not the project. Which w
 - Core Audio on macOS
 - Output device, sample rate and buffer length in Settings > Audio
 - Auto close (Settings > Audio): the output closes while another program is in front, and a playing song pauses
-  until Lemon Studio is back in front
+  until Fruitbat Studio is back in front
 - A device that fails (unplugged, or a driver asking to be reset) is opened again; an ASIO driver that does not
   open gives way to the default device
 - An ASIO driver's first 8 inputs open with its outputs (full duplex) for audio recording
@@ -723,14 +725,14 @@ ASIO is a registered trademark of Steinberg Media Technologies GmbH.
   the applied theme live with five knobs and eight colour circles, each with a colour picker
 - A theme file's workspace picture (PNG or JPEG, on either design) and its playlist and piano roll grid line
   strength; not yet the HTML background, the event editor grid and the Option colour
-- Lemon Studio's own plugin editors are drawn in the Lemon design only, whatever design the app shows
+- Fruitbat Studio's own plugin editors are drawn in the Lemon design only, whatever design the app shows
 - Smooth scrolling: the wheel and the scroll bars' arrows ease the editors' views (General settings ▸ Display ▸
   Smoothing, and Animation refresh rate for how often animations redraw)
 
 ## 🚧 Settings
 
 - Every page works: MIDI, Audio, Recording, General, File, Plugins, Theme, Project and Info. The controls that are not greyed out act, but for
-  a few that are only kept for now (Resampling quality and others Lemon Studio has nothing to change
+  a few that are only kept for now (Resampling quality and others Fruitbat Studio has nothing to change
   with yet); the program's choices are kept in `settings.txt` in the user folder
 - General ▸ Input ▸ Manage shortcuts: the F8 keys (browser, plugin picker, plugin database) and the audio clip
   double-click can be swapped
@@ -738,9 +740,9 @@ ASIO is a registered trademark of Steinberg Media Technologies GmbH.
 - General ▸ Display ▸ High visibility: a white record dot, brighter channel names and light scroll bar thumbs
 - General ▸ Display ▸ Toolbars scaling: the main window's top band at its own size; panels that don't fit
   leave an arrow
-- General ▸ System ▸ Associate project files (Windows): `.lemon` and `.flp` files open with Lemon Studio, for your user
+- General ▸ System ▸ Associate project files (Windows): `.lemon` and `.flp` files open with Fruitbat Studio, for your user
   only, and unticking puts the previous program back
-- Recording, Lemon Studio's own page (the original has none): the recording filter, the Record button's options and
+- Recording, Fruitbat Studio's own page (the original has none): the recording filter, the Record button's options and
   quantize, Start on input and its checks, Loop record, Blend, Count-in and its length, Auto-create audio clips and
   the External input question's answer, each the same setting as the menu or button it is also set from, and where
   recordings go

@@ -28,7 +28,7 @@ const PAD: f32 = 3.0;
 /// instead of squashing (a window too narrow for all [`launcher::SCENES`] of them scrolls).
 pub const MIN_COL: f32 = 96.0;
 /// The least height of a track row: below this a clip's name could not be read, so the rows scroll up and down.
-pub const MIN_ROW: f32 = 22.0;
+pub const MIN_ROW: f32 = 44.0;
 /// How much one wheel notch scrolls the scene columns sideways, in px (the playlist's own step).
 const COL_NOTCH: f32 = 60.0;
 /// How many track rows one wheel notch scrolls (the piano roll's keyboard scrolls three).
@@ -253,7 +253,11 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
         // playlist's — brighter while the row is selected.
         if let Some(col) = c.color {
             let sel = crate::playlist::track_selected(s, c.lane);
-            ui.c.fill_rrect(row.inset(1.0), 2.0, rgb(col).with_alpha(if sel { 95 } else { 55 }));
+            let base = rgb(col);
+            let base = if sel { base.shade(0.1) } else { base };
+            ui.c.fill_rrect(row.inset(1.0), 2.0, base);
+        } else {
+            ui.c.fill_rrect(row.inset(1.0), 2.0, ui.t.track_header);
         }
         // Mute / solo LEDs in the track header, matching the playlist's track LED (§6): a click mutes, a
         // Ctrl/right-click solos. They read the same track state, so the launcher and the playlist stay in step.
@@ -277,7 +281,29 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
         );
         // A MIDI track with no instrument plays nothing: a mark after its name says why (the rack has the same hint).
         let mark_w = if c.no_instrument { ui.c.text_width(fnt(12.0), "!") + 4.0 } else { 0.0 };
-        let name = Rect::new(row.x + 42.0, row.y + (g.row_h - 15.0) / 2.0, (row.w - 62.0 - mark_w).max(1.0), 15.0);
+        // Track-mode badge (A/I) matching the playlist header: an audio or instrument track wears its letter.
+        let link = crate::track_links::link(s, c.lane);
+        let badge_letter = match link.kind {
+            os_model::TrackLink::AUDIO => Some("A"),
+            os_model::TrackLink::INSTRUMENT => Some("I"),
+            _ => None,
+        };
+        let badge_w = if badge_letter.is_some() { 14.0 } else { 0.0 };
+        // Arm light for audio tracks, as the playlist header shows (§6c).
+        let armed = badge_letter == Some("A")
+            && crate::mixer::track(s, c.mixer_strip).is_some_and(|m| m.armed);
+        let arm_w = if badge_letter == Some("A") { 10.0 } else { 0.0 };
+        let name_x = row.x + 42.0 + badge_w + arm_w;
+        if let Some(letter) = badge_letter {
+            let b = Rect::new(row.x + 42.0, row.y + (g.row_h - 15.0) / 2.0, 11.0, 11.0);
+            ui.c.fill_circle(b.cx(), b.cy(), 5.5, ui.t.text.with_alpha(230));
+            ui.c.text_center(os_ui::Font::new(10), b, ui.t.s(0x1b1d1f), letter);
+        }
+        if armed {
+            let b = Rect::new(row.x + 42.0 + badge_w, row.y + (g.row_h - 10.0) / 2.0, 8.0, 8.0);
+            ui.c.fill_circle(b.cx(), b.cy(), 4.0, ui.t.h(0xff633f));
+        }
+        let name = Rect::new(name_x, row.y + (g.row_h - 15.0) / 2.0, (row.w - 96.0 - mark_w - badge_w - arm_w).max(1.0), 15.0);
         ui.c.text_clip(fnt(13.0), name.x, name.y, name.w, if hov { t.text } else { t.tx(0xdce8f0) }, &c.name);
         if c.no_instrument {
             ui.c.text(fnt(12.0), name.right() + 3.0, name.y + 1.0, t.accent, "!");
@@ -285,6 +311,32 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
         if let Some(col) = c.color {
             ui.c.fill_rect(Rect::new(row.x + 8.0, row.bottom() - 3.0, (g.label_w - 40.0).max(1.0), 2.0), rgb(col));
         }
+        // Volume + pan faders in the header, matching the playlist's track header (parity): the volume is the
+        // mixer strip's fader (vertical), the pan its MixPan knob (horizontal). Both reuse the mixer's actions,
+        // so drags, undo and automation behave exactly as on the mixer.
+        let mix_strip = c.mixer_strip;
+        let mix = crate::mixer::track(s, mix_strip);
+        let vol = mix.and_then(|m| m.volume).unwrap_or(0.8) as f32;
+        let pan = mix.and_then(|m| m.pan).unwrap_or(0.0) as f32;
+        // Vertical volume fader on the right of the label.
+        let vf = Rect::new(row.right() - 34.0, row.y + 4.0, 10.0, (g.row_h - 8.0).max(8.0));
+        let vhint = format!("Volume: {} (drag)", (vol * 100.0).round() as i32);
+        let visible_v = clip_to(vf.outset(3.0), label);
+        let vhov = visible_v.w > 0.0 && visible_v.h > 0.0 && ui.hit(visible_v, Action::Fader(mix_strip), vhint);
+        ui.c.fill_rrect(vf, 2.0, ui.t.s(0x141618).with_alpha(200));
+        let fill_h = (vf.h * vol.clamp(0.0, 1.0)).max(1.0);
+        ui.c.fill_rrect(Rect::new(vf.x, vf.bottom() - fill_h, vf.w, fill_h), 2.0, if vhov { ui.t.accent.shade(0.18) } else { ui.t.accent });
+        // Horizontal pan fader under the name (uses PlPan so right-click centres it, as the playlist's pan fader does).
+        let pf = Rect::new(row.x + 42.0, row.bottom() - 8.0, (row.w - 80.0).max(10.0), 4.0);
+        let pv = (0.5 + pan / 2.0).clamp(0.0, 1.0);
+        let phint = format!("Pan: {} (drag, right-click: centre)", crate::knobs::pan_text(pan));
+        let visible_p = clip_to(pf.outset(3.0), label);
+        let phov = visible_p.w > 0.0 && visible_p.h > 0.0 && ui.hit(visible_p, Action::PlPan(mix_strip), phint);
+        ui.c.fill_rrect(pf, 2.0, ui.t.s(0x141618).with_alpha(200));
+        ui.c.fill_rect(Rect::new(pf.cx() - 0.5, pf.y + 1.0, 1.0, pf.h - 2.0), ui.t.tx(0x8b979e).with_alpha(110));
+        let tx = pf.x + 2.0 + pv * (pf.w - 4.0);
+        ui.c.fill_rrect(Rect::new(tx - 2.0, pf.y - 1.5, 4.0, pf.h + 3.0), 2.0, if phov { ui.t.accent.shade(0.18) } else { ui.t.accent });
+
         // The row's stop button.
         let stop = Rect::new(row.right() - 20.0, row.y + (g.row_h - 14.0) / 2.0, 14.0, 14.0);
         let sh = hit_in(ui, stop, label, Action::Launcher(Act::Stop(c.id)), "Stop this track's clip: it plays its arrangement clips again");

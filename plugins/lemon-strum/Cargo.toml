@@ -1,6 +1,6 @@
 [package]
 name = "lemon-strum"
-description = "Lemon Strum: Lemon Studio's chord strum as a VST3 / CLAP MIDI plugin"
+description = "Lemon Strum: Fruitbat Studio's chord strum as a VST3 / CLAP MIDI plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

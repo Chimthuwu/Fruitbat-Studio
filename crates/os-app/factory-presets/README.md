@@ -1,6 +1,6 @@
 # Factory presets
 
-Presets that ship inside Lemon Studio. `build.rs` compiles every `.ospreset` file here into the program; they show
+Presets that ship inside Fruitbat Studio. `build.rs` compiles every `.ospreset` file here into the program; they show
 in each plugin window's Presets box (under **Factory**), in the ◀ ▶ order after the user's own presets, and in the
 browser under **Plugin presets › <plugin> › Factory**. They are read-only: users cannot rename or delete them.
 

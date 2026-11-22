@@ -587,6 +587,20 @@ pub enum Live {
     Meter,
     /// The glitch consoles' step grids, whose playhead moves with the audio.
     Glitch,
+    /// The project modulator strip: its tiles' plots scroll with the sound, so playback repaints them every tick. Without
+    /// this, nothing damaged the strip and a plot kept the line it was first drawn with while the modulation ran.
+    Modulators,
+}
+
+/// Where the project-modulator strip sits relative to the device rack. Ctrl+M cycles the three.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModStripVisibility {
+    /// Above the device rack, the strip's default place.
+    OnTop,
+    /// Below the device rack: the rack panel lifts by the strip's height and the strip takes the bottom edge.
+    UnderRack,
+    /// Not drawn at all: it takes no workspace height and its plots are not repainted.
+    Hidden,
 }
 
 /// The playback state the frame shows. Taken in `App::tick`, where the damage for playheads is worked out, so a paint
@@ -1093,6 +1107,8 @@ pub struct State {
     pub mod_clipboard: Vec<os_model::modulation::Modulator>,
     /// When routing mode was entered or the pointer last crossed it: the patch-point button flashes while it is on.
     pub mod_flash: Option<std::time::Instant>,
+    /// The visibility state of the modulator strip relative to the device rack.
+    pub mod_strip_visibility: ModStripVisibility,
     /// The tiles' scrolling output history (view state, sampled from the snapshot).
     pub mod_hist: std::cell::RefCell<crate::modulation::History>,
     /// A modulation drag in routing mode begins: the graph as it was, so cancel and undo are one step.
@@ -1237,6 +1253,9 @@ pub struct State {
     pub rack_ui_cache: crate::rack_ui::Cell,
     /// The device rack's horizontal scroll (content px): the chain is wider than the panel at times.
     pub device_rack_scroll_x: f32,
+    /// The Parametric EQ band last pressed in a docked tile, by device key and band: the wheel over that tile's graph
+    /// turns its width (the band's Q / resonance), as the plugin's own graph does.
+    pub device_rack_eq_band: Option<(usize, usize)>,
     /// The clip launcher (Bitwig-style, `crate::launcher`): its grid and which scene each track plays.
     pub launcher: crate::launcher::Launcher,
     /// Whether the Playlist window shows the clip launcher instead of the arrangement (Tab).
@@ -1736,6 +1755,7 @@ impl App {
                 mod_menu_sel: 0,
                 mod_clipboard: Vec::new(),
                 mod_flash: None,
+                mod_strip_visibility: ModStripVisibility::OnTop,
                 mod_hist: std::cell::RefCell::new(crate::modulation::History::default()),
                 mod_drag_before: None,
                 device_rack_h: crate::device_rack::DEFAULT_H,
@@ -1750,6 +1770,7 @@ impl App {
                 device_rack_names: Default::default(),
                 rack_ui_cache: Default::default(),
                 device_rack_scroll_x: 0.0,
+                device_rack_eq_band: None,
                 launcher: Default::default(),
                 launcher_open: false,
                 arr_playing: false,
@@ -4262,6 +4283,9 @@ impl App {
         }
         if now.tick != old.tick {
             self.damage_live(Live::Clock);
+            // The modulator strip's plots: the history ring is sampled as they are painted, so they move only when
+            // the strip is repainted.
+            self.damage_live(Live::Modulators);
             let (pl, piano, rack) = (self.state.shown(Win::Playlist), self.state.shown(Win::PianoRoll), self.state.shown(Win::ChannelRack));
             if now.song && pl {
                 if let Some(g) = self.pl_grid {
@@ -4508,8 +4532,7 @@ impl App {
         }
         if self.state.show_device_rack && !self.state.device_rack_collapsed && !self.state.modulation.is_empty() {
             let s = &self.state;
-            let h = crate::device_rack::height(s);
-            let rack = Rect::new(0.0, s.screen.1 - h, s.screen.0, h);
+            let rack = views::device_rack::panel_rect(s, s.screen.0, s.screen.1);
             let row = views::device_rack::mod_row_rect(s, rack);
             if row.h > 0.0 {
                 self.damage_rect(row);
@@ -4616,7 +4639,8 @@ impl App {
                 // The modulation graph reaches playback the same way (M1b); an unchanged one is not sent again.
                 let (spec, snapshot) = crate::modulation::engine_spec(&self.state, &self.plugins);
                 let bases = crate::modulation::mod_bases(&self.state, &self.plugins);
-                self.transport.set_modulation(spec, snapshot, bases);
+                // Playback's own snapshot, which an unchanged graph leaves alone: the plots read what it writes.
+                self.state.mod_snapshot = self.transport.set_modulation(spec, snapshot, bases);
             }
         }
         self.playback_damage();
@@ -8042,6 +8066,21 @@ impl App {
             self.palette_wheel(dy + dx);
             return Some(Win::PluginPalette);
         }
+        // The docked Parametric EQ: once a band's point has been pressed, the wheel over that tile's graph turns the
+        // band's width (its Q / resonance) instead of scrolling the chain under the pointer.
+        if let Some((key, band)) = self.state.device_rack_eq_band {
+            let over = self.top_hit(x, y).is_some_and(|h| {
+                matches!(
+                    &h.action,
+                    Action::DeviceRack(crate::device_rack::RackAct::EditorEqToken { key: k, .. })
+                        | Action::DeviceRack(crate::device_rack::RackAct::EditorEqGraph { key: k }) if *k == key
+                )
+            });
+            if over && dy + dx != 0.0 && crate::device_rack::eq_band_wheel(self, key, band, (dy + dx).signum()) {
+                self.invalidate();
+                return None;
+            }
+        }
         // The device rack's body: the wheel scrolls its chain horizontally (up = left, as the mixer's).
         if crate::device_rack::visible(&self.state)
             && crate::launcher::rack_visible(&self.state)
@@ -8533,8 +8572,6 @@ impl App {
             // Toolbars > Hide (spec: ui/toolbar-menu.md §5).
             Key::Named(NamedKey::F11) if ctrl => self.toolbar_switch(views::toolbar::Switch::Hide),
             Key::Named(NamedKey::F11) => self.open_settings(views::settings::INFO),
-            // Toggle the modulator rack's visibility (hotkey: Ctrl+M; Ctrl+Shift+M stays Export MIDI).
-            Key::Character(c) if ctrl && !self.shift && c.eq_ignore_ascii_case("m") => self.act(Action::ModVisibility),
             // Monitor debug panel (views/mondebug.rs) parked 2026-10-09: its values are now the defaults. Uncomment to tune again.
             // Key::Named(NamedKey::F12) => self.state.monitor.debug = !self.state.monitor.debug,
             // spec: ui/close-windows.md; Shift+F12 is Align all channel editors (arrange.rs).
@@ -8586,7 +8623,8 @@ impl App {
                     self.state.message = Some(m);
                 }
             }
-            Key::Character(c) if ctrl && !alt && !self.shift && c.eq_ignore_ascii_case("m") => self.toggle_metronome(),
+            // (Ctrl+M used to toggle the metronome; the modulator strip has it now, and the metronome keeps the
+            // toolbar button and OPTIONS > Metronome.)
             Key::Character(c) if ctrl && !alt && self.shift && c.eq_ignore_ascii_case("m") => self.act(Action::MenuItem(0, views::menus::FILE_EXPORT_MIDI)),
             // The record options (spec: ui/recording.md §3); a focused playlist or the piano roll took Ctrl+B / Ctrl+P
             // before this.
@@ -8638,9 +8676,16 @@ impl App {
             Key::Character(c) if ctrl && self.shift && c.eq_ignore_ascii_case("s") => self.act(Action::MenuItem(0, views::menus::FILE_SAVE_AS)),
             // VIEW ▸ Arrange windows ▸ Realign (spec: ui/menu-submenus.md §2).
             Key::Character(c) if ctrl && self.shift && !alt && c.eq_ignore_ascii_case("h") => self.arrange(crate::arrange::Layout::Realign),
+            // VIEW > Show/hide the device rack (Ctrl+R; FILE > Export audio has no key of its own any more).
+            Key::Character(c) if ctrl && !alt && !self.shift && c.eq_ignore_ascii_case("r") => {
+                self.act(Action::DeviceRack(crate::device_rack::RackAct::ToggleDeviceRack));
+            }
+            // The modulator strip: Ctrl+M cycles above the rack -> below it -> hidden.
+            Key::Character(c) if ctrl && !alt && !self.shift && c.eq_ignore_ascii_case("m") => {
+                self.act(Action::DeviceRack(crate::device_rack::RackAct::ToggleVisibility));
+            }
             // TOOLS > Stop sound (Ctrl+H, views/menus.rs).
             Key::Character(c) if ctrl && !self.shift && !alt && c.eq_ignore_ascii_case("h") => self.stop_sound(),
-            Key::Character(c) if ctrl && !self.shift && c.eq_ignore_ascii_case("r") => self.act(Action::MenuItem(0, views::menus::FILE_EXPORT)),
             Key::Character(c) if ctrl && self.shift && !alt && c.eq_ignore_ascii_case("r") => self.act(Action::MenuItem(0, views::menus::FILE_EXPORT_MP3)),
             Key::Character(c) if ctrl && !self.shift && c.eq_ignore_ascii_case("n") => self.act(Action::MenuItem(0, views::menus::FILE_SAVE_VERSION)),
             // TOOLS > Browser find... (spec: ui/browser-commands.md §3).
@@ -10895,16 +10940,22 @@ fn load_theme() -> Theme {
     t
 }
 
-/// The settings folder from before the rename to Lemon Studio (`OpenStudio`, e.g. `%APPDATA%/OpenStudio`) moves to the
-/// user folder (`os_paths::user_dir`, e.g. `%APPDATA%/Lemon Studio`) once, at start, so dropped browser folders, presets,
-/// the design and the theme carry over (spec: ui/lemon-design.md §12).
+/// The settings folder from every earlier name (`Lemon Studio`, then `OpenStudio`, e.g. `%APPDATA%/Lemon Studio`) moves
+/// to the user folder (`os_paths::user_dir`, e.g. `%APPDATA%/Fruitbat Studio`) once, at start, so dropped browser
+/// folders, presets, the design and the theme carry over (spec: ui/lemon-design.md §12).
 pub fn move_old_settings() {
     if cfg!(test) {
         return;
     }
-    let (Some(old), Some(new)) = (os_paths::legacy_dir(), os_paths::user_dir()) else { return };
-    if old.is_dir() && !new.exists() {
-        let _ = std::fs::rename(&old, &new);
+    let Some(new) = os_paths::user_dir() else { return };
+    if new.exists() {
+        return;
+    }
+    for old in os_paths::legacy_dirs() {
+        if old.is_dir() {
+            let _ = std::fs::rename(&old, &new);
+            return;
+        }
     }
 }
 
@@ -13289,6 +13340,31 @@ mod tests {
             let d = app.take_damage();
             frame_damage(&mut app, &mut a, d);
         }
+    }
+
+    /// The modulator strip is damaged on every playback tick: its tiles' plots sample the engine's live output while
+    /// they are painted, so with no damage of their own they kept the line they were first drawn with while the
+    /// modulation ran (the report: an LFO whose speed audibly followed a Random, with a tile plot that never moved).
+    #[test]
+    fn playback_damages_the_modulator_strip() {
+        let Ok(mut c) = Canvas::new(1920, 1080, 1.0) else { return };
+        let mut app = App::new(None);
+        app.state.project = test_project();
+        app.state.project.linear_mode = true;
+        app.state.show_device_rack = true;
+        app.state.modulation.add(os_model::modulation::ModSource::default());
+        frame(&mut app, &mut c, None);
+        let strip = app.live.iter().rev().find(|(k, _)| *k == Live::Modulators).map(|(_, r)| *r);
+        let strip = strip.expect("the modulator strip is a live region of the frame");
+        // Starting playback repaints everything; the next tick must damage the strip among the regions it repaints.
+        app.show_playback(Shown { playing: true, paused: false, tick: 0.0, song: false, sounding: Vec::new(), tempo: None });
+        let _ = app.take_damage();
+        app.show_playback(Shown { playing: true, paused: false, tick: 96.0, song: false, sounding: Vec::new(), tempo: None });
+        let Some(Some(rects)) = app.take_damage() else { panic!("a tick repaints regions, not the frame") };
+        assert!(
+            rects.iter().any(|r| !r.intersect(&strip).is_empty()),
+            "the strip's plots are repainted with the playback: {rects:?} vs {strip:?}"
+        );
     }
 
     /// Wheel scrolls and zooms, scroll-bar drags and clip drags repaint only their window, and match a full repaint.
@@ -16119,7 +16195,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let mut app = App::new(None);
         app.state.project = test_project();
-        // Something to export, so Ctrl+R gets as far as its file dialog.
+        // Something to export, so Shift+Ctrl+R gets as far as its file dialog.
         app.state.project.patterns[0].notes.push(Note::step(0, 0));
         let song = dir.join("Song.dawproject");
         app.save_to(song.clone());
@@ -16164,9 +16240,13 @@ mod tests {
         assert!(dir.join("Other_2.dawproject").exists(), "Ctrl+N still saves a new version");
         key(&mut app, "o", false);
         assert_eq!(fake::shown(), (1, 2), "Ctrl+O still asks for a file");
+        // Ctrl+R is the device rack's, not Export audio: the form stays closed and the rack toggles instead.
+        let rack = app.state.show_device_rack;
         key(&mut app, "r", false);
-        assert!(export_form(&app), "Ctrl+R opens the Export form");
-        escape(&mut app);
+        assert!(!export_form(&app), "Ctrl+R no longer opens the Export form");
+        assert_ne!(app.state.show_device_rack, rack, "Ctrl+R shows/hides the device rack");
+        key(&mut app, "r", false);
+        assert_eq!(app.state.show_device_rack, rack, "and back");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -21099,7 +21179,7 @@ mod tests {
             (Action::Util(Util::Undo), "Undo / Undo history (Ctrl+Z)"),
             (Action::Util(Util::Help), "Help index / About..."),
             (Action::Util(Util::Save), "Save as... / Save new version (Shift+Ctrl+S)"),
-            (Action::MenuItem(0, views::menus::FILE_EXPORT), "Export audio... (Ctrl+R)"),
+            (Action::MenuItem(0, views::menus::FILE_EXPORT), "Export audio..."),
             (Action::MenuItem(views::menus::OPTIONS_MENU, views::menus::OPT_INFO), "Project info (F11)"),
             (Action::ToggleWin(Win::Playlist), "Arranger / Maximize arranger (F5)"),
             (Action::ToggleWin(Win::PianoRoll), "Piano roll / Maximize Piano roll (F7)"),

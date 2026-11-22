@@ -1,6 +1,6 @@
 [package]
 name = "lemon-audio-layer"
-description = "Lemon Audio Layer: Lemon Studio's stereo parallel audio layer as a VST3 / CLAP plugin"
+description = "Lemon Audio Layer: Fruitbat Studio's stereo parallel audio layer as a VST3 / CLAP plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

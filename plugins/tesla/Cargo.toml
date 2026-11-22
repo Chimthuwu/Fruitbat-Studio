@@ -1,6 +1,6 @@
 [package]
 name = "tesla"
-description = "Tesla: Lemon Studio's audio editor and recorder (the counterpart of FL's Edison) as a VST3 / CLAP plugin"
+description = "Tesla: Fruitbat Studio's audio editor and recorder (the counterpart of FL's Edison) as a VST3 / CLAP plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

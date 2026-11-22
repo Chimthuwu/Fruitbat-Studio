@@ -1,4 +1,4 @@
-# Lemon Studio — todo.md (roadmap reference)
+# Fruitbat Studio — todo.md (roadmap reference)
 
 ## ▶ NEXT — the modulation handoff (2026-11-14, in progress)
 - [x] **The graph is a DAG** (`5b2b7e8f`): a modulator's own rate/amount/phase/offset are parameters
@@ -142,6 +142,24 @@
 - [ ] **Then the device handoff** (pasted 2026-11-14): FreqBat as an `os-dsp` polyphonic instrument with a
       preallocated voice pool and a native rack panel, then Batshit's 60-second lock-free rolling sampler with
       peak/RMS meters and its `tiny-skia` visualizer. FreqBat's per-voice modulators depend on Task 2 above.
+
+## ✅ DONE 2026-11-16 — the tree builds again: strip visibility + shortcut space
+- [x] **`os-app` compiles again**: the half-landed pass that added `ModStripVisibility` had left a bare `if` arm
+      inside the key `match` (`app.rs`, "expected identifier, found keyword `if`") and no import for the enum in
+      `device_rack.rs` / `views/device_rack.rs` — nine errors, no release exe.
+- [x] **Ctrl+M walks the modulator strip** (`OnTop` → `UnderRack` → `Hidden` → `OnTop`), on the hotkey and the rack
+      header's button (`RackAct::ToggleVisibility`). `UnderRack` is real: the rack panel lifts by the strip's height
+      and the strip takes the bottom edge (`views::device_rack::panel_rect` / `mod_row_rect`), so every other rack
+      rect had to come from `panel_rect` too (`views::mod`, the tick's strip damage, the wheel). Hiding leaves
+      `mod_row_h` 0 and `mod_slots` empty, so the workspace gets the 92 px back instead of a gap.
+- [x] **Ctrl+R is the device rack's** (it hides/reveals the whole rack, header text click too). **Ctrl+M and Ctrl+R
+      are unbound from the metronome and FILE > Export audio** — both keep their toolbar/menu commands, and their
+      menu rows no longer advertise a key. `shift+Ctrl+R` still exports MP3.
+- [x] `ctrl_m_cycles_the_strip_and_ctrl_r_hides_the_rack` covers the three placements (the strip's rect above, below
+      and gone), the reclaimed height, and that Ctrl+R neither opens the Export form nor is swallowed.
+- [x] Verified: `cargo build --release -p os-app` and `cargo test -p os-app --bin lemonstudio` → **1271 passed / 0
+      failed / 62 ignored**. The tree's other in-flight work (live modulator plots every playback tick, the docked
+      Parametric EQ's between-blocks band drags, the Fruitbat settings-folder migration) builds and passes with it.
 
 ## ✅ DONE 2026-11-14 — launcher correctness pass + follower DSP
 - [x] **Launcher multi-selection and bulk edits**: `Launcher::selected` / `anchor` / `clipboard`; plain,

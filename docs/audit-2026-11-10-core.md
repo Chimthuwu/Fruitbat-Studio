@@ -1,4 +1,4 @@
-# Lemon Studio — Core Architecture Audit (2026-11-10)
+# Fruitbat Studio — Core Architecture Audit (2026-11-10)
 
 Generated from workspace audit using cargo metadata + targeted reads. All file:line anchors reference the `f42195de` commit (wave 1 + wave 2 shipped).
 

@@ -1,6 +1,6 @@
 [package]
 name = "bundle-app"
-description = "Builds Lemon Studio and writes its macOS app bundle"
+description = "Builds Fruitbat Studio and writes its macOS app bundle"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

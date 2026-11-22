@@ -130,9 +130,9 @@ install -Dm644 crates/os-app/assets/lemonstudio.png ~/.local/share/icons/hicolor
 install -Dm644 crates/os-app/assets/lemonstudio.desktop ~/.local/share/applications/lemonstudio.desktop
 ```
 
-Settings, themes and presets live in `%APPDATA%\Lemon Studio` on Windows, `$XDG_CONFIG_HOME/Lemon Studio` on Linux and
-`~/Library/Application Support/Lemon Studio` on macOS. `OPENSTUDIO_USER_DIR` overrides the folder. The folder keeps its
-old name so existing settings survive the rebrand.
+Settings, themes and presets live in `%APPDATA%\Fruitbat Studio` on Windows, `$XDG_CONFIG_HOME/Fruitbat Studio` on Linux and
+`~/Library/Application Support/Fruitbat Studio` on macOS. `OPENSTUDIO_USER_DIR` overrides the folder. On first start the
+old `Lemon Studio` folder is moved to it once, so existing settings survive the rename.
 
 ---
 

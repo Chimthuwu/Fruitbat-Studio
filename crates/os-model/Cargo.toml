@@ -1,6 +1,6 @@
 [package]
 name = "os-model"
-description = "Lemon Studio project data model"
+description = "Fruitbat Studio project data model"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

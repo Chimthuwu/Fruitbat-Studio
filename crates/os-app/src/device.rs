@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! The output device: one stream for everything Lemon Studio plays, mixed here.
+//! The output device: one stream for everything Fruitbat Studio plays, mixed here.
 //!
 //! An ASIO driver serves one stream per program, so playback, previews and live notes do not open streams of their
 //! own: each is a `Source` that the device's callback mixes. Sources come in and go out through two lock-free queues,
@@ -42,13 +42,13 @@ pub(crate) mod system_input;
 /// Tests leave the sound server's cards alone, but for the one that checks they are given back.
 static HEAL_IN_TESTS: AtomicBool = AtomicBool::new(false);
 
-/// Linux: the sound server opens again the cards it gave up on while Lemon Studio (this run, or one that crashed) had
+/// Linux: the sound server opens again the cards it gave up on while Fruitbat Studio (this run, or one that crashed) had
 /// them through ALSA (`sound_server`); elsewhere nothing. It waits on the server: not for the audio callback.
 pub(crate) fn heal_sound_server() {
     #[cfg(target_os = "linux")]
     if !cfg!(test) || HEAL_IN_TESTS.load(Ordering::Relaxed) {
         for card in sound_server::heal() {
-            eprintln!("sound server: opened {card} again (it gave up while Lemon Studio had it through ALSA)");
+            eprintln!("sound server: opened {card} again (it gave up while Fruitbat Studio had it through ALSA)");
         }
     }
 }
@@ -432,7 +432,7 @@ pub(crate) fn pump() {
     }
 }
 
-/// What plays the mix: a cpal stream, an ASIO driver or a WASAPI stream of Lemon Studio's own.
+/// What plays the mix: a cpal stream, an ASIO driver or a WASAPI stream of Fruitbat Studio's own.
 enum Stream {
     Cpal(#[allow(dead_code)] cpal::Stream),
     #[cfg(windows)]
@@ -1094,7 +1094,7 @@ mod tests {
         }
         d.add(src.take().expect("once")).expect("opens on ALSA");
         assert_eq!(d.open.as_ref().map(|o| o.info.host), Some(ALSA));
-        // The sound server tries the card meanwhile (and fails: Lemon Studio has it).
+        // The sound server tries the card meanwhile (and fails: Fruitbat Studio has it).
         let busy = std::process::Command::new("pw-play").arg("--volume=0").arg("/usr/share/sounds/freedesktop/stereo/bell.oga").spawn();
         std::thread::sleep(std::time::Duration::from_millis(1500));
         assert!(blocks.load(Ordering::Relaxed) > 0, "it plays");

@@ -1,6 +1,6 @@
 [package]
 name = "lemon-stereo-shaper"
-description = "Lemon Stereo Shaper: Lemon Studio's stereo shaper as a VST3 / CLAP plugin"
+description = "Lemon Stereo Shaper: Fruitbat Studio's stereo shaper as a VST3 / CLAP plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

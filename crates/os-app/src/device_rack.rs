@@ -25,7 +25,7 @@
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
-use crate::app::{App, Drag, State};
+use crate::app::{App, Drag, ModStripVisibility, State};
 use crate::history::ChannelControl;
 use crate::plugins::{Plugins, RackDue};
 
@@ -477,6 +477,10 @@ pub enum RackAct {
     TogglePin,
     /// The header's collapse toggle.
     ToggleCollapsed,
+    /// Toggle the device rack visibility (hotkey: Ctrl+R, also click the "DEVICE RACK" header text).
+    ToggleDeviceRack,
+    /// Cycle the modulator strip: above the rack, below it, hidden (hotkey: Ctrl+M, also the header's strip button).
+    ToggleVisibility,
     /// Select a device tile by its index in the chain: a plain header click selects it alone, Shift+click
     /// extends the selection to it (the anchor pattern of the playlist's track headers).
     SelectTile(usize),
@@ -654,6 +658,20 @@ pub fn run(app: &mut App, act: RackAct) {    match act {
             app.state.device_rack_collapsed = !app.state.device_rack_collapsed;
             app.invalidate();
         }
+        RackAct::ToggleDeviceRack => {
+            app.state.show_device_rack = !app.state.show_device_rack;
+            app.invalidate();
+        }
+        RackAct::ToggleVisibility => {
+            // Ctrl+M's cycle: above the rack -> below it -> hidden -> above it. A hidden strip hands its height back
+            // to the workspace (`views::device_rack::mod_row_h`).
+            app.state.mod_strip_visibility = match app.state.mod_strip_visibility {
+                ModStripVisibility::OnTop => ModStripVisibility::UnderRack,
+                ModStripVisibility::UnderRack => ModStripVisibility::Hidden,
+                ModStripVisibility::Hidden => ModStripVisibility::OnTop,
+            };
+            app.invalidate();
+        }
         RackAct::SelectTile(idx) => {
             // A header click selects the tile (Shift extends a range, the playlist's track-header pattern);
             // the press also starts the drag, as the old header press did, so a click still reorders.
@@ -761,7 +779,9 @@ pub fn run(app: &mut App, act: RackAct) {    match act {
         }
         RackAct::EditorEqToken { key, band } => {
             // The same drag the plugin's graph has: frequency across, level up / down. Both parameters are
-            // hosted ones, so the pop-out editor follows the drag as it happens.
+            // hosted ones, so the pop-out editor follows the drag as it happens. The press also picks the band the
+            // wheel turns (`eq_band_wheel`, its width / Q).
+            app.state.device_rack_eq_band = Some((key, band));
             let Some(ps) = app.state.device_rack_params.get(&key) else { return };
             let (Some(freq), Some(level)) = (
                 eq_band_param(ps, band, "freq"),
@@ -1023,6 +1043,34 @@ pub fn set_channel_knob(app: &mut App, row: usize, which: ChannelControl, v: f64
 fn eq_band_param<'a>(params: &'a [RackParam], band: usize, which: &str) -> Option<&'a RackParam> {
     let name = format!("Band {} {which}", band + 1);
     params.iter().find(|p| p.name.eq_ignore_ascii_case(&name))
+}
+
+/// The wheel over a docked Parametric EQ: the width - the band's Q / resonance - of the band its last press picked
+/// (`State::device_rack_eq_band`), 2 % of the range per notch. It is the hosted parameter the plugin's own window
+/// turns, so the sound and the pop-out's graph follow at once. False when that band has no width parameter.
+pub fn eq_band_wheel(app: &mut App, key: usize, band: usize, notches: f32) -> bool {
+    if notches == 0.0 {
+        return false;
+    }
+    let Some((id, v)) = app
+        .state
+        .device_rack_params
+        .get(&key)
+        .and_then(|ps| eq_band_param(ps, band, "width"))
+        .map(|p| (p.id, p.value))
+    else {
+        return false;
+    };
+    set_param_value(app, key, id, (v + f64::from(notches) * 0.02).clamp(0.0, 1.0));
+    let text = app
+        .state
+        .device_rack_params
+        .get(&key)
+        .and_then(|ps| ps.iter().find(|p| p.id == id))
+        .map_or_else(String::new, |p| p.text.clone());
+    app.hint = std::borrow::Cow::Owned(format!("Band {} width: {text}", band + 1));
+    app.damage_band(crate::app::HINT_RECT);
+    true
 }
 
 pub fn set_param_value(app: &mut App, key: usize, id: u32, v: f64) {
@@ -1826,6 +1874,56 @@ mod tests {
         assert!(slots[n].1.y > slots[0].1.bottom(), "the wrapped tiles sit on a new line");
     }
 
+    /// Ctrl+M walks the modulator strip above the rack, below it and out of the way (each state lays the strip out
+    /// where it says), and Ctrl+R is the device rack's; Export audio gave the key up.
+    #[test]
+    fn ctrl_m_cycles_the_strip_and_ctrl_r_hides_the_rack() {
+        use winit::keyboard::Key;
+        let mut app = app();
+        app.state.screen = (1600.0, 900.0);
+        crate::modulation::act(&mut app, crate::modulation::ModAct::AddKind(0, crate::modulation::Kind::Lfo));
+        let rack = crate::device_rack::height(&app.state);
+        let strip = crate::views::device_rack::mod_row_h(&app.state);
+        assert!(strip > 0.0 && crate::device_rack::total_height(&app.state) == rack + strip);
+        // OnTop: the strip sits immediately above the rack panel.
+        let panel = crate::views::device_rack::panel_rect(&app.state, 1600.0, 900.0);
+        assert_eq!(panel.bottom(), 900.0, "the rack is at the bottom edge");
+        let row = crate::views::device_rack::mod_row_rect(&app.state, panel);
+        assert_eq!(row.bottom(), panel.y, "the strip is above the rack");
+        // Ctrl+M once: under the rack. The panel lifts by the strip's height and the strip takes the bottom edge.
+        app.key(&Key::Character("m".into()), true, false);
+        assert_eq!(app.state.mod_strip_visibility, ModStripVisibility::UnderRack);
+        assert_eq!(app.state.message.as_deref(), None, "Ctrl+M is no longer the metronome");
+        let panel = crate::views::device_rack::panel_rect(&app.state, 1600.0, 900.0);
+        assert_eq!(panel.bottom(), 900.0 - strip, "the rack lifted to make room");
+        let row = crate::views::device_rack::mod_row_rect(&app.state, panel);
+        assert_eq!(row.y, panel.bottom(), "the strip is below the rack");
+        assert_eq!(row.bottom(), 900.0, "and on the bottom edge");
+        assert_eq!(crate::device_rack::total_height(&app.state), rack + strip, "the same total height");
+        assert!(!crate::views::device_rack::mod_slots(&app.state, panel).is_empty(), "its tiles are still laid out");
+        // Ctrl+M twice: hidden, and the workspace takes the height back.
+        app.key(&Key::Character("m".into()), true, false);
+        assert_eq!(app.state.mod_strip_visibility, ModStripVisibility::Hidden);
+        assert_eq!(crate::views::device_rack::mod_row_h(&app.state), 0.0, "a hidden strip takes no height");
+        assert_eq!(crate::device_rack::total_height(&app.state), rack, "the workspace gets the strip's height back");
+        let panel = crate::views::device_rack::panel_rect(&app.state, 1600.0, 900.0);
+        assert!(crate::views::device_rack::mod_slots(&app.state, panel).is_empty(), "a hidden strip lays out no tiles");
+        // Ctrl+M the third time: back at the top.
+        app.key(&Key::Character("m".into()), true, false);
+        assert_eq!(app.state.mod_strip_visibility, ModStripVisibility::OnTop);
+        assert_eq!(crate::device_rack::total_height(&app.state), rack + strip);
+        // Ctrl+R shows and hides the rack, and no longer opens Export audio. Shift+Ctrl+R still exports MP3, so it
+        // goes last: the form it opens is a modal and would swallow further keys.
+        app.key(&Key::Character("r".into()), true, false);
+        assert!(!app.state.show_device_rack, "Ctrl+R hides the device rack");
+        assert!(!app.modal_open(), "and opens no Export form");
+        app.key(&Key::Character("r".into()), true, false);
+        assert!(app.state.show_device_rack, "Ctrl+R shows the rack again");
+        app.shift = true;
+        app.key(&Key::Character("r".into()), true, false);
+        assert!(app.modal_open(), "Shift+Ctrl+R still opens the Export form (MP3)");
+    }
+
     /// A populated modulator tile carries its own remove button, so it can be deleted without opening a menu.
     #[test]
     fn a_modulator_tile_has_a_remove_button() {
@@ -2207,6 +2305,37 @@ mod tests {
         assert!((now(level.id) - (level.value + 0.1)).abs() < 1e-6, "level follows up: {}", now(level.id));
         app.mouse_up();
         assert!(app.drag.is_none(), "the release ends the drag");
+    }
+
+    /// A press on a docked Parametric EQ's band picks it, and the wheel from then on turns that band's width — its
+    /// Q / resonance — through the same hosted parameter the plugin's own window reads.
+    #[test]
+    fn a_docked_eq_bands_width_follows_the_wheel_after_its_press() {
+        let mut app = app();
+        app.plugins = crate::plugins::Plugins::builtins();
+        let at = app.plugins.effect_index("Lemon Parametric EQ").expect("the EQ is bundled");
+        let eq = app.plugins.effects[at].clone();
+        app.plugins.available.push(eq);
+        let index = app.plugins.index_of("Lemon Parametric EQ").expect("offered now");
+        app.plugins.create_with(0, index, None).expect("the EQ hosted");
+        let mut params = Vec::new();
+        app.plugins.rack_controls(0, &mut params, true, &[]);
+        let width = params
+            .iter()
+            .find(|p| p.name.eq_ignore_ascii_case("Band 2 width"))
+            .expect("Band 2 width")
+            .clone();
+        app.state.device_rack_params.insert(0, params);
+        app.mouse = (300.0, 300.0);
+        run(&mut app, RackAct::EditorEqToken { key: 0, band: 1 });
+        assert_eq!(app.state.device_rack_eq_band, Some((0, 1)), "the press picks its band");
+        let before = app.plugins.param_value(0, width.id).expect("the hosted width");
+        assert!(crate::device_rack::eq_band_wheel(&mut app, 0, 1, 1.0), "the wheel turns the picked band's width");
+        let now = app.plugins.param_value(0, width.id).expect("the hosted width");
+        assert!((now - (before + 0.02)).abs() < 1e-6, "2 % of the range a notch: {now} vs {before}");
+        assert!(crate::device_rack::eq_band_wheel(&mut app, 0, 1, -1.0), "and back down");
+        let back = app.plugins.param_value(0, width.id).expect("the hosted width");
+        assert!((back - before).abs() < 1e-6, "a notch each way is where it was: {back} vs {before}");
     }
 
     /// Tile drag and drop: the drop gap follows the pointer (`drop_index`), and a release reorders — an FX

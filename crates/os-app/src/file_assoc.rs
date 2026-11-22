@@ -3,7 +3,7 @@
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! General ▸ System ▸ "Associate project files with application" on Windows: the per-user registration that makes
-//! `.flp` files open with this copy of Lemon Studio. Spec: ui/settings-choices.md "System: Associate project files with
+//! `.flp` files open with this copy of Fruitbat Studio. Spec: ui/settings-choices.md "System: Associate project files with
 //! application (2026-10-16)".
 //!
 //! The decisions are pure: `look` gathers what the registry holds through a reader it is given, `ticked` and `blocked`
@@ -13,7 +13,7 @@
 
 use crate::app::App;
 
-/// Lemon Studio's own file type for `.flp` files (spec).
+/// Fruitbat Studio's own file type for `.flp` files (spec).
 pub const PROG_ID: &str = "LemonStudio.Project";
 /// The extension it registers.
 pub const EXT: &str = ".flp";
@@ -30,7 +30,7 @@ const CLASSES: &str = r"Software\Classes";
 /// Windows' "Open with ▸ Always" choice for `.flp` (`Root::User`), value `ProgId`.
 const USER_CHOICE: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.flp\UserChoice";
 /// The hint bar's text when a `UserChoice` keeps another program after a tick (spec).
-pub const BLOCKED_HINT: &str = "Windows opens .flp files with another program: choose Lemon Studio under Open with ▸ Choose another app";
+pub const BLOCKED_HINT: &str = "Windows opens .flp files with another program: choose Fruitbat Studio under Open with ▸ Choose another app";
 
 /// Where a read looks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -114,13 +114,13 @@ pub fn ticked(program: &str, seen: &Seen) -> bool {
     seen.open_command.as_deref().is_some_and(|c| runs(c, program)) && !blocked(program, seen)
 }
 
-/// Whether the per-user `.flp` default names Lemon Studio's type.
+/// Whether the per-user `.flp` default names Fruitbat Studio's type.
 fn ours(seen: &Seen) -> bool {
     seen.ext_type.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(PROG_ID))
 }
 
 /// The writes of a tick for `program` (spec): the type first, then `.flp` pointed at it. `Previous` keeps the `.flp`
-/// default it replaces (removed when there was none); a tick over Lemon Studio's own registration (another copy's, or
+/// default it replaces (removed when there was none); a tick over Fruitbat Studio's own registration (another copy's, or
 /// one a `UserChoice` overrides) keeps the `Previous` it has.
 pub fn tick(program: &str, seen: &Seen) -> Vec<Op> {
     let exe = plain(program);
@@ -147,7 +147,7 @@ pub fn tick(program: &str, seen: &Seen) -> Vec<Op> {
     ops
 }
 
-/// The writes of an untick (spec): when `.flp` still names Lemon Studio's type its default goes back to `Previous`
+/// The writes of an untick (spec): when `.flp` still names Fruitbat Studio's type its default goes back to `Previous`
 /// (or is removed when there was none); `.flp`'s `OpenWithProgids` entry and the type itself are removed. Another
 /// program's type is never touched.
 pub fn untick(seen: &Seen) -> Vec<Op> {
@@ -359,7 +359,7 @@ mod tests {
     use os_ui::{Canvas, Rect};
 
     /// The made-up program path `program` gives in tests.
-    pub const PROGRAM: &str = r"C:\Programs\Lemon Studio\lemonstudio.exe";
+    pub const PROGRAM: &str = r"C:\Programs\Fruitbat Studio\lemonstudio.exe";
     const OTHER: &str = r"C:\Program Files\Other DAW\other.exe";
     const FL_TYPE: &str = "Other.flp.1";
 
@@ -444,7 +444,7 @@ mod tests {
         assert_eq!(ops[0], Op::Set { key: PROG_ID.into(), name: "Previous", data: FL_TYPE.into() });
         reg::apply(&ops);
         assert!(ticked(PROGRAM, &seen()) && !ticked(OTHER, &seen()));
-        // A second tick (say from another copy of Lemon Studio) keeps `Previous`.
+        // A second tick (say from another copy of Fruitbat Studio) keeps `Previous`.
         let again = tick(r"D:\Lemon\lemonstudio.exe", &seen());
         assert!(!again.iter().any(|op| matches!(op, Op::Set { name: "Previous", .. } | Op::DeleteValue { name: "Previous", .. })));
         reg::apply(&again);
@@ -462,7 +462,7 @@ mod tests {
     }
 
     /// "Open with ▸ Always" (`UserChoice`): naming another program it keeps the check unticked over a full registration
-    /// (`blocked`); naming Lemon Studio's type, or a type whose command runs this program, it doesn't.
+    /// (`blocked`); naming Fruitbat Studio's type, or a type whose command runs this program, it doesn't.
     #[test]
     fn a_user_choice_can_keep_another_program() {
         reg::apply(&tick(PROGRAM, &seen()));
@@ -473,7 +473,7 @@ mod tests {
         assert_eq!(seen().user_choice, Some((FL_TYPE.into(), Some(format!("\"{OTHER}\" \"%1\"")))));
         assert!(blocked(PROGRAM, &seen()) && !ticked(PROGRAM, &seen()));
         reg::put("HKCU", choice, "ProgId", "lemonstudio.project");
-        assert!(ticked(PROGRAM, &seen()), "Lemon Studio's own type, any case");
+        assert!(ticked(PROGRAM, &seen()), "Fruitbat Studio's own type, any case");
         reg::put("HKCU", choice, "ProgId", r"Applications\lemonstudio.exe");
         reg::put("HKCU", r"Software\Classes\Applications\lemonstudio.exe\shell\open\command", "", &format!("\"{PROGRAM}\" \"%1\""));
         assert!(ticked(PROGRAM, &seen()), "a type that runs this program");

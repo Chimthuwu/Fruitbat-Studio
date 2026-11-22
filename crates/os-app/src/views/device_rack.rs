@@ -9,7 +9,7 @@
 
 use os_ui::{Color, Rect, kit};
 
-use crate::app::{Action, State};
+use crate::app::{Action, ModStripVisibility, State};
 use crate::plugins::Plugins;
 use crate::rack_ui::{DrumMode, EDITOR_TAB, EDITOR_SUBTAB, EDITOR_BANK, EDITOR_PAD, EDITOR_OPEN, EDITOR_EQ_TOKEN, EDITOR_EQ_GRAPH};
 use crate::device_rack::{self, Device, DeviceKind, RackParam, HEADER_H, TILE_HEAD, RackAct};
@@ -17,16 +17,22 @@ use crate::history::ChannelControl;
 use crate::icons::{self, Icon};
 use crate::views::{Ui, fnt, FrameInfo};
 
-/// The rack's panel rect in the window: the full width, its height at the bottom edge (`device_rack::height`).
+/// The rack's panel rect in the window: the full width, at the bottom edge (`device_rack::height`). With the
+/// modulator strip under the rack (`ModStripVisibility::UnderRack`) the panel lifts by the strip's height so the
+/// strip can sit below it.
 pub fn panel_rect(s: &State, w: f32, h: f32) -> Rect {
-    Rect::new(0.0, h - device_rack::height(s), w, device_rack::height(s))
+    // The launcher's clip editor takes the whole panel and draws no strip, so nothing lifts it there.
+    let under = matches!(s.mod_strip_visibility, ModStripVisibility::UnderRack) && crate::launcher::rack_visible(s);
+    let lift = if under { mod_row_h(s) } else { 0.0 };
+    Rect::new(0.0, h - device_rack::height(s) - lift, w, device_rack::height(s))
 }
 
 /// The splitter strip along the panel's top edge (6 px, like the browser's).
 const SPLITTER: f32 = 6.0;
 
-/// Height of the project-modulator strip above the rack panel: a label, the slot row and a hairline. It sits in the
-/// workspace above the rack, not inside it, so the device tiles keep the rack's whole body.
+/// Height of the project-modulator strip: a label, the slot row and a hairline. It sits in the workspace above the
+/// rack panel (`ModStripVisibility::OnTop`, the default) or below it (`UnderRack`), never inside it, so the device
+/// tiles keep the rack's whole body.
 pub(crate) const MOD_H: f32 = 92.0;
 
 /// Height of a slot row, the gap between rows, and the trailing "＋" that asks for another row.
@@ -34,9 +40,9 @@ const MOD_SLOT_H: f32 = 72.0;
 const MOD_ROW_GAP: f32 = 6.0;
 
 /// The strip's height for the current state: one line, plus another line's worth for each one after it (none while
-/// the rack is collapsed).
+/// the rack is collapsed, and none while the strip is hidden so the workspace takes the space back).
 pub(crate) fn mod_row_h(s: &State) -> f32 {
-    if s.device_rack_collapsed {
+    if s.device_rack_collapsed || s.mod_strip_visibility == ModStripVisibility::Hidden {
         0.0
     } else {
         MOD_H + (strip_lines(s) as f32 - 1.0) * (MOD_SLOT_H + MOD_ROW_GAP)
@@ -52,7 +58,7 @@ fn strip_lines(s: &State) -> usize {
 /// then exactly one add tile in the first free slot. There is no grid of empty slots to scroll past. The tiles shrink
 /// to fit a narrow window rather than overflowing the rack.
 pub(crate) fn mod_slots(s: &State, r: Rect) -> Vec<(u8, Rect)> {
-    if s.device_rack_collapsed {
+    if s.device_rack_collapsed || s.mod_strip_visibility == ModStripVisibility::Hidden {
         return Vec::new();
     }
     let row = mod_row_rect(s, r);
@@ -76,9 +82,11 @@ pub(crate) fn mod_slots(s: &State, r: Rect) -> Vec<(u8, Rect)> {
         .collect()
 }
 
-/// The modulator strip's rect, immediately above the rack panel `r` (none while the rack is collapsed).
+/// The modulator strip's rect: immediately above the rack panel `r` (`OnTop`), immediately below it (`UnderRack`), or
+/// none at all while the rack is collapsed or the strip is hidden.
 pub(crate) fn mod_row_rect(s: &State, r: Rect) -> Rect {
-    Rect::new(r.x, r.y - mod_row_h(s), r.w, mod_row_h(s))
+    let y = if s.mod_strip_visibility == ModStripVisibility::UnderRack { r.bottom() } else { r.y - mod_row_h(s) };
+    Rect::new(r.x, y, r.w, mod_row_h(s))
 }
 
 /// Gap between tiles, holding the "+" insert buttons (before the first, between every
@@ -227,6 +235,12 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, r: Rect, f: &FrameInfo) 
     // A technical module tag, then the current chain's track name. The tag is fixed-width so the name starts at
     // the same x for every track.
     ui.c.text(fnt(12.0), r.x + 12.0, head.y + 8.0, t.accent, "DEVICE RACK");
+    // Hit region for the DEVICE RACK header text: clicking it hides/reveals the device rack (Ctrl+R also works)
+    ui.hit(
+        Rect::new(r.x + 12.0, head.y + 4.0, 120.0, head.h - 8.0),
+        Action::DeviceRack(RackAct::ToggleDeviceRack),
+        "Hide/Reveal the device rack",
+    );
     ui.c.fill_rect(Rect::new(r.x + 91.0, head.y + 5.0, 1.0, head.h - 10.0), t.splitter_dark);
     ui.c.text_clip(fnt(15.0), r.x + 98.0, head.y + 6.5, (r.w - 330.0).max(20.0), t.text, &name);
     // The header buttons, right-aligned: ＋ Add (the plugin browser), Pin, Show / Hide — and, when the chain
@@ -293,6 +307,20 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, r: Rect, f: &FrameInfo) 
         } else {
             "Collapse the device rack to its header"
         },
+    );
+    bx += 66.0;
+    // The visibility button (Ctrl+M): the next step of above the rack -> below it -> hidden.
+    header_button(
+        ui,
+        Rect::new(bx, head.y + 6.5, 60.0, 17.0),
+        match s.mod_strip_visibility {
+            ModStripVisibility::OnTop => "Strip Below",
+            ModStripVisibility::UnderRack => "Hide Strip",
+            ModStripVisibility::Hidden => "Show Strip",
+        },
+        false,
+        Action::DeviceRack(RackAct::ToggleVisibility),
+        "Modulator strip: above the rack, below it, hidden (Ctrl+M)",
     );
     bx += 66.0;
     // The out-arrow: every device in the chain shows its editor in its own floating window (lit green
@@ -1212,6 +1240,9 @@ pub(crate) fn mod_row_paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
     if s.device_rack_collapsed {
         return;
     }
+    if s.mod_strip_visibility == ModStripVisibility::Hidden {
+        return;
+    }
     let t = ui.t;
     let row = mod_row_rect(s, r);
     if row.h <= 0.0 {
@@ -1219,6 +1250,8 @@ pub(crate) fn mod_row_paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
     }
     ui.c.fill_rect(row, t.s(0x15181a));
     ui.c.fill_rect(Rect::new(row.x, row.bottom() - 1.0, row.w, 1.0), t.splitter_dark);
+    // The plots move with the sound; playback damages this band every tick so they are drawn again (`Live::Modulators`).
+    ui.live(crate::app::Live::Modulators, row);
     // Anywhere on the strip takes the editing keys for it: Ctrl+A selects its modulators, not notes elsewhere.
     ui.hit(row, Action::Mod(crate::modulation::ModAct::FocusStrip), "Modulator strip: its keys act on its slots");
     ui.c.text(fnt(10.5), row.x + 8.0, row.y + 2.0, t.text_dim, "PROJECT MODULATORS");

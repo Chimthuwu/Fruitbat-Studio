@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! The macOS menu bar: Lemon Studio's application menu, then FILE ... HELP as native menus. Their entries are not written
+//! The macOS menu bar: Fruitbat Studio's application menu, then FILE ... HELP as native menus. Their entries are not written
 //! here: each menu is filled when it opens from `views::menus::bar_model` (`update` keeps the latest), built from the
 //! same `MENUS` table and project state as the dropdowns of the window's own menu bar, so a change to those menus shows
 //! here too. Choosing an entry does what the dropdown's does (`take_picks`).
@@ -67,7 +67,7 @@ define_class!(
     }
 );
 
-/// Puts Lemon Studio's menu bar in place of winit's (UI thread, once the app runs).
+/// Puts Fruitbat Studio's menu bar in place of winit's (UI thread, once the app runs).
 pub fn install() {
     let Some(mtm) = MainThreadMarker::new() else { return };
     let app = NSApplication::sharedApplication(mtm);
@@ -118,7 +118,7 @@ fn with_submenu(mtm: MainThreadMarker, menu: Retained<NSMenu>) -> Retained<NSMen
 /// (which asks about unsaved changes, see `macos::hook_app`). These keep their usual key equivalents.
 fn app_menu(mtm: MainThreadMarker, target: &Target) -> Retained<NSMenu> {
     let app = NSApplication::sharedApplication(mtm);
-    let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), ns_string!("Lemon Studio"));
+    let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), ns_string!("Fruitbat Studio"));
     menu.setAutoenablesItems(false);
     let add = |title: &NSString, action: Option<Sel>, key: &NSString, mods: NSEventModifierFlags| {
         let item = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(mtm), title, action, key) };
@@ -137,7 +137,7 @@ fn app_menu(mtm: MainThreadMarker, target: &Target) -> Retained<NSMenu> {
             None => item.setEnabled(false),
         }
     };
-    own(add(ns_string!("About Lemon Studio"), Some(sel!(pick:)), ns_string!(""), cmd), Some((menus::HELP_MENU, menus::HELP_ABOUT)));
+    own(add(ns_string!("About Fruitbat Studio"), Some(sel!(pick:)), ns_string!(""), cmd), Some((menus::HELP_MENU, menus::HELP_ABOUT)));
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     let settings = menus::MENUS[menus::OPTIONS_MENU].cols.iter().flat_map(|(_, items)| items.iter()).position(|it| it.label == "General settings");
     own(add(ns_string!("Settings…"), Some(sel!(pick:)), ns_string!(","), cmd), settings.map(|i| (menus::OPTIONS_MENU, i)));
@@ -147,11 +147,11 @@ fn app_menu(mtm: MainThreadMarker, target: &Target) -> Retained<NSMenu> {
     item.setSubmenu(Some(&services));
     app.setServicesMenu(Some(&services));
     menu.addItem(&NSMenuItem::separatorItem(mtm));
-    add(ns_string!("Hide Lemon Studio"), Some(sel!(hide:)), ns_string!("h"), cmd);
+    add(ns_string!("Hide Fruitbat Studio"), Some(sel!(hide:)), ns_string!("h"), cmd);
     add(ns_string!("Hide Others"), Some(sel!(hideOtherApplications:)), ns_string!("h"), cmd | NSEventModifierFlags::Option);
     add(ns_string!("Show All"), Some(sel!(unhideAllApplications:)), ns_string!(""), cmd);
     menu.addItem(&NSMenuItem::separatorItem(mtm));
-    add(ns_string!("Quit Lemon Studio"), Some(sel!(terminate:)), ns_string!("q"), cmd);
+    add(ns_string!("Quit Fruitbat Studio"), Some(sel!(terminate:)), ns_string!("q"), cmd);
     menu
 }
 
@@ -200,7 +200,7 @@ fn fill(target: &Target, menu: &NSMenu) {
 
 /// Keys the application menu keeps (`app_menu`), which macOS users expect there: Hide (Command+H), Hide Others, Quit,
 /// Settings. A shortcut of the window's menus on one of them is not shown (Ctrl+H, TOOLS > Stop sound, would be
-/// Command+H: the key hides Lemon Studio).
+/// Command+H: the key hides Fruitbat Studio).
 const RESERVED: &[(&str, NSEventModifierFlags)] = &[
     ("h", NSEventModifierFlags::Command),
     ("h", NSEventModifierFlags::Command.union(NSEventModifierFlags::Option)),

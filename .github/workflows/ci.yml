@@ -1,4 +1,4 @@
-# Builds and tests Lemon Studio on Windows, Linux and macOS for every push to main and every pull request, so a change
+# Builds and tests Fruitbat Studio on Windows, Linux and macOS for every push to main and every pull request, so a change
 # that breaks any platform shows up before it is merged.
 name: CI
 

@@ -1,6 +1,6 @@
 [package]
 name = "lemon-phaser"
-description = "Lemon Phaser: Lemon Studio's phaser as a VST3 / CLAP plugin"
+description = "Lemon Phaser: Fruitbat Studio's phaser as a VST3 / CLAP plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

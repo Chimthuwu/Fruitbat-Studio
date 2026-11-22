@@ -712,7 +712,11 @@ impl Transport {
 
     /// The modulation graph as the engine runs it (`crate::modulation::engine_spec`), from now on: engines built after
     /// this start with it, and a playing one takes it in place. An unchanged graph is not sent again.
-    pub fn set_modulation(&self, mods: Vec<os_engine::Modulator>, snapshot: Arc<os_engine::ModSnapshot>, bases: Vec<(u32, f64)>) {
+    ///
+    /// Returns the snapshot the engine publishes into, which is the one the UI must read: an unchanged graph keeps the
+    /// snapshot it already had, so a caller that stored the fresh one it built would plot values nothing writes (the
+    /// plots would freeze while the sound carried on).
+    pub fn set_modulation(&self, mods: Vec<os_engine::Modulator>, snapshot: Arc<os_engine::ModSnapshot>, bases: Vec<(u32, f64)>) -> Arc<os_engine::ModSnapshot> {
         let changed = self.shared.modulation.lock().is_ok_and(|mut slot| {
             let changed = *slot != mods;
             *slot = mods;
@@ -721,15 +725,17 @@ impl Transport {
         if !changed {
             // The graph is the same graph; a base that moved still has to reach the engine (a knob turned under a
             // source that is running).
-            return self.set_mod_bases(bases);
+            self.set_mod_bases(bases);
+            return self.shared.mod_snapshot.lock().map(|s| s.clone()).unwrap_or(snapshot);
         }
         if let Ok(mut slot) = self.shared.mod_snapshot.lock() {
-            *slot = snapshot;
+            *slot = snapshot.clone();
         }
         if let Ok(mut slot) = self.shared.mod_bases.lock() {
             *slot = bases;
         }
         let _ = self.tx.send(Cmd::Modulation);
+        snapshot
     }
 
     /// The value each driven parameter has without its modulation (its own, as the user set it): what the engine moves

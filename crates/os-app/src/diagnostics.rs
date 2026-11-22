@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! HELP ▸ Diagnostics (Lemon Studio's design: the original's entry was not examined, and its support tools are the
+//! HELP ▸ Diagnostics (Fruitbat Studio's design: the original's entry was not examined, and its support tools are the
 //! maker's own): a plain-text report of this build, the system, the audio settings, the plugins found and the open
 //! project, written to "Diagnostics.txt" in the user folder and opened in the system's text viewer, ready to paste
 //! into a bug report. It reads only what the program already knows: no device is opened and no plugin loaded for it.
@@ -29,7 +29,7 @@ impl App {
         let cfg = crate::audio_cfg::AudioCfg::current();
         let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
         let out = [
-            format!("Lemon Studio {} (pre-alpha)", env!("CARGO_PKG_VERSION")),
+            format!("Fruitbat Studio {} (pre-alpha)", env!("CARGO_PKG_VERSION")),
             format!("System: {} {}, {cpus} logical processors", std::env::consts::OS, std::env::consts::ARCH),
             format!("User folder: {}", os_paths::user_dir().map_or_else(|| "none".into(), |d| d.display().to_string())),
             String::new(),
@@ -84,7 +84,7 @@ mod tests {
         let path = super::report_path().unwrap();
         assert_eq!(app.state.message, Some(format!("Saved {}", path.display())));
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.starts_with(&format!("Lemon Studio {} (pre-alpha)\n", env!("CARGO_PKG_VERSION"))), "{text}");
+        assert!(text.starts_with(&format!("Fruitbat Studio {} (pre-alpha)\n", env!("CARGO_PKG_VERSION"))), "{text}");
         assert!(text.contains(&format!("System: {} {}", std::env::consts::OS, std::env::consts::ARCH)), "{text}");
         assert!(text.contains("Project: not saved\n  Channels: 5, patterns: 1, mixer tracks: 18"), "{text}");
         let _ = std::fs::remove_file(path);

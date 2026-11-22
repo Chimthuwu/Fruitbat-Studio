@@ -1,6 +1,6 @@
 [package]
 name = "lemon-random"
-description = "Lemon Random: Lemon Studio's random note variation as a VST3 / CLAP MIDI plugin"
+description = "Lemon Random: Fruitbat Studio's random note variation as a VST3 / CLAP MIDI plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

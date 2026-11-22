@@ -1,6 +1,6 @@
 [package]
 name = "lemon-arp"
-description = "Lemon Arp: Lemon Studio's arpeggiator as a VST3 / CLAP MIDI plugin"
+description = "Lemon Arp: Fruitbat Studio's arpeggiator as a VST3 / CLAP MIDI plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

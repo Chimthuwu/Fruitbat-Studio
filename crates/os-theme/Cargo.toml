@@ -1,6 +1,6 @@
 [package]
 name = "os-theme"
-description = "Lemon Studio theme tokens and the HSL adjustment model"
+description = "Fruitbat Studio theme tokens and the HSL adjustment model"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

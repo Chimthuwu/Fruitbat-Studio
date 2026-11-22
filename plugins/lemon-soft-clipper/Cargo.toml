@@ -1,6 +1,6 @@
 [package]
 name = "lemon-soft-clipper"
-description = "Lemon Soft Clipper: Lemon Studio's soft clipper as a VST3 / CLAP plugin"
+description = "Lemon Soft Clipper: Fruitbat Studio's soft clipper as a VST3 / CLAP plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

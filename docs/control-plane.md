@@ -1,6 +1,6 @@
 # The control plane
 
-Scripts, tests, controllers and AI assistants can read and change a Lemon Studio project through the control
+Scripts, tests, controllers and AI assistants can read and change a Fruitbat Studio project through the control
 plane. Every change goes through one entry point, so each one is an undo step, named after the client that made it,
 and clients can be limited to reading or to proposing changes that the user accepts.
 
@@ -119,7 +119,7 @@ default), `velocity` 0..128 (100), `pan` 0..128 (64 = centre).
   colours, names, effect slots and their sidechain input, adding, moving and deleting tracks), channels added (the
   plugin picker, F8, ADD, a browser drop), coloured, named, cloned, moved and deleted, FILE ▸ Import ▸ MIDI file into
   the open project, and pattern colours, names, inserting, cloning, moving and deleting are undo steps too, as are the
-  tempo, the project settings and plugin parameters, whether Lemon Studio sets them (Type in value, Set..., Paste
+  tempo, the project settings and plugin parameters, whether Fruitbat Studio sets them (Type in value, Set..., Paste
   value) or they change in the plugin's own window. Faders and parameters follow "Undo knob tweaks". A change has the
   same step name whichever made it ("Tempo", "Time signature", "Song info", "Plugin parameter").
 - So are the channel's own controls in a plugin window (volume, panning, pitch, pitch range, mixer track), the

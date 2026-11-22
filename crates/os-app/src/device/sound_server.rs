@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
-//! Linux: gives the sound server back the cards Lemon Studio had through ALSA (exclusive mode).
+//! Linux: gives the sound server back the cards Fruitbat Studio had through ALSA (exclusive mode).
 //!
-//! While Lemon Studio has an ALSA device open, the sound server (PipeWire, PulseAudio) cannot: opening the card fails
+//! While Fruitbat Studio has an ALSA device open, the sound server (PipeWire, PulseAudio) cannot: opening the card fails
 //! as "busy", and PipeWire's session manager gives up on the card's speakers and microphone for good. They do not
-//! come back when Lemon Studio lets go, or when it exits, until the session manager restarts or the computer does.
+//! come back when Fruitbat Studio lets go, or when it exits, until the session manager restarts or the computer does.
 //! Choosing the card's profile again (off, then the one it had) makes the server open the card anew.
 //!
 //! `heal` does that for each card whose profile has an output (an input) and that has no sink (no source) on the
@@ -57,7 +57,7 @@ impl Conn {
         let reply: protocol::AuthReply = c.ask(Command::Auth(auth))?;
         c.version = c.version.min(reply.version);
         let mut props = protocol::Props::new();
-        props.set(protocol::Prop::ApplicationName, c"Lemon Studio");
+        props.set(protocol::Prop::ApplicationName, c"Fruitbat Studio");
         let _: protocol::SetClientNameReply = c.ask(Command::SetClientName(props))?;
         Ok(Some(c))
     }

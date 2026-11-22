@@ -1,6 +1,6 @@
 [package]
 name = "lemon-sampler"
-description = "Lemon Sampler: Lemon Studio's sampler instrument as a VST3 / CLAP plugin"
+description = "Lemon Sampler: Fruitbat Studio's sampler instrument as a VST3 / CLAP plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

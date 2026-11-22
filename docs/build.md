@@ -8,7 +8,7 @@ the known-good recipe for the dev box described below.
 
 ```bash
 export RUSTUP_HOME=/z/rustup
-export CARGO_TARGET_DIR='Z:\lemon-target'
+export CARGO_TARGET_DIR='Z:\GITHUB\_APPS\Fruitbat-Studio\build-target'
 export PATH="/z/mingw64/mingw64/bin:$PATH"
 export LIBCLANG_PATH='Z:\LLVM\bin'
 export BINDGEN_EXTRA_CLANG_ARGS='--target=x86_64-pc-windows-gnu -resource-dir=Z:/LLVM/lib/clang/20 -mmmx -IZ:/mingw64/mingw64/x86_64-w64-mingw32/include -IZ:/mingw64/mingw64/include'

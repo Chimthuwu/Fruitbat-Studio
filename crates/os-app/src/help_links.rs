@@ -1,25 +1,25 @@
 // Copyright (C) 2026 ItsAlphaNeon
 // SPDX-License-Identifier: GPL-3.0-or-later
-// This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
+// This file is part of Lemon Studio: https://github.com/Chimthuwu/Fruitbat-Studio
 
-//! HELP ▸ Help index, Tutorials ▸ and What's new (Lemon Studio's design): Lemon Studio has no help files or tutorials
+//! HELP ▸ Help index, Tutorials ▸ and What's new (Fruitbat Studio's design): Fruitbat Studio has no help files or tutorials
 //! of its own yet, so they open the project's pages in the default web browser: its README (what works and how to
 //! start), the README's how-to sections one by one, and its merged pull requests (the changes, newest first).
 //! Diagnostics writes a report (`crate::diagnostics`).
 
-pub const HELP_INDEX_URL: &str = "https://github.com/ItsAlphaNeon/Lemon-Studio#readme";
-pub const WHATS_NEW_URL: &str = "https://github.com/ItsAlphaNeon/Lemon-Studio/pulls?q=is%3Apr+is%3Amerged";
+pub const HELP_INDEX_URL: &str = "https://github.com/Chimthuwu/Fruitbat-Studio#readme";
+pub const WHATS_NEW_URL: &str = "https://github.com/Chimthuwu/Fruitbat-Studio/pulls?q=is%3Apr+is%3Amerged";
 
-/// A plugin menu's Help for Lemon Studio's own effects and instruments (and a plugin that names no page of its own is
+/// A plugin menu's Help for Fruitbat Studio's own effects and instruments (and a plugin that names no page of its own is
 /// told apart from them): the feature status page's section on them.
-pub const BUILTIN_PLUGINS_URL: &str = "https://github.com/ItsAlphaNeon/Lemon-Studio/blob/main/docs/status.md#-built-in-instruments-and-effects";
+pub const BUILTIN_PLUGINS_URL: &str = "https://github.com/Chimthuwu/Fruitbat-Studio/blob/main/docs/status.md#-built-in-instruments-and-effects";
 
 /// HELP ▸ Tutorials ▸: the README's how-to sections, as (entry, page).
 pub const TUTORIALS: [(&str, &str); 4] = [
-    ("Getting started", "https://github.com/ItsAlphaNeon/Lemon-Studio#getting-started"),
-    ("Using Lemon Studio", "https://github.com/ItsAlphaNeon/Lemon-Studio#using-lemon-studio"),
-    ("Scripting and assistants", "https://github.com/ItsAlphaNeon/Lemon-Studio#scripting-and-assistants"),
-    ("Command-line tools", "https://github.com/ItsAlphaNeon/Lemon-Studio#command-line-tools"),
+    ("Getting started", "https://github.com/Chimthuwu/Fruitbat-Studio#getting-started"),
+    ("Using Fruitbat Studio", "https://github.com/Chimthuwu/Fruitbat-Studio#using-lemon-studio"),
+    ("Scripting and assistants", "https://github.com/Chimthuwu/Fruitbat-Studio#scripting-and-assistants"),
+    ("Command-line tools", "https://github.com/Chimthuwu/Fruitbat-Studio#command-line-tools"),
 ];
 
 /// HELP ▸ Tutorials ▸'s entries.
@@ -65,7 +65,7 @@ mod tests {
         assert!(works(HELP_MENU, item_at(HELP_MENU, at).unwrap()));
         let items = submenu(HELP_MENU, "Tutorials").unwrap()(&app.state);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_ref()).collect();
-        assert_eq!(labels, ["Getting started", "Using Lemon Studio", "Scripting and assistants", "Command-line tools"]);
+        assert_eq!(labels, ["Getting started", "Using Fruitbat Studio", "Scripting and assistants", "Command-line tools"]);
         crate::playlist::run(&mut app, items[0].cmd.clone());
         assert_eq!(app.state.message.as_deref(), Some(format!("Opening {}", super::TUTORIALS[0].1).as_str()));
     }
