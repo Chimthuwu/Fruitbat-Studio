@@ -286,6 +286,13 @@ fn write_graph(g: &ModGraph) -> Vec<u8> {
                     b.extend_from_slice(&high.to_le_bytes());
                 }
             }
+            ModSource::VoiceAdsr(v) => {
+                b.push(VOICE_ADSR);
+                for v in [v.attack, v.decay, v.sustain, v.release, v.amount] {
+                    b.extend_from_slice(&v.to_le_bytes());
+                }
+                b.push(u8::from(v.bipolar));
+            }
         }
         b.extend_from_slice(&(m.targets.len() as u16).to_le_bytes());
         for t in &m.targets {
@@ -338,6 +345,8 @@ const MACRO: u8 = 5;
 const MSEG: u8 = 6;
 const VELOCITY: u8 = 7;
 const KEYTRACK: u8 = 8;
+/// Per-voice ADSR envelope (Task 2, per-voice ADSR).
+const VOICE_ADSR: u8 = 9;
 
 /// A [`Timebase`] kind in [`write_graph`]: 0 hertz (f32), 1 synced (u16 sixteenths).
 const FREE: u8 = 0;
@@ -559,6 +568,15 @@ fn read_source(r: &mut Reader, kind: u8, layout: u8) -> Option<ModSource> {
                 _ => return None,
             };
             ModSource::AudioFollower(os_model::modulation::AudioFollower { source: os_model::modulation::FollowerSource::Master, amount, attack, release, gain_db, detection, band })
+        }
+        VOICE_ADSR => {
+            let attack = r.f32()?;
+            let decay = r.f32()?;
+            let sustain = r.f32()?;
+            let release = r.f32()?;
+            let amount = r.f32()?;
+            let bipolar = r.u8()? != 0;
+            ModSource::VoiceAdsr(os_model::modulation::VoiceAdsr { attack, decay, sustain, release, amount, bipolar })
         }
         _ => return None,
     })

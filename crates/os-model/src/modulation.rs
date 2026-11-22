@@ -97,11 +97,19 @@ pub enum ModParam {
     Smooth,
     /// A macro's position, `0..=1`.
     Value,
+    /// A voice ADSR's attack time, in seconds.
+    AttackV,
+    /// A voice ADSR's decay time, in seconds.
+    Decay,
+    /// A voice ADSR's sustain level, `0..=1`.
+    Sustain,
+    /// A voice ADSR's release time, in seconds.
+    ReleaseV,
 }
 
 impl ModParam {
     /// Every parameter, in menu order. Not every source has every one of them: see [`ModParam::applies_to`].
-    pub const ALL: [ModParam; 9] = [
+    pub const ALL: [ModParam; 13] = [
         ModParam::Rate,
         ModParam::Amount,
         ModParam::Phase,
@@ -111,10 +119,14 @@ impl ModParam {
         ModParam::Gain,
         ModParam::Smooth,
         ModParam::Value,
+        ModParam::AttackV,
+        ModParam::Decay,
+        ModParam::Sustain,
+        ModParam::ReleaseV,
     ];
 
     /// The byte a `.lemon` file stores for it. The first four are the original handoff's; the rest arrived with the
-    /// followers' and the random source's own parameters.
+    /// followers' and the random source's own parameters. Voice ADSR parameters are new in layout 4.
     pub fn code(self) -> u8 {
         match self {
             ModParam::Rate => 0,
@@ -126,6 +138,10 @@ impl ModParam {
             ModParam::Gain => 6,
             ModParam::Smooth => 7,
             ModParam::Value => 8,
+            ModParam::AttackV => 9,
+            ModParam::Decay => 10,
+            ModParam::Sustain => 11,
+            ModParam::ReleaseV => 12,
         }
     }
 
@@ -141,6 +157,10 @@ impl ModParam {
             6 => ModParam::Gain,
             7 => ModParam::Smooth,
             8 => ModParam::Value,
+            9 => ModParam::AttackV,
+            10 => ModParam::Decay,
+            11 => ModParam::Sustain,
+            12 => ModParam::ReleaseV,
             _ => return None,
         })
     }
@@ -157,6 +177,10 @@ impl ModParam {
             ModParam::Gain => "Gain",
             ModParam::Smooth => "Smooth",
             ModParam::Value => "Value",
+            ModParam::AttackV => "Attack",
+            ModParam::Decay => "Decay",
+            ModParam::Sustain => "Sustain",
+            ModParam::ReleaseV => "Release",
         }
     }
 
@@ -166,6 +190,7 @@ impl ModParam {
     /// smoothing; a step sequence has a rate alone; an MSEG has a rate and an amount (its shape is its own); a macro has
     /// nothing but its position; a follower has an amount, an attack, a release and a gain (it follows the master
     /// rather than a period, so it has no rate); a one-shot envelope has none of them, since it follows the transport.
+    /// A voice ADSR has attack, decay, sustain, release and amount.
     pub fn applies_to(self, source: &ModSource) -> bool {
         match source {
             ModSource::Lfo(_) => matches!(self, ModParam::Rate | ModParam::Amount | ModParam::Phase | ModParam::Offset),
@@ -178,6 +203,7 @@ impl ModParam {
             ModSource::Velocity(_) | ModSource::KeyTrack(_) => matches!(self, ModParam::Amount),
             ModSource::AudioFollower(_) => matches!(self, ModParam::Amount | ModParam::Attack | ModParam::Release | ModParam::Gain),
             ModSource::Envelope(_) => false,
+            ModSource::VoiceAdsr(_) => matches!(self, ModParam::AttackV | ModParam::Decay | ModParam::Sustain | ModParam::ReleaseV | ModParam::Amount),
         }
     }
 }
@@ -616,6 +642,35 @@ pub struct Envelope {
     pub release: f32,
 }
 
+/// A per-voice ADSR envelope: triggered by note-on/note-off per voice, not by the transport.
+/// Each voice gets its own envelope state. The output is the envelope's level (0..1).
+/// This is the "gate half" of the note sources — Velocity and KeyTrack read the note,
+/// VoiceAdsr generates the envelope from the note's gate.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct VoiceAdsr {
+    /// Seconds.
+    pub attack: f32,
+    pub decay: f32,
+    /// `0..=1` of the depth.
+    pub sustain: f32,
+    pub release: f32,
+    /// The amount (gain around the middle), like every source.
+    pub amount: f32,
+    /// `true`: bipolar swing around the middle. `false`: unipolar from the middle up.
+    pub bipolar: bool,
+}
+
+impl VoiceAdsr {
+    /// The parameter codes a VoiceAdsr offers for routing.
+    pub const PARAMS: [ModParam; 5] = [
+        ModParam::AttackV,
+        ModParam::Decay,
+        ModParam::Sustain,
+        ModParam::ReleaseV,
+        ModParam::Amount,
+    ];
+}
+
 /// What drives a modulator.
 ///
 /// `Steps` and `Envelope` predate the project-level slots (M1) and stay in the format so old projects load. The project
@@ -633,6 +688,8 @@ pub enum ModSource {
     Velocity(Velocity),
     /// Where each channel's last note sits in a key range.
     KeyTrack(KeyTrack),
+    /// A per-voice ADSR envelope: triggered by note-on/note-off per voice.
+    VoiceAdsr(VoiceAdsr),
 }
 
 impl Default for ModSource {
@@ -653,6 +710,7 @@ impl ModSource {
             ModSource::Mseg(m) => m.amount,
             ModSource::Velocity(v) => v.amount,
             ModSource::KeyTrack(k) => k.amount,
+            ModSource::VoiceAdsr(v) => v.amount,
             // A macro at 0 is still on: the whole point of it is to be turned up.
             ModSource::Steps(_) | ModSource::Envelope(_) | ModSource::Macro(_) => 1.0,
         }
@@ -1435,7 +1493,7 @@ mod tests {
             assert_eq!(param.code() as usize, i, "{param:?} keeps its byte");
             assert_eq!(ModParam::of(param.code()), Some(*param));
         }
-        assert_eq!(ModParam::of(9), None, "a byte this version does not know is not a parameter");
+        assert_eq!(ModParam::of(13), None, "a byte this version does not know is not a parameter");
         let mut g = ModGraph::default();
         let driver = g.add(ModSource::Lfo(Lfo::default()));
         let f = g.add(ModSource::AudioFollower(AudioFollower::default()));

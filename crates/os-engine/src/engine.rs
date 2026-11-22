@@ -1166,6 +1166,8 @@ impl Engine {
     pub fn note_on_midi(&mut self, channel: usize, key: u16, velocity: u8, midi: u8) {
         let Some(ch) = self.channels.get(channel) else { return };
         self.tail_done = false;
+        // Update voice pool for per-voice modulation sources (VoiceAdsr).
+        self.mods.voice_pool.note_on(channel, key.min(127) as u8, velocity);
         if ch.instrument.0.is_some() {
             self.inst_live.push((channel, key.min(127) as u8, f32::from(velocity) / 128.0, midi & 15));
             self.sounding.push((channel, key, u64::MAX));
@@ -1213,6 +1215,8 @@ impl Engine {
 
     /// Release a live note with a short fade.
     pub fn note_off(&mut self, channel: usize, key: u16) {
+        // Update voice pool for per-voice modulation sources (VoiceAdsr).
+        self.mods.voice_pool.note_off(channel, key.min(127) as u8);
         if self.has_instrument(channel) && self.sounding.iter().any(|&(c, k, end)| c == channel && k == key && end == u64::MAX) {
             self.inst_live.push((channel, key.min(127) as u8, -1.0, 0));
         }
@@ -2687,8 +2691,15 @@ impl Engine {
         for e in &self.inst_events {
             if e.vel >= 0.0 {
                 self.mods.notes.note_on(e.ch, e.key, (e.vel.clamp(0.0, 1.0) * 127.0).round() as u8);
+                // Also update the voice pool for per-voice modulation sources (VoiceAdsr).
+                self.mods.voice_pool.note_on(e.ch, e.key, (e.vel.clamp(0.0, 1.0) * 127.0).round() as u8);
+            } else {
+                // Note off (vel < 0)
+                self.mods.voice_pool.note_off(e.ch, e.key);
             }
         }
+        // Advance voice pool age for per-voice modulation sources.
+        self.mods.voice_pool.advance_tick();
         let held = !self.inst_offs.is_empty()
             || self.sounding.iter().any(|&(c, _, end)| end == u64::MAX && self.channels.get(c).is_some_and(|ch| ch.instrument.0.is_some()));
         if held || !self.inst_events.is_empty() {

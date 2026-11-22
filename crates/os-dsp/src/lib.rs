@@ -36,3 +36,4 @@ pub mod stretch;
 pub mod strip;
 pub mod tone;
 pub mod transients;
+pub mod voice_pool;
