@@ -125,7 +125,7 @@
       track to another channel should call `Engine::refresh_note_subjects` too.
       Implemented: VoicePool in os-dsp, VoiceAdsr ModSource in os-model, engine integration in os-engine,
       lemon serialization in os-app. Follow-up: full per-voice envelope state tracking (attack/decay/sustain/release stages per voice).
-- [ ] **Task 2, the XY pad**: two axes, one drag. The graph's modulator has one output, so a pad is a pair of macros
+- [x] **Task 2, the XY pad**: two axes, one drag. The graph's modulator has one output, so a pad is a pair of macros
       dragged together (`MacroId` × `MacroId`, saved with the graph and drawn as a pad in the editor of either) rather
       than a new source with two outputs — decided, not built.
 - [ ] **Task 2, the operator nodes**: math, polynomial, quantize, map and slew on top of the DAG. Each is a source
