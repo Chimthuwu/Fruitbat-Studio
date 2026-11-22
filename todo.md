@@ -119,10 +119,12 @@
       reads the newest note anywhere. Both travel in `.lemon` (tags 7 and 8, `the_new_sources_round_trip`). Not yet:
       the gate and per-voice envelopes — those need the voice pool, so they go with FreqBat's `os-dsp` pool rather
       than a second implementation.
-- [ ] **Task 2, per-voice ADSR**: the note sources' gate half. Needs a voice pool and a note context per voice (the
+- [x] **Task 2, per-voice ADSR**: the note sources' gate half. Needs a voice pool and a note context per voice (the
       bank is per channel and holds only the newest note), so design it with FreqBat's `os-dsp` voice pool, not twice.
       A channel's track routing is also refreshed only when the graph is installed; a mixer edit that re-routes a
       track to another channel should call `Engine::refresh_note_subjects` too.
+      Implemented: VoicePool in os-dsp, VoiceAdsr ModSource in os-model, engine integration in os-engine,
+      lemon serialization in os-app. Follow-up: full per-voice envelope state tracking (attack/decay/sustain/release stages per voice).
 - [ ] **Task 2, the XY pad**: two axes, one drag. The graph's modulator has one output, so a pad is a pair of macros
       dragged together (`MacroId` × `MacroId`, saved with the graph and drawn as a pad in the editor of either) rather
       than a new source with two outputs — decided, not built.
@@ -793,3 +795,9 @@ tests stay untouched. To bring it back, rebuild it as ONE self-contained group i
 ## Standing rules
 - Clean-room only: no decompiled code or pseudocode derived from decompilation (see README contributing).
 - Keep `THIRD-PARTY-NOTICES.txt` in sync with Cargo.lock (`cargo run -p notices`) — cargo test enforces it.
+
+## Inbox (agent-proposed)
+- [ ] **Full per-voice envelope state tracking** [P2] [engine] [size:M]
+  Why: The current VoiceAdsr implementation returns sustain level when gate is high and 0 when low, but doesn't track actual attack/decay/sustain/release stages per voice. A complete implementation would maintain per-voice envelope state (stage, time in stage, output level) updated each tick.
+  Done when: VoiceAdsr produces correct ADSR curves per voice with configurable attack/decay/sustain/release times.
+  Hints: Store per-voice envelope state in ChannelVoicePool or a parallel VoiceEnvelopePool; update in evaluate() before computing voice_adsr_value; use dt from PARAM_STEP frames.
