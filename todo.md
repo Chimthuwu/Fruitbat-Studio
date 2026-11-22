@@ -128,7 +128,7 @@
 - [x] **Task 2, the XY pad**: two axes, one drag. The graph's modulator has one output, so a pad is a pair of macros
       dragged together (`MacroId` × `MacroId`, saved with the graph and drawn as a pad in the editor of either) rather
       than a new source with two outputs — decided, not built.
-- [ ] **Task 2, the operator nodes**: math, polynomial, quantize, map and slew on top of the DAG. Each is a source
+- [x] **Task 2, the operator nodes**: math, polynomial, quantize, map and slew on top of the DAG. Each is a source
       with two inputs (a route each) or one input and a curve, so they slot into the existing evaluation order once
       the note sources do; the graph's edges already carry depth/curve/polarity.
 - [x] **The `.lemon` layout for routes** (2026-11-15): the modulation graph event now carries **its own** layout
