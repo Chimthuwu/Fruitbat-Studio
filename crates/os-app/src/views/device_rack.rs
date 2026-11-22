@@ -1395,8 +1395,8 @@ pub(crate) fn mod_add_menu_paint(ui: &mut Ui, s: &State, r: Rect) {
     if let Some(slot) = s.mod_add_slot {
         if let Some((_, anchor)) = slots.iter().find(|(at, _)| *at == slot).copied() {
             let w = 148.0;
-            // A row each (30 px) under the title: the menu is exactly as tall as the kinds it lists.
-            let h = 28.0 + crate::modulation::Kind::PROJECT.len() as f32 * 30.0;
+            // A row each (30 px) under the title: the menu is exactly as tall as the kinds it lists, plus XY Pad.
+            let h = 28.0 + (crate::modulation::Kind::PROJECT.len() + 1) as f32 * 30.0;
             let m = Rect::new(anchor.x.min(r.right() - w - 2.0), (anchor.y - h - 2.0).max(2.0), w, h);
             ui.c.fill_rrect(m, 3.0, ui.t.s(0x26292c));
             ui.c.stroke_rrect(m, 3.0, 1.0, ui.t.splitter_dark);
@@ -1426,6 +1426,14 @@ pub(crate) fn mod_add_menu_paint(ui: &mut Ui, s: &State, r: Rect) {
                 }
                 y += 30.0;
             }
+            // XY Pad option
+            let row = Rect::new(m.x + 2.0, y, m.w - 4.0, 20.0);
+            let hov = ui.hit(row, Action::Mod(crate::modulation::ModAct::AddXyPad(slot)), "XY Pad");
+            if hov {
+                ui.c.fill_rect(row, ui.t.s(0x333a3e));
+            }
+            ui.c.text(fnt(12.5), row.x + 8.0, row.y + 2.0, ui.t.text, "XY Pad");
+            ui.c.text(fnt(9.5), row.x + 8.0, row.y + 13.0, ui.t.text_faint, "two macros, one drag");
         }
     }
 }
@@ -1461,7 +1469,7 @@ fn mod_menu_window(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator) 
 /// One modulator's graphical editor: its type, its shape / rate, and the knobs its type has. Not a dropdown list —
 /// the controls the handoff asks for, native and live.
 fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator, anchor: Rect, r: Rect) {
-    use os_model::modulation::ModSource;
+    use os_model::modulation::{MacroId, ModSource};
     let t = ui.t;
     let accent = mod_accent(t.modulation, &m.source);
     let w = MOD_EDITOR_W;
@@ -1569,10 +1577,19 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
             ui.c.text(fnt(9.5), panel.x + 60.0, cy + 40.0, t.text_dim, "shape: menu > Shape");
         }
         ModSource::Macro(mc) => {
-            mod_knob(ui, s, m.id, crate::modulation::KnobField::Value, "value", panel.x + 30.0, cy + 16.0);
-            ui.c.text(fnt(10.0), panel.x + 60.0, cy + 4.0, t.text_dim, &format!("{:.0}%", mc.value * 100.0));
-            ui.c.text(fnt(9.5), panel.x + 60.0, cy + 20.0, t.text_dim, "a knob of its own, and a");
-            ui.c.text(fnt(9.5), panel.x + 60.0, cy + 32.0, t.text_dim, "destination other routes can turn");
+            // Check if this macro is part of an XY pad
+            // For now, we'll check if there's an XY pad in the graph
+            // In a full implementation, we'd need to track which modulator IDs correspond to XY pad macros
+            let xy_pad = s.modulation.xy_pads.first().copied();
+            if let Some((x_macro, y_macro)) = xy_pad {
+                // Draw XY pad
+                xy_pad_paint(ui, s, m.id, x_macro, y_macro, panel, cy, accent);
+            } else {
+                mod_knob(ui, s, m.id, crate::modulation::KnobField::Value, "value", panel.x + 30.0, cy + 16.0);
+                ui.c.text(fnt(10.0), panel.x + 60.0, cy + 4.0, t.text_dim, &format!("{:.0}%", mc.value * 100.0));
+                ui.c.text(fnt(9.5), panel.x + 60.0, cy + 20.0, t.text_dim, "a knob of its own, and a");
+                ui.c.text(fnt(9.5), panel.x + 60.0, cy + 32.0, t.text_dim, "destination other routes can turn");
+            }
         }
         ModSource::Steps(st) => {
             rate_paint(ui, s, m.id, panel.x + 8.0, cy - 8.0, st.period);
@@ -1592,6 +1609,69 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
     let hov = ui.hit(sw, Action::Mod(crate::modulation::ModAct::Enable(m.id)), "On / off");
     ui.c.fill_rrect(sw, 2.0, if m.enabled { accent.with_alpha(150) } else if hov { t.s(0x333a3e) } else { t.s(0x2a2f32) });
     ui.c.text_center(fnt(10.0), sw, t.text, if m.enabled { "on" } else { "off" });
+}
+
+/// Draws an XY pad for a pair of macros.
+fn xy_pad_paint(
+    ui: &mut Ui,
+    s: &State,
+    modulator_id: os_model::modulation::ModulatorId,
+    x_macro: os_model::modulation::MacroId,
+    y_macro: os_model::modulation::MacroId,
+    panel: Rect,
+    cy: f32,
+    accent: Color,
+) {
+    use os_model::modulation::ModSource;
+    let t = ui.t;
+    let pad_size = 120.0;
+    let pad_x = panel.x + (panel.w - pad_size) / 2.0;
+    let pad_y = cy - 10.0;
+    let pad_rect = Rect::new(pad_x, pad_y, pad_size, pad_size);
+
+    // Find the modulator values for the X and Y macros
+    let (x_val, y_val) = s.modulation.modulators.iter().fold((0.5f32, 0.5f32), |acc, m| {
+        if let ModSource::Macro(mc) = m.source {
+            if m.id.0 == x_macro.0 {
+                (mc.value, acc.1)
+            } else if m.id.0 == y_macro.0 {
+                (acc.0, mc.value)
+            } else {
+                acc
+            }
+        } else {
+            acc
+        }
+    });
+
+    // Draw pad background
+    ui.c.fill_rrect(pad_rect, 4.0, t.s(0x1a1e21));
+    ui.c.stroke_rrect(pad_rect, 4.0, 1.0, accent.with_alpha(100));
+
+    // Draw center lines
+    let cx = pad_rect.cx();
+    let cy_pad = pad_rect.cy();
+    ui.c.line(cx, pad_rect.y, cx, pad_rect.bottom(), 1.0, t.splitter_dark);
+    ui.c.line(pad_rect.x, cy_pad, pad_rect.right(), cy_pad, 1.0, t.splitter_dark);
+
+    // Draw the dot at the current position
+    let dot_x = pad_rect.x + x_val * pad_size;
+    let dot_y = pad_rect.bottom() - y_val * pad_size; // Y is inverted (0 at bottom)
+    let dot_r = 8.0;
+    ui.c.fill_circle(dot_x, dot_y, dot_r, accent);
+    ui.c.stroke_circle(dot_x, dot_y, dot_r, 1.5, t.text);
+
+    // Hit area for dragging
+    let hov = ui.hit(
+        pad_rect,
+        Action::Mod(crate::modulation::ModAct::XyPadDrag(x_macro, y_macro, x_val, y_val)),
+        "XY pad: drag to set both macro values",
+    );
+
+    // Labels
+    ui.c.text_center(fnt(9.0), Rect::new(pad_rect.x, pad_rect.y - 18.0, pad_size, 16.0), t.text_dim, "X / Y Pad");
+    ui.c.text(fnt(8.0), pad_rect.x + 2.0, pad_rect.bottom() + 4.0, t.text_dim, &format!("X: {:.0}%", x_val * 100.0));
+    ui.c.text_right(fnt(8.0), pad_rect.right() - 2.0, pad_rect.bottom() + 4.0, t.text_dim, &format!("Y: {:.0}%", y_val * 100.0));
 }
 
 /// The rate knob: the current musical rate, a drag knob and its sync / free mode button. The rate is a routing

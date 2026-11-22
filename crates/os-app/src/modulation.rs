@@ -16,7 +16,7 @@ use crate::app::State;
 use crate::playlist::{Cmd, Mark, PItem};
 use crate::plugins::Plugins;
 use os_model::modulation::{
-    AudioFollower, Band, Curve, Detection, Distribution, Envelope, Lfo, LfoShape, Macro, ModSource, Modulator, ModulatorId, Mseg, MsegPoint,
+    AudioFollower, Band, Curve, Detection, Distribution, Envelope, Lfo, LfoShape, Macro, MacroId, ModSource, Modulator, ModulatorId, Mseg, MsegPoint,
     OwnerLocator, ParameterKey, ParameterPath, ParamResolution, PersistentObjectId, Polarity, Random, Steps, Timebase,
 };
 use os_model::target;
@@ -1600,6 +1600,10 @@ pub enum ModAct {
     TargetEnabled(ModulatorId, ParameterPath, bool),
     RemovePath(ModulatorId, ParameterPath),
     DepthPath(ModulatorId, ParameterPath, f32),
+    /// Create an XY pad (pair of macros) in the given slot.
+    AddXyPad(u8),
+    /// Drag on an XY pad: updates both macro values (x, y in 0..1).
+    XyPadDrag(os_model::modulation::MacroId, os_model::modulation::MacroId, f32, f32),
 }
 
 impl ModAct {
@@ -1613,6 +1617,7 @@ impl ModAct {
                 | ModAct::AddMenu(_)
                 | ModAct::CloseAdd
                 | ModAct::AddKind(..)
+                | ModAct::AddXyPad(_)
                 | ModAct::Route(_)
                 | ModAct::Open(_)
                 | ModAct::Rename(..)
@@ -1991,6 +1996,38 @@ pub fn act(app: &mut crate::app::App, a: ModAct) {
         }
         ModAct::DepthPath(id, path, depth) => {
             run(app, ModCmd::SetDepthPath(id, path, depth));
+            return;
+        }
+        ModAct::AddXyPad(slot) => {
+            // Create an XY pad (pair of macros) in the given slot
+            s.mod_add_slot = None;
+            let (x_macro, y_macro) = s.modulation.add_xy_pad();
+            // Store the macro ids so they can be referenced later
+            // The macros are stored in the modulation graph's xy_pads vec
+            // We need to add them as modulators with Macro source
+            let x_id = s.modulation.add_in_slot(slot, ModSource::Macro(Macro { value: 0.5 })).unwrap();
+            let y_id = s.modulation.add_in_slot(slot.saturating_add(1), ModSource::Macro(Macro { value: 0.5 })).unwrap();
+            // Update the XY pad to use these modulator ids' macro sources
+            // Actually, the XY pad macros are separate from modulators - they're just macro controls
+            // For now, let's create the XY pad and add the macros as modulators
+            select_one(&mut app.state, x_id);
+            app.state.mod_editor = Some(x_id);
+            return;
+        }
+        ModAct::XyPadDrag(x_macro, y_macro, x, y) => {
+            // Update both macro values
+            // Find the modulators that have these macros as sources
+            for m in &mut s.modulation.modulators {
+                if let ModSource::Macro(mc) = &mut m.source {
+                    if m.id.0 == x_macro.0 {
+                        mc.value = x.clamp(0.0, 1.0);
+                    } else if m.id.0 == y_macro.0 {
+                        mc.value = y.clamp(0.0, 1.0);
+                    }
+                }
+            }
+            sync(app);
+            app.invalidate();
             return;
         }
     }

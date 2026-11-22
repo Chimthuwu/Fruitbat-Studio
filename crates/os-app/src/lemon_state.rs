@@ -35,8 +35,8 @@ const LAYOUT: u8 = 2;
 ///
 /// 3 added each assignment's route identity and a target that names a route's depth; 2 and 1 are the layouts the graph
 /// shared with the file's before it had one of its own, still read (their assignments are given route ids in graph
-/// order).
-const GRAPH_LAYOUT: u8 = 3;
+/// order). 4 adds XY pad pairs and the macro id counter.
+const GRAPH_LAYOUT: u8 = 4;
 /// The layout written before project slots, random follow shape edits and per-routing enable. Still read.
 const LAYOUT_1: u8 = 1;
 
@@ -198,6 +198,13 @@ fn write_graph(g: &ModGraph) -> Vec<u8> {
     let mut b = graph_start(g.modulators.len());
     b.extend_from_slice(&g.next.to_le_bytes());
     b.extend_from_slice(&g.next_route.to_le_bytes());
+    // Layout 4: next_macro and xy_pads
+    b.extend_from_slice(&g.next_macro.to_le_bytes());
+    b.extend_from_slice(&(g.xy_pads.len() as u16).to_le_bytes());
+    for (x_macro, y_macro) in &g.xy_pads {
+        b.extend_from_slice(&x_macro.0.to_le_bytes());
+        b.extend_from_slice(&y_macro.0.to_le_bytes());
+    }
     for m in &g.modulators {
         b.extend_from_slice(&m.id.0.to_le_bytes());
         b.push(u8::from(m.enabled));
@@ -453,6 +460,16 @@ fn read_graph(d: &[u8]) -> Option<ModGraph> {
     let count = r.u32()? as usize;
     let next = r.u32()?;
     let mut next_route = if layout >= 3 { Some(r.u32()?) } else { None };
+    let mut next_macro = if layout >= 4 { Some(r.u32()?) } else { None };
+    let mut xy_pads = Vec::new();
+    if layout >= 4 {
+        let pad_count = r.u16()? as usize;
+        for _ in 0..pad_count {
+            let x_macro = os_model::modulation::MacroId(r.u32()?);
+            let y_macro = os_model::modulation::MacroId(r.u32()?);
+            xy_pads.push((x_macro, y_macro));
+        }
+    }
     let mut modulators: Vec<Modulator> = Vec::new();
     for index in 0..count {
         let (Some(id), Some(enabled)) = (r.u32(), r.u8()) else { break };
@@ -487,7 +504,7 @@ fn read_graph(d: &[u8]) -> Option<ModGraph> {
     }
     // Rows trail the modulators; a payload written before they existed (or cut short) is one row.
     let rows = r.u8().unwrap_or(0);
-    let mut g = ModGraph { modulators, next, next_route: next_route.unwrap_or(0), rows };
+    let mut g = ModGraph { modulators, next, next_route: next_route.unwrap_or(0), rows, next_macro: next_macro.unwrap_or(0), xy_pads };
     // A payload from before layout 3 has no route identities: give its assignments theirs now, in graph order, so a
     // depth destination written later can name one.
     if next_route.is_none() {

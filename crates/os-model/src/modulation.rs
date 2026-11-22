@@ -319,6 +319,20 @@ impl ModulatorId {
     }
 }
 
+/// A macro's identity in the project's graph. Minted from [`ModGraph::next_macro`], never reused, saved with the graph;
+/// `0` means "not assigned" ([`MACRO_NONE`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub struct MacroId(pub u32);
+
+/// The reserved value for "no macro".
+pub const MACRO_NONE: MacroId = MacroId(0);
+
+impl MacroId {
+    pub fn is_none(self) -> bool {
+        self == MACRO_NONE
+    }
+}
+
 /// A seed for a new random modulator: its id mixed with the wall clock, so two modulators made together still draw
 /// different sequences. Once drawn it is saved, and every render of the project repeats it exactly.
 pub fn fresh_seed(id: ModulatorId) -> u64 {
@@ -833,9 +847,14 @@ pub struct ModGraph {
     pub next: u32,
     /// Next [`RouteId`] to mint (monotonic, never reused).
     pub next_route: u32,
+    /// Next [`MacroId`] to mint (monotonic, never reused).
+    pub next_macro: u32,
     /// Rows of project slots the strip shows: one until the user asks for another row. A project written before rows
     /// existed reads as 0, which is one row.
     pub rows: u8,
+    /// XY pad pairs: each pair is two macros (X and Y axes) that are edited together as a pad.
+    /// The first macro is the X axis, the second is the Y axis.
+    pub xy_pads: Vec<(MacroId, MacroId)>,
 }
 
 impl ModGraph {
@@ -1119,6 +1138,40 @@ impl ModGraph {
             }
         }
         v
+    }
+
+    // --- XY pad support ---
+
+    /// Creates a new macro with a fresh id. Macros are not modulators; they are simple 0..1 controls
+    /// that can be paired into XY pads.
+    pub fn add_macro(&mut self) -> MacroId {
+        let id = MacroId(self.next_macro.max(1));
+        self.next_macro = id.0 + 1;
+        id
+    }
+
+    /// Creates an XY pad: a pair of macros (X and Y axes) that are edited together.
+    /// Returns the (x_macro, y_macro) pair.
+    pub fn add_xy_pad(&mut self) -> (MacroId, MacroId) {
+        let x_macro = self.add_macro();
+        let y_macro = self.add_macro();
+        self.xy_pads.push((x_macro, y_macro));
+        (x_macro, y_macro)
+    }
+
+    /// Finds the XY pad that contains `macro_id`, if any. Returns (x_macro, y_macro).
+    pub fn xy_pad_for(&self, macro_id: MacroId) -> Option<(MacroId, MacroId)> {
+        self.xy_pads.iter().find(|(x, y)| *x == macro_id || *y == macro_id).copied()
+    }
+
+    /// Removes an XY pad pair. Both macros become standalone.
+    pub fn remove_xy_pad(&mut self, macro_id: MacroId) -> bool {
+        if let Some(pos) = self.xy_pads.iter().position(|(x, y)| *x == macro_id || *y == macro_id) {
+            self.xy_pads.remove(pos);
+            true
+        } else {
+            false
+        }
     }
 }
 
