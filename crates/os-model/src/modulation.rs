@@ -105,11 +105,23 @@ pub enum ModParam {
     Sustain,
     /// A voice ADSR's release time, in seconds.
     ReleaseV,
+    /// Math operator's operation selector.
+    MathOp,
+    /// Polynomial coefficients (index 0..5 for c0..c5).
+    PolyCoeff(u8),
+    /// Quantize step count.
+    QuantSteps,
+    /// Map breakpoints (index 0..7 for point index).
+    MapPoint(u8),
+    /// Slew rise time.
+    SlewRise,
+    /// Slew fall time.
+    SlewFall,
 }
 
 impl ModParam {
     /// Every parameter, in menu order. Not every source has every one of them: see [`ModParam::applies_to`].
-    pub const ALL: [ModParam; 13] = [
+    pub const ALL: [ModParam; 31] = [
         ModParam::Rate,
         ModParam::Amount,
         ModParam::Phase,
@@ -123,10 +135,29 @@ impl ModParam {
         ModParam::Decay,
         ModParam::Sustain,
         ModParam::ReleaseV,
+        ModParam::MathOp,
+        ModParam::PolyCoeff(0),
+        ModParam::PolyCoeff(1),
+        ModParam::PolyCoeff(2),
+        ModParam::PolyCoeff(3),
+        ModParam::PolyCoeff(4),
+        ModParam::PolyCoeff(5),
+        ModParam::QuantSteps,
+        ModParam::MapPoint(0),
+        ModParam::MapPoint(1),
+        ModParam::MapPoint(2),
+        ModParam::MapPoint(3),
+        ModParam::MapPoint(4),
+        ModParam::MapPoint(5),
+        ModParam::MapPoint(6),
+        ModParam::MapPoint(7),
+        ModParam::SlewRise,
+        ModParam::SlewFall,
     ];
 
     /// The byte a `.lemon` file stores for it. The first four are the original handoff's; the rest arrived with the
-    /// followers' and the random source's own parameters. Voice ADSR parameters are new in layout 4.
+    /// followers' and the random source's own parameters. Voice ADSR parameters are new in layout 4. Operator node
+    /// parameters are new in layout 5.
     pub fn code(self) -> u8 {
         match self {
             ModParam::Rate => 0,
@@ -142,6 +173,12 @@ impl ModParam {
             ModParam::Decay => 10,
             ModParam::Sustain => 11,
             ModParam::ReleaseV => 12,
+            ModParam::MathOp => 13,
+            ModParam::PolyCoeff(i) => 14 + i,
+            ModParam::QuantSteps => 20,
+            ModParam::MapPoint(i) => 21 + i,
+            ModParam::SlewRise => 29,
+            ModParam::SlewFall => 30,
         }
     }
 
@@ -161,6 +198,12 @@ impl ModParam {
             10 => ModParam::Decay,
             11 => ModParam::Sustain,
             12 => ModParam::ReleaseV,
+            13 => ModParam::MathOp,
+            14..=19 => ModParam::PolyCoeff(code - 14),
+            20 => ModParam::QuantSteps,
+            21..=28 => ModParam::MapPoint(code - 21),
+            29 => ModParam::SlewRise,
+            30 => ModParam::SlewFall,
             _ => return None,
         })
     }
@@ -181,6 +224,12 @@ impl ModParam {
             ModParam::Decay => "Decay",
             ModParam::Sustain => "Sustain",
             ModParam::ReleaseV => "Release",
+            ModParam::MathOp => "Operation",
+            ModParam::PolyCoeff(i) => match i { 0 => "Coeff 0", 1 => "Coeff 1", 2 => "Coeff 2", 3 => "Coeff 3", 4 => "Coeff 4", 5 => "Coeff 5", _ => "Coeff" },
+            ModParam::QuantSteps => "Steps",
+            ModParam::MapPoint(i) => match i { 0 => "Point 0", 1 => "Point 1", 2 => "Point 2", 3 => "Point 3", 4 => "Point 4", 5 => "Point 5", 6 => "Point 6", 7 => "Point 7", _ => "Point" },
+            ModParam::SlewRise => "Rise",
+            ModParam::SlewFall => "Fall",
         }
     }
 
@@ -191,6 +240,7 @@ impl ModParam {
     /// nothing but its position; a follower has an amount, an attack, a release and a gain (it follows the master
     /// rather than a period, so it has no rate); a one-shot envelope has none of them, since it follows the transport.
     /// A voice ADSR has attack, decay, sustain, release and amount.
+    /// Operator nodes (Math, Polynomial, Quantize, Map, Slew) have their own parameters plus amount.
     pub fn applies_to(self, source: &ModSource) -> bool {
         match source {
             ModSource::Lfo(_) => matches!(self, ModParam::Rate | ModParam::Amount | ModParam::Phase | ModParam::Offset),
@@ -204,6 +254,11 @@ impl ModParam {
             ModSource::AudioFollower(_) => matches!(self, ModParam::Amount | ModParam::Attack | ModParam::Release | ModParam::Gain),
             ModSource::Envelope(_) => false,
             ModSource::VoiceAdsr(_) => matches!(self, ModParam::AttackV | ModParam::Decay | ModParam::Sustain | ModParam::ReleaseV | ModParam::Amount),
+            ModSource::Math(_) => matches!(self, ModParam::MathOp | ModParam::Amount),
+            ModSource::Polynomial(_) => matches!(self, ModParam::PolyCoeff(_) | ModParam::Amount),
+            ModSource::Quantize(_) => matches!(self, ModParam::QuantSteps | ModParam::Amount),
+            ModSource::Map(_) => matches!(self, ModParam::MapPoint(_) | ModParam::Amount),
+            ModSource::Slew(_) => matches!(self, ModParam::SlewRise | ModParam::SlewFall | ModParam::Amount),
         }
     }
 }
@@ -685,10 +740,135 @@ impl VoiceAdsr {
     ];
 }
 
+/// Math operator: combines two inputs with an operation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Math {
+    /// The operation to apply.
+    pub op: MathOp,
+    /// The amount (gain around the middle), like every source.
+    pub amount: f32,
+    /// `true`: bipolar swing around the middle. `false`: unipolar from the middle up.
+    pub bipolar: bool,
+}
+
+/// Math operation for the Math operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MathOp {
+    #[default]
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    /// min(a, b)
+    Min,
+    /// max(a, b)
+    Max,
+    /// a raised to the power of b
+    Pow,
+    /// a modulo b
+    Modulo,
+}
+
+impl Default for Math {
+    fn default() -> Self {
+        Math { op: MathOp::Add, amount: 1.0, bipolar: true }
+    }
+}
+
+/// Polynomial operator: evaluates a polynomial on one input.
+/// y = c0 + c1*x + c2*x^2 + c3*x^3 + c4*x^4 + c5*x^5
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Polynomial {
+    /// Polynomial coefficients (up to degree 5).
+    pub coeffs: [f32; 6],
+    /// The amount (gain around the middle), like every source.
+    pub amount: f32,
+    /// `true`: bipolar swing around the middle. `false`: unipolar from the middle up.
+    pub bipolar: bool,
+}
+
+impl Default for Polynomial {
+    fn default() -> Self {
+        Polynomial { coeffs: [0.0, 1.0, 0.0, 0.0, 0.0, 0.0], amount: 1.0, bipolar: true }
+    }
+}
+
+/// Quantize operator: quantizes one input to discrete steps.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Quantize {
+    /// Number of steps (2..=128).
+    pub steps: u8,
+    /// The amount (gain around the middle), like every source.
+    pub amount: f32,
+    /// `true`: bipolar swing around the middle. `false`: unipolar from the middle up.
+    pub bipolar: bool,
+}
+
+impl Default for Quantize {
+    fn default() -> Self {
+        Quantize { steps: 12, amount: 1.0, bipolar: true }
+    }
+}
+
+/// Map operator: remaps one input through a curve defined by breakpoints.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Map {
+    /// Breakpoints for the mapping curve (x, y pairs, 0..1).
+    pub points: [MapPoint; 8],
+    /// Number of points in use (2..=8).
+    pub used: u8,
+    /// The amount (gain around the middle), like every source.
+    pub amount: f32,
+    /// `true`: bipolar swing around the middle. `false`: unipolar from the middle up.
+    pub bipolar: bool,
+}
+
+/// One breakpoint of a Map curve.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MapPoint {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Default for MapPoint {
+    fn default() -> Self {
+        MapPoint { x: 0.0, y: 0.0 }
+    }
+}
+
+impl Default for Map {
+    fn default() -> Self {
+        let mut points = [MapPoint::default(); 8];
+        points[0] = MapPoint { x: 0.0, y: 0.0 };
+        points[1] = MapPoint { x: 1.0, y: 1.0 };
+        Map { points, used: 2, amount: 1.0, bipolar: true }
+    }
+}
+
+/// Slew operator: limits the rate of change of one input (slew limiter).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Slew {
+    /// Rising slew time in seconds (0 = instant).
+    pub rise: f32,
+    /// Falling slew time in seconds (0 = instant).
+    pub fall: f32,
+    /// The amount (gain around the middle), like every source.
+    pub amount: f32,
+    /// `true`: bipolar swing around the middle. `false`: unipolar from the middle up.
+    pub bipolar: bool,
+}
+
+impl Default for Slew {
+    fn default() -> Self {
+        Slew { rise: 0.01, fall: 0.01, amount: 1.0, bipolar: true }
+    }
+}
+
 /// What drives a modulator.
 ///
 /// `Steps` and `Envelope` predate the project-level slots (M1) and stay in the format so old projects load. The project
 /// slots offer the handoff's sources — [`Lfo`], [`Random`], [`AudioFollower`], [`Mseg`] and [`Macro`].
+/// Operator nodes (math, polynomial, quantize, map, slew) are sources with one or two inputs (routes).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ModSource {
     Lfo(Lfo),
@@ -704,6 +884,16 @@ pub enum ModSource {
     KeyTrack(KeyTrack),
     /// A per-voice ADSR envelope: triggered by note-on/note-off per voice.
     VoiceAdsr(VoiceAdsr),
+    /// Math operator: combines two inputs with an operation.
+    Math(Math),
+    /// Polynomial operator: evaluates a polynomial on one input.
+    Polynomial(Polynomial),
+    /// Quantize operator: quantizes one input to discrete steps.
+    Quantize(Quantize),
+    /// Map operator: remaps one input through a curve.
+    Map(Map),
+    /// Slew operator: limits the rate of change of one input.
+    Slew(Slew),
 }
 
 impl Default for ModSource {
@@ -725,6 +915,11 @@ impl ModSource {
             ModSource::Velocity(v) => v.amount,
             ModSource::KeyTrack(k) => k.amount,
             ModSource::VoiceAdsr(v) => v.amount,
+            ModSource::Math(m) => m.amount,
+            ModSource::Polynomial(p) => p.amount,
+            ModSource::Quantize(q) => q.amount,
+            ModSource::Map(mp) => mp.amount,
+            ModSource::Slew(s) => s.amount,
             // A macro at 0 is still on: the whole point of it is to be turned up.
             ModSource::Steps(_) | ModSource::Envelope(_) | ModSource::Macro(_) => 1.0,
         }
@@ -1546,7 +1741,7 @@ mod tests {
             assert_eq!(param.code() as usize, i, "{param:?} keeps its byte");
             assert_eq!(ModParam::of(param.code()), Some(*param));
         }
-        assert_eq!(ModParam::of(13), None, "a byte this version does not know is not a parameter");
+        assert_eq!(ModParam::of(31), None, "a byte this version does not know is not a parameter");
         let mut g = ModGraph::default();
         let driver = g.add(ModSource::Lfo(Lfo::default()));
         let f = g.add(ModSource::AudioFollower(AudioFollower::default()));
