@@ -801,3 +801,242 @@ tests stay untouched. To bring it back, rebuild it as ONE self-contained group i
   Why: The current VoiceAdsr implementation returns sustain level when gate is high and 0 when low, but doesn't track actual attack/decay/sustain/release stages per voice. A complete implementation would maintain per-voice envelope state (stage, time in stage, output level) updated each tick.
   Done when: VoiceAdsr produces correct ADSR curves per voice with configurable attack/decay/sustain/release times.
   Hints: Store per-voice envelope state in ChannelVoicePool or a parallel VoiceEnvelopePool; update in evaluate() before computing voice_adsr_value; use dt from PARAM_STEP frames.
+
+## 🚀 Roadmap (2026-11-23) — user-supplied TODO
+
+Source: `message.txt` supplied by the user. Repository: https://github.com/Chimthuwu/Fruitbat-Studio
+
+### 1. Device Rack & Modulation Rack Improvements
+
+#### 1.1 Fix Device Rack Minimize / Show Behaviour
+
+**Current problem:**
+- Clicking the `DEVICE RACK` button on the left completely hides the Device Rack.
+- Pressing `CTRL + R` also completely hides the rack.
+- Once hidden, it becomes unnecessarily difficult to find and restore the rack.
+- There are redundant Hide/Show buttons on the right-hand side of the rack.
+
+**Required behaviour:**
+- The `DEVICE RACK` button on the left should toggle between expanded and minimized states.
+- Pressing `CTRL + R` must perform exactly the same action.
+- Double-clicking a playlist track should restore/open the Device Rack.
+- The rack should remain visible in its minimized state rather than disappearing completely.
+- Remove the redundant Hide/Show buttons on the right-hand side.
+- Apply the same behaviour to the Modulation Rack.
+
+#### 1.2 Add Device Rack to the View Menu
+
+Add a Device Rack visibility option under the top-level `VIEW` menu.
+
+- [ ] Add `Device Rack` to the View menu.
+- [ ] Clearly display its keyboard shortcut: `CTRL + R`.
+- [ ] Selecting it should toggle the Device Rack between expanded and minimized states.
+- [ ] Ensure the menu state reflects whether the rack is expanded or minimized.
+
+#### 1.3 Device Rack Layout
+
+Refer to `Device Rack Design.png`.
+
+**Correct design:**
+- The Device Rack header remains visible when minimized.
+- The rack's contents collapse/minimize.
+- The playlist remains fully accessible.
+- The rack can be restored using the existing left-side `DEVICE RACK` button or `CTRL + R`.
+- No redundant Hide/Show buttons should appear on the right.
+
+**Important:** The left-side Device Rack button must behave like the original Hide/Show functionality, not completely remove the rack from the interface.
+
+### 2. Piano Roll — Zoom Behaviour
+
+**Current problem:**
+
+The Piano Roll does not support the same zoom controls as the Playlist.
+
+The Playlist already supports:
+- `CTRL + Mouse Wheel` — Horizontal zoom.
+- `ALT + Mouse Wheel` — Vertical zoom.
+
+The Piano Roll currently supports horizontal zooming but does not correctly support vertical zooming with ALT.
+
+**Required changes:**
+- [ ] Implement `ALT + Mouse Wheel` for vertical zooming in the Piano Roll.
+- [ ] Ensure `CTRL + Mouse Wheel` continues to provide horizontal zooming.
+- [ ] Match the Playlist's zoom behaviour as closely as possible.
+- [ ] Ensure zooming is smooth and consistent.
+- [ ] Preserve the existing scroll behaviour when no modifier key is pressed.
+
+### 3. Upgrade the Colour Selection System
+
+**Current problem:**
+
+The application currently offers a very limited selection of colours.
+
+We need a proper colour selection system that allows users to choose virtually any colour.
+
+#### 3.1 Implement a Full Colour Picker
+
+- [ ] Replace the limited colour palette with a proper colour picker.
+- [ ] Implement a visual colour wheel.
+- [ ] Support hue selection.
+- [ ] Support saturation and brightness/value adjustment.
+- [ ] Allow users to select arbitrary colours rather than being restricted to predefined options.
+- [ ] Provide a suitable way to preview the selected colour before applying it.
+
+### 4. Playlist — Multi-Track Colouring
+
+We need to improve track selection and colouring in the Playlist.
+
+#### 4.1 Multi-Track Selection
+
+- [ ] Support holding `SHIFT` while clicking tracks to select multiple tracks.
+- [ ] Clearly indicate which tracks are currently selected.
+- [ ] Allow colour operations to apply to all selected tracks simultaneously.
+
+#### 4.2 Apply a Single Colour to Multiple Tracks
+
+- [ ] Allow users to select multiple Playlist tracks.
+- [ ] Open the colour picker.
+- [ ] Select a colour and apply it to every selected track.
+- [ ] Ensure all selected tracks update consistently.
+
+#### 4.3 Gradient Track Colouring
+
+Implement FL Studio-style gradient colouring.
+
+- [ ] Allow users to select multiple Playlist tracks.
+- [ ] Provide an option to select a starting colour.
+- [ ] Provide an option to select an ending colour.
+- [ ] Generate a smooth colour gradient across all selected tracks.
+- [ ] Automatically interpolate the colours between the two selected colours.
+- [ ] Apply the resulting gradient in track order.
+
+**Example:**
+
+If the user selects five tracks and chooses blue as the starting colour and purple as the ending colour, the five tracks should gradually transition from blue to purple.
+
+### 5. Mixer — Multi-Channel Colouring
+
+Implement the same advanced colouring functionality in the Mixer.
+
+#### 5.1 Multi-Channel Selection
+
+- [ ] Allow users to select multiple Mixer channels.
+- [ ] Support `SHIFT + Click` for multi-selection.
+- [ ] Clearly indicate selected channels.
+
+#### 5.2 Apply Colours to Multiple Channels
+
+- [ ] Allow one colour to be applied to all selected Mixer channels.
+- [ ] Use the upgraded global colour picker.
+
+#### 5.3 Gradient Channel Colouring
+
+- [ ] Support selecting two gradient endpoint colours.
+- [ ] Automatically interpolate colours across selected Mixer channels.
+- [ ] Apply the gradient in channel order.
+- [ ] Match the Playlist's gradient colouring functionality.
+
+**Important:** Playlist and Mixer colouring should use the same underlying colour-selection and gradient functionality wherever possible.
+
+### 6. Major Architecture Issue — Unified Track System
+
+**Priority: High — Requires investigation and architectural correction.**
+
+This is potentially the underlying cause of several existing problems, particularly the broken automation system.
+
+#### 6.1 Current Problems
+
+The application's track architecture is currently confusing and inconsistent.
+
+We currently have:
+- MIDI tracks.
+- Audio tracks.
+- Generic Playlist tracks.
+- Mixer channels.
+- Clip Launcher tracks.
+
+Some Playlist tracks appear to exist independently without being properly associated with anything.
+
+These generic tracks are essentially just empty lanes, but they are currently presented as though they are actual tracks.
+
+This makes the relationship between the Playlist, Mixer, Clip Launcher and automation system unnecessarily confusing.
+
+#### 6.2 Establish One Unified Track System
+
+**The Playlist, Clip Launcher and Mixer must operate using the same underlying track identities.**
+
+They should not maintain separate, independently generated collections of tracks.
+
+- [ ] Investigate the existing track data models and their relationships.
+- [ ] Identify why generic Playlist tracks are being generated independently.
+- [ ] Establish a single authoritative track model.
+- [ ] Ensure Playlist tracks, Clip Launcher tracks and Mixer channels reference the same underlying tracks.
+- [ ] Ensure track creation, deletion, renaming, reordering and other relevant changes remain synchronised across these interfaces.
+- [ ] Remove unnecessary duplicate or disconnected track representations.
+- [ ] Replace misleading generic `Track` terminology with `Lane` wherever something is genuinely just an arrangement lane rather than an actual instrument/audio track.
+
+#### 6.3 Correct the Default Blank Project
+
+When a user opens a completely blank project, the default arrangement should contain:
+
+**Playlist:**
+- One empty MIDI track.
+- One empty Audio track.
+
+**Mixer:**
+- The corresponding MIDI track/channel.
+- The corresponding Audio track/channel.
+
+**Clip Launcher:**
+- The same two underlying tracks.
+
+There should not be additional automatically generated empty generic tracks underneath these two.
+
+- [ ] Remove unwanted automatically generated generic tracks.
+- [ ] Ensure the Playlist starts with exactly one MIDI track and one Audio track.
+- [ ] Ensure the Mixer reflects those same tracks.
+- [ ] Ensure the Clip Launcher reflects those same tracks.
+- [ ] Ensure all three interfaces remain synchronised.
+
+#### 6.4 Fix Automation
+
+**Current problem:**
+
+Automation is currently completely broken.
+
+I suspect this is related to the inconsistent relationship between Playlist tracks, MIDI tracks, Audio tracks and Mixer channels.
+
+**Required investigation:**
+- [ ] Trace how automation targets are currently identified.
+- [ ] Investigate how automation references Playlist tracks and Mixer channels.
+- [ ] Identify whether automation is targeting disconnected or incorrectly mapped track IDs.
+- [ ] Ensure automation targets reference the correct underlying track, channel or parameter.
+- [ ] Ensure automation remains connected when tracks are renamed or reordered.
+- [ ] Verify automation works correctly for both MIDI and Audio tracks.
+- [ ] Verify automation continues working across the Playlist, Clip Launcher and Mixer.
+
+**Important:** Do not simply patch the visible automation interface. Investigate and correct the underlying track/channel relationship first.
+
+### 7. General Verification
+
+After implementing the above changes:
+
+- [ ] Verify Device Rack minimize/restore functionality.
+- [ ] Verify Modulation Rack minimize/restore functionality.
+- [ ] Verify `CTRL + R` matches the Device Rack button.
+- [ ] Verify double-clicking a Playlist track restores the Device Rack.
+- [ ] Verify Piano Roll horizontal and vertical zooming.
+- [ ] Verify arbitrary colour selection.
+- [ ] Verify multi-track Playlist colouring.
+- [ ] Verify Playlist gradient colouring.
+- [ ] Verify multi-channel Mixer colouring.
+- [ ] Verify Mixer gradient colouring.
+- [ ] Verify blank project track generation.
+- [ ] Verify Playlist, Mixer and Clip Launcher track synchronisation.
+- [ ] Verify automation creation, editing and playback.
+- [ ] Verify existing projects continue to load correctly.
+
+### Reference Images
+
+- `image(20261123-025407).png` — Current Fruitbat Studio interface.
+- `Device Rack Design.png` — Device Rack minimize/restore behaviour, illustrating the unwanted design and the intended design.
