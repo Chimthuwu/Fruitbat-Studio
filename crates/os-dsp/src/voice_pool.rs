@@ -272,6 +272,11 @@ impl VoicePool {
         self.channels.get_mut(channel)
     }
 
+    /// Iterate over every channel's voice pool, for sources that read voices globally.
+    pub fn channels(&self) -> impl Iterator<Item = &ChannelVoicePool> {
+        self.channels.iter()
+    }
+
     /// Handle a note-on event for a channel.
     pub fn note_on(&mut self, channel: usize, key: u8, velocity: u8) -> Option<u32> {
         self.channel_mut(channel).map(|c| c.note_on(key, velocity))

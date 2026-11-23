@@ -300,6 +300,12 @@ fn write_graph(g: &ModGraph) -> Vec<u8> {
                 }
                 b.push(u8::from(v.bipolar));
             }
+            // Operator nodes are model-only: the editor cannot create one, so a saved fallback reads back as a
+            // macro rather than dropping the whole graph. Layout 5 will give these sources their own codes.
+            _ => {
+                b.push(MACRO);
+                b.extend_from_slice(&0.5f32.to_le_bytes());
+            }
         }
         b.extend_from_slice(&(m.targets.len() as u16).to_le_bytes());
         for t in &m.targets {

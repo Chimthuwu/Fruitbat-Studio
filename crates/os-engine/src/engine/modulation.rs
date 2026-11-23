@@ -315,7 +315,7 @@ pub(super) struct Modulation {
     note_outputs: Vec<f32>,
     /// Per-voice note context for voice-triggered modulation sources (VoiceAdsr).
     /// Updated from the engine's note events before each evaluation tick.
-    voice_pool: VoicePool,
+    pub(super) voice_pool: VoicePool,
     /// The live values the UI reads.
     pub(super) snapshot: Option<Arc<ModSnapshot>>,
 }
@@ -588,7 +588,7 @@ impl Modulation {
         // Compute average envelope level across all voices.
         let dt = 1.0 / 48000.0; // Approximate tick duration at 48kHz, PARAM_STEP=64 frames
         let mut sum = 0.0f32;
-        for ctx in voices {
+        for ctx in &voices {
             let level = Self::adsr_level(adsr, ctx, dt);
             sum += level;
         }
@@ -605,7 +605,7 @@ impl Modulation {
     fn voice_adsr_global(&self, adsr: &VoiceAdsr) -> f32 {
         let mut sum = 0.0f32;
         let mut count = 0usize;
-        for pool in &self.voice_pool.channels {
+        for pool in self.voice_pool.channels() {
             for (_, ctx) in pool.iter() {
                 let dt = 1.0 / 48000.0;
                 sum += Self::adsr_level(adsr, ctx, dt);
@@ -658,6 +658,10 @@ pub fn source_value(source: &ModSource, id: u32, beats: f64, secs: f64) -> f32 {
         ModSource::Velocity(_) | ModSource::KeyTrack(_) => 0.5,
         // VoiceAdsr is evaluated per-voice in the engine, not here.
         ModSource::VoiceAdsr(_) => 0.5,
+        // Operator nodes read their inputs from other modulators through routes; with no clock-bound input here,
+        // their neutral preview value is the middle.
+        ModSource::Math(_) | ModSource::Polynomial(_) | ModSource::Quantize(_)
+        | ModSource::Map(_) | ModSource::Slew(_) => 0.5,
     }
 }
 
@@ -912,6 +916,43 @@ fn apply_param(source: &mut ModSource, param: ModParam, by: f64) {
             _ => {}
         },
         ModSource::Envelope(_) => {}
+        ModSource::Math(m) => {
+            if param == ModParam::Amount {
+                m.amount = add(m.amount).clamp(0.0, 1.0);
+            }
+            // MathOp is a discrete selector; it is edited in the UI, not swept by a modulation route.
+        }
+        ModSource::Polynomial(m) => match param {
+            ModParam::PolyCoeff(i) => {
+                if let Some(c) = m.coeffs.get_mut(usize::from(i)) {
+                    *c = add(*c);
+                }
+            }
+            ModParam::Amount => m.amount = add(m.amount).clamp(0.0, 1.0),
+            _ => {}
+        },
+        ModSource::Quantize(m) => match param {
+            ModParam::QuantSteps => {
+                m.steps = (f64::from(m.steps) + by * 12.0).clamp(2.0, 128.0).round() as u8;
+            }
+            ModParam::Amount => m.amount = add(m.amount).clamp(0.0, 1.0),
+            _ => {}
+        },
+        ModSource::Map(m) => match param {
+            ModParam::MapPoint(i) => {
+                if let Some(p) = m.points.get_mut(usize::from(i)) {
+                    p.y = add(p.y).clamp(0.0, 1.0);
+                }
+            }
+            ModParam::Amount => m.amount = add(m.amount).clamp(0.0, 1.0),
+            _ => {}
+        },
+        ModSource::Slew(m) => match param {
+            ModParam::SlewRise => m.rise = scale_time(m.rise, scale, 0.0, 10.0),
+            ModParam::SlewFall => m.fall = scale_time(m.fall, scale, 0.0, 10.0),
+            ModParam::Amount => m.amount = add(m.amount).clamp(0.0, 1.0),
+            _ => {}
+        },
     }
 }
 

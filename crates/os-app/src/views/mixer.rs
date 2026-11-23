@@ -474,6 +474,12 @@ fn chip_label(m: &os_model::modulation::Modulator) -> String {
         ModSource::Macro(_) => "macro".to_string(),
         ModSource::Velocity(_) => "vel".to_string(),
         ModSource::KeyTrack(_) => "key".to_string(),
+        ModSource::VoiceAdsr(_) => "adsr".to_string(),
+        ModSource::Math(_) => "math".to_string(),
+        ModSource::Polynomial(_) => "poly".to_string(),
+        ModSource::Quantize(_) => "quant".to_string(),
+        ModSource::Map(_) => "map".to_string(),
+        ModSource::Slew(_) => "slew".to_string(),
     };
     format!("{} · {short}", crate::modulation::name_of(m))
 }

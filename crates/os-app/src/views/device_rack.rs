@@ -1221,6 +1221,12 @@ pub(crate) fn slot_text(m: &os_model::modulation::Modulator) -> String {
         ModSource::Macro(mc) => format!("macro {:.0}%", mc.value * 100.0),
         ModSource::Velocity(v) => format!("velocity {:.0}%", v.amount * 100.0),
         ModSource::KeyTrack(k) => format!("keys {}..{}", k.low, k.high),
+        ModSource::VoiceAdsr(_) => "voice ADSR".into(),
+        ModSource::Math(_) => "math".into(),
+        ModSource::Polynomial(_) => "polynomial".into(),
+        ModSource::Quantize(_) => "quantize".into(),
+        ModSource::Map(_) => "map".into(),
+        ModSource::Slew(_) => "slew".into(),
     }
 }
 
@@ -1597,6 +1603,10 @@ fn mod_editor_paint(ui: &mut Ui, s: &State, m: &os_model::modulation::Modulator,
         }
         ModSource::Envelope(_) => {
             ui.c.text(fnt(10.0), panel.x + 8.0, cy + 8.0, t.text_dim, "An envelope from an old project.");
+        }
+        ModSource::VoiceAdsr(_) | ModSource::Math(_) | ModSource::Polynomial(_)
+        | ModSource::Quantize(_) | ModSource::Map(_) | ModSource::Slew(_) => {
+            ui.c.text(fnt(10.0), panel.x + 8.0, cy + 8.0, t.text_dim, "Operator source: edit its routes in the modulation graph.");
         }
     }
     // The footer: the routing button and the on / off switch, so the editor can start the same gesture as the tile.

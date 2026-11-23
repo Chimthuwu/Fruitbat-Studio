@@ -303,6 +303,12 @@ pub fn name_of(m: &Modulator) -> String {
         os_model::modulation::ModSource::Macro(_) => "MACRO",
         os_model::modulation::ModSource::Velocity(_) => "VELOCITY",
         os_model::modulation::ModSource::KeyTrack(_) => "KEY",
+        os_model::modulation::ModSource::VoiceAdsr(_) => "VOICE ADSR",
+        os_model::modulation::ModSource::Math(_) => "MATH",
+        os_model::modulation::ModSource::Polynomial(_) => "POLY",
+        os_model::modulation::ModSource::Quantize(_) => "QUANT",
+        os_model::modulation::ModSource::Map(_) => "MAP",
+        os_model::modulation::ModSource::Slew(_) => "SLEW",
     };
     format!("{kind} {}", m.id.0)
 }
@@ -342,6 +348,8 @@ impl Kind {
             ModSource::Macro(_) => Kind::Macro,
             ModSource::Velocity(_) => Kind::Velocity,
             ModSource::KeyTrack(_) => Kind::KeyTrack,
+            // Operator nodes and voice ADSR are model-only until their own editor kinds land.
+            _ => Kind::Macro,
         }
     }
 
@@ -379,6 +387,8 @@ pub fn set_kind(src: ModSource, kind: Kind) -> ModSource {
         ModSource::Random(r) => Some(r.period),
         ModSource::Mseg(m) => Some(m.period),
         ModSource::Envelope(_) | ModSource::AudioFollower(_) | ModSource::Macro(_) | ModSource::Velocity(_) | ModSource::KeyTrack(_) => None,
+        ModSource::VoiceAdsr(_) | ModSource::Math(_) | ModSource::Polynomial(_)
+        | ModSource::Quantize(_) | ModSource::Map(_) | ModSource::Slew(_) => None,
     };
     match (kind, src) {
         (Kind::Lfo, ModSource::Lfo(_))
@@ -489,6 +499,12 @@ pub fn source_text(src: ModSource) -> String {
         ModSource::Macro(_) => "macro".into(),
         ModSource::Velocity(v) => format!("velocity {:.0}%", v.amount * 100.0),
         ModSource::KeyTrack(k) => format!("key {}..{}", k.low, k.high),
+        ModSource::VoiceAdsr(_) => "voice ADSR".into(),
+        ModSource::Math(_) => "math".into(),
+        ModSource::Polynomial(_) => "polynomial".into(),
+        ModSource::Quantize(_) => "quantize".into(),
+        ModSource::Map(_) => "map".into(),
+        ModSource::Slew(_) => "slew".into(),
     }
 }
 
@@ -665,6 +681,8 @@ pub fn editor_menu(s: &State, id: ModulatorId, target: u32) -> Option<PItem> {
                 items.push(PItem::new(label, cmd).mark(Mark::Radio(f.band == band)));
             }
         }
+        // Operator nodes and voice ADSR have no menu-specific controls yet; their knobs are edited in place.
+        _ => {}
     }
     if let Some(t) = here {
         items.extend([PItem::sep(), PItem::head("This control")]);
