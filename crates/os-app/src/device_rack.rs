@@ -475,10 +475,8 @@ pub enum RackAct {
     Splitter,
     /// The header's pin toggle: keep this track's chain while editing elsewhere (§7).
     TogglePin,
-    /// The header's collapse toggle.
+    /// Minimize the rack to its header bar, or show it again (Ctrl+R, or a click on "DEVICE RACK").
     ToggleCollapsed,
-    /// Toggle the device rack visibility (hotkey: Ctrl+R, also click the "DEVICE RACK" header text).
-    ToggleDeviceRack,
     /// Cycle the modulator strip: above the rack, below it, hidden (hotkey: Ctrl+M, also the header's strip button).
     ToggleVisibility,
     /// Select a device tile by its index in the chain: a plain header click selects it alone, Shift+click
@@ -656,10 +654,6 @@ pub fn run(app: &mut App, act: RackAct) {    match act {
         RackAct::TogglePin => toggle_pin(app),
         RackAct::ToggleCollapsed => {
             app.state.device_rack_collapsed = !app.state.device_rack_collapsed;
-            app.invalidate();
-        }
-        RackAct::ToggleDeviceRack => {
-            app.state.show_device_rack = !app.state.show_device_rack;
             app.invalidate();
         }
         RackAct::ToggleVisibility => {
@@ -1919,13 +1913,38 @@ mod tests {
         // Ctrl+R shows and hides the rack, and no longer opens Export audio. Shift+Ctrl+R still exports MP3, so it
         // goes last: the form it opens is a modal and would swallow further keys.
         app.key(&Key::Character("r".into()), true, false);
-        assert!(!app.state.show_device_rack, "Ctrl+R hides the device rack");
+        assert!(app.state.device_rack_collapsed, "Ctrl+R minimizes the device rack");
+        assert_eq!(crate::device_rack::height(&app.state), HEADER_H, "to its bar, which stays");
         assert!(!app.modal_open(), "and opens no Export form");
         app.key(&Key::Character("r".into()), true, false);
-        assert!(app.state.show_device_rack, "Ctrl+R shows the rack again");
+        assert!(!app.state.device_rack_collapsed, "Ctrl+R shows the rack again");
         app.shift = true;
         app.key(&Key::Character("r".into()), true, false);
         assert!(app.modal_open(), "Shift+Ctrl+R still opens the Export form (MP3)");
+    }
+
+    /// The minimized rack is a plain bar: "DEVICE RACK" minimizes and shows it, and the header has no other buttons.
+    #[test]
+    fn the_device_rack_label_minimizes_and_the_header_has_no_buttons() {
+        let Ok(mut c) = os_ui::Canvas::new(1600, 900, 1.0) else { return };
+        let mut app = app();
+        app.state.screen = (1600.0, 900.0);
+        crate::playlist::run(&mut app, Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi));
+        for minimized in [true, false] {
+            app.paint(&mut c, None);
+            let toggle = Action::DeviceRack(RackAct::ToggleCollapsed);
+            let r = app.hits.iter().find(|h| h.action == toggle).expect("the label is a button").rect;
+            app.mouse_move(r.cx(), r.cy());
+            app.mouse_down();
+            app.mouse_up();
+            assert_eq!(app.state.device_rack_collapsed, minimized);
+            app.paint(&mut c, None);
+            let gone = [RackAct::AddDevice, RackAct::TogglePin, RackAct::ToggleVisibility, RackAct::ToggleEditors];
+            for a in gone {
+                assert!(!app.hits.iter().any(|h| h.action == Action::DeviceRack(a.clone())), "{a:?} has no button");
+            }
+        }
+        assert!(app.hits.iter().any(|h| matches!(h.action, Action::DeviceRack(RackAct::AddAt(_)))), "a + still adds a device");
     }
 
     /// A populated modulator tile carries its own remove button, so it can be deleted without opening a menu.

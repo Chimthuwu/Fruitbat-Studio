@@ -5094,6 +5094,19 @@ impl App {
         self.transport.preview_song(p);
     }
 
+    /// The launcher cell under (x, y), if the launcher is what is there (not a window floating over it).
+    pub(crate) fn launcher_cell_at(&self, x: f32, y: f32) -> Option<(u32, usize)> {
+        use crate::launcher::Act;
+        if !self.state.launcher_open || !matches!(self.top_hit(x, y)?.action, Action::Launcher(Act::Launch(..) | Act::Stop(_))) {
+            return None;
+        }
+        // A playing cell has its stop button on top: the cell's own hit is under it.
+        self.hits.iter().rev().find_map(|h| match h.action {
+            Action::Launcher(Act::Launch(track, scene)) if h.rect.contains(x, y) => Some((track, scene)),
+            _ => None,
+        })
+    }
+
     /// A file dropped on the window: audio onto the playlist becomes an audio clip; a project opens.
     pub fn drop_file(&mut self, path: PathBuf) {
         let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
@@ -5141,16 +5154,7 @@ impl App {
             return;
         }
         // A sample dropped on a launcher cell plays from that clip (`launcher::add_audio`).
-        if let Some((track, scene)) = self
-            .hits
-            .iter()
-            .rev()
-            .find_map(|h| match h.action {
-                Action::Launcher(crate::launcher::Act::Launch(track, scene)) if h.rect.contains(x, y) => Some((track, scene)),
-                _ => None,
-            })
-            && self.state.launcher_open
-        {
+        if let Some((track, scene)) = self.launcher_cell_at(x, y) {
             let name = path.to_string_lossy().into_owned();
             self.state.message = Some(crate::launcher::add_audio(self, &name, track, scene));
             return self.invalidate();
@@ -8679,9 +8683,9 @@ impl App {
             Key::Character(c) if ctrl && self.shift && c.eq_ignore_ascii_case("s") => self.act(Action::MenuItem(0, views::menus::FILE_SAVE_AS)),
             // VIEW ▸ Arrange windows ▸ Realign (spec: ui/menu-submenus.md §2).
             Key::Character(c) if ctrl && self.shift && !alt && c.eq_ignore_ascii_case("h") => self.arrange(crate::arrange::Layout::Realign),
-            // VIEW > Show/hide the device rack (Ctrl+R; FILE > Export audio has no key of its own any more).
+            // Minimize / show the device rack (Ctrl+R; FILE > Export audio has no key of its own any more).
             Key::Character(c) if ctrl && !alt && !self.shift && c.eq_ignore_ascii_case("r") => {
-                self.act(Action::DeviceRack(crate::device_rack::RackAct::ToggleDeviceRack));
+                self.act(Action::DeviceRack(crate::device_rack::RackAct::ToggleCollapsed));
             }
             // The modulator strip: Ctrl+M cycles above the rack -> below it -> hidden.
             Key::Character(c) if ctrl && !alt && !self.shift && c.eq_ignore_ascii_case("m") => {
@@ -16251,12 +16255,12 @@ mod tests {
         key(&mut app, "o", false);
         assert_eq!(fake::shown(), (1, 2), "Ctrl+O still asks for a file");
         // Ctrl+R is the device rack's, not Export audio: the form stays closed and the rack toggles instead.
-        let rack = app.state.show_device_rack;
+        let rack = app.state.device_rack_collapsed;
         key(&mut app, "r", false);
         assert!(!export_form(&app), "Ctrl+R no longer opens the Export form");
-        assert_ne!(app.state.show_device_rack, rack, "Ctrl+R shows/hides the device rack");
+        assert_ne!(app.state.device_rack_collapsed, rack, "Ctrl+R minimizes/shows the device rack");
         key(&mut app, "r", false);
-        assert_eq!(app.state.show_device_rack, rack, "and back");
+        assert_eq!(app.state.device_rack_collapsed, rack, "and back");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

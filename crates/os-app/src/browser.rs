@@ -508,6 +508,13 @@ impl App {
             }
         }
         let (x, y) = self.mouse;
+        // A sample dropped on a launcher cell plays from that clip, as a file dropped from outside does.
+        if let Item::Sample(path) = &item {
+            if let Some((track, scene)) = self.launcher_cell_at(x, y) {
+                self.state.message = Some(crate::launcher::add_audio(self, path, track, scene));
+                return;
+            }
+        }
         let win = self.top_hit(x, y).and_then(|h| h.win);
         let grid = self.pl_grid().filter(|g| g.contains(x, y) && win == Some(Win::Playlist));
         let alt = self.alt;

@@ -20,11 +20,11 @@ From the 2026-11-27 audit at `351533d8`. Work top-down. Line numbers are from th
 - [x] **Fix the source header test** [P1] [size:S] - `cargo test -p watermark` lists 14 files without the repository header: `crates/os-app/src/help_links.rs`, `crates/os-app/src/modulation.rs`, `crates/os-model/src/modulation.rs`, 10 under `vendor/asio-sys`, and the untracked `.prof.sh`. Add correct headers to our files; exclude vendored third-party code in `tools/watermark` instead of putting our header on it. Leave `.prof.sh` uncommitted (it is the owner's temporary script).
   Done when: the test passes on a clean checkout and no third-party file claims our copyright.
   Source: local test run 2026-11-27.
-- [~] **Fix the Linux and macOS build** [P1] [size:M] - CI run 45351255688: `FrameWindow` in the X11 and Cocoa backends under `crates/os-app/src/plugin_window/` has no `set_pinned` or `move_to`. Add them to both, matching the win32 behaviour or as documented no-ops.
+- [x] **Fix the Linux and macOS build** [P1] [size:M] - CI run 45351255688: `FrameWindow` in the X11 and Cocoa backends under `crates/os-app/src/plugin_window/` has no `set_pinned` or `move_to`. Add them to both, matching the win32 behaviour or as documented no-ops.
   Done when: the Build step passes on the Linux and macOS CI jobs.
   Source: `gh run view 45351255688 --log-failed`.
-  2026-11-27: both methods added to both backends. Not compiled (only a Windows toolchain here), so a CI run must confirm it.
-- [ ] **Get CI green** [P1] [size:M] - the last successful run seen was 2026-11-04; of the runs `gh` listed, 44 failed, 36 were cancelled and 2 succeeded. After the two tasks above, fix what the next run reports.
+  2026-11-27: both methods added to both backends. Confirmed by CI run 45998426483 (`0250ca3b`): Windows, Linux and macOS all passed.
+- [x] **Get CI green** [P1] [size:M] - the last successful run seen was 2026-11-04; of the runs `gh` listed, 44 failed, 36 were cancelled and 2 succeeded. After the two tasks above, fix what the next run reports.
   Done when: one push to main passes on all three platforms.
   Source: `gh run list`.
 - [x] **Deleting a track must not corrupt launcher data** [P1] [size:S] - neither `Command::TrackDelete` (`control/command.rs:1349`) nor playlist delete removes that track's `launcher.clips`. `lemon_state::launcher_state` (line 1038) writes `clips.len()` and then skips orphans, so `read_launcher` reads scene bytes as clips. Write the count of records actually written, and clear the track's clips, playing and pending entries on delete (keep undo working).

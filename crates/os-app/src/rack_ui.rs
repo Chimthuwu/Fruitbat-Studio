@@ -765,7 +765,16 @@ pub fn image(
 /// theme accent, light neutrals its text, dark neutrals its surfaces. Lightness is kept, so the editor's hierarchy
 /// and anti-aliasing survive.
 fn retint(px: &mut [u32], t: &os_theme::Palette) {
+    // The editors are mostly runs of one colour, and a drag redraws the tile every frame: a run is converted once.
+    let mut last: Option<(u32, u32)> = None;
     for p in px {
+        if let Some((from, to)) = last {
+            if *p == from {
+                *p = to;
+                continue;
+            }
+        }
+        let from = *p;
         let c = os_theme::Color::rgb(*p);
         let (_, s, l) = c.hsl();
         let out = if s > 0.18 {
@@ -776,6 +785,7 @@ fn retint(px: &mut [u32], t: &os_theme::Palette) {
             t.s(*p)
         };
         *p = (u32::from(out.r) << 16) | (u32::from(out.g) << 8) | u32::from(out.b);
+        last = Some((from, *p));
     }
 }
 

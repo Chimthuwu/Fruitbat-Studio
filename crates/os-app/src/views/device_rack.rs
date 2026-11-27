@@ -235,110 +235,14 @@ pub fn paint(ui: &mut Ui, s: &State, plugins: &Plugins, r: Rect, f: &FrameInfo) 
     // A technical module tag, then the current chain's track name. The tag is fixed-width so the name starts at
     // the same x for every track.
     ui.c.text(fnt(12.0), r.x + 12.0, head.y + 8.0, t.accent, "DEVICE RACK");
-    // Hit region for the DEVICE RACK header text: clicking it hides/reveals the device rack (Ctrl+R also works)
+    // The label minimizes the rack to this bar and brings it back (Ctrl+R does the same). The bar has no buttons.
     ui.hit(
-        Rect::new(r.x + 12.0, head.y + 4.0, 120.0, head.h - 8.0),
-        Action::DeviceRack(RackAct::ToggleDeviceRack),
-        "Hide/Reveal the device rack",
+        Rect::new(r.x, head.y, 91.0, head.h),
+        Action::DeviceRack(RackAct::ToggleCollapsed),
+        if s.device_rack_collapsed { "Show the device rack (Ctrl+R)" } else { "Minimize the device rack (Ctrl+R)" },
     );
     ui.c.fill_rect(Rect::new(r.x + 91.0, head.y + 5.0, 1.0, head.h - 10.0), t.splitter_dark);
-    ui.c.text_clip(fnt(15.0), r.x + 98.0, head.y + 6.5, (r.w - 330.0).max(20.0), t.text, &name);
-    // The header buttons, right-aligned: ＋ Add (the plugin browser), Pin, Show / Hide — and, when the chain
-    // overflows the panel, the ‹ › steppers (an alternative to the wheel).
-    let overflow = crate::views::device_rack::content_w(s) > r.w
-        && !s.device_rack_collapsed
-        && r.h > HEADER_H;
-    let mut bx = r.right() - 228.0 - 56.0 * f32::from(overflow);
-    if overflow {
-        let (at_start,) = (s.device_rack_scroll_x <= 0.5,);
-        let steppers = [
-            ("‹", -1.0, Rect::new(bx, head.y + 6.5, 24.0, 17.0)),
-            ("›", 1.0, Rect::new(bx + 28.0, head.y + 6.5, 24.0, 17.0)),
-        ];
-        for (label, d, b) in steppers {
-            let dim = d < 0.0 && at_start;
-            if dim {
-                header_button(ui, b, label, false, Action::DeviceRack(RackAct::ScrollBy(0.0)), "");
-            } else {
-                ui.hit(
-                    b,
-                    Action::DeviceRack(RackAct::ScrollBy(d)),
-                    if d < 0.0 { "Scroll the chain left" } else { "Scroll the chain right" },
-                );
-                header_button(ui, b, label, false, Action::DeviceRack(RackAct::ScrollBy(0.0)), "");
-            }
-        }
-        bx += 56.0;
-    }
-    header_button(
-        ui,
-        Rect::new(bx, head.y + 6.5, 60.0, 17.0),
-        "＋ Add",
-        false,
-        Action::DeviceRack(RackAct::AddDevice),
-        "Device rack plugin browser: native (built-in) plugins first; the display-mode radios below are the filter",
-    );
-    bx += 66.0;
-    // The pin: the chain stays while the selection moves (§7 "Track selection drives the rack").
-    let pinned = s.device_rack_pin.is_some();
-    header_button(
-        ui,
-        Rect::new(bx, head.y + 6.5, 60.0, 17.0),
-        if pinned { "Pinned" } else { "Pin" },
-        pinned,
-        Action::DeviceRack(RackAct::TogglePin),
-        pinned
-            .then_some("Unpin this track's device chain")
-            .unwrap_or("Pin this track's device chain while you edit elsewhere"),
-    );
-    bx += 66.0;
-    header_button(
-        ui,
-        Rect::new(bx, head.y + 6.5, 60.0, 17.0),
-        if s.device_rack_collapsed {
-            "Show"
-        } else {
-            "Hide"
-        },
-        false,
-        Action::DeviceRack(RackAct::ToggleCollapsed),
-        if s.device_rack_collapsed {
-            "Show the device rack"
-        } else {
-            "Collapse the device rack to its header"
-        },
-    );
-    bx += 66.0;
-    // The visibility button (Ctrl+M): the next step of above the rack -> below it -> hidden.
-    header_button(
-        ui,
-        Rect::new(bx, head.y + 6.5, 60.0, 17.0),
-        match s.mod_strip_visibility {
-            ModStripVisibility::OnTop => "Strip Below",
-            ModStripVisibility::UnderRack => "Hide Strip",
-            ModStripVisibility::Hidden => "Show Strip",
-        },
-        false,
-        Action::DeviceRack(RackAct::ToggleVisibility),
-        "Modulator strip: above the rack, below it, hidden (Ctrl+M)",
-    );
-    bx += 66.0;
-    // The out-arrow: every device in the chain shows its editor in its own floating window (lit green
-    // while they are out), or the windows close and the tiles draw the editors again. An out-arrow,
-    // not a wrench — the wrench stays the device wrapper's own symbol (the plugin window's strip).
-    let windows = !s.device_rack_float.is_empty();
-    header_icon_button(
-        ui,
-        Rect::new(bx, head.y + 6.5, 24.0, 17.0),
-        Icon::PopOut,
-        windows,
-        Action::DeviceRack(RackAct::ToggleEditors),
-        if windows {
-            "Close the devices' floating editor windows and draw them in their tiles"
-        } else {
-            "Show every docked device's editor in its own floating window"
-        },
-    );
+    ui.c.text_clip(fnt(15.0), r.x + 98.0, head.y + 6.5, (r.w - 110.0).max(20.0), t.text, &name);
 
     if s.device_rack_collapsed {
         return;
@@ -1179,27 +1083,6 @@ fn header_icon_button(ui: &mut Ui, r: Rect, icon: Icon, on: bool, action: Action
         t.text_dim
     };
     icons::draw(ui.c, icon, Rect::new(r.cx() - 7.0, r.cy() - 7.0, 14.0, 14.0), ink);
-}
-
-/// A small flat header button (the rack's Pin / Hide).
-fn header_button(ui: &mut Ui, r: Rect, label: &str, on: bool, action: Action, hint: &'static str) {
-    let t = ui.t;
-    let hov = ui.hit(r, action, hint);
-    let base: Color = if on {
-        t.s(0x324049)
-    } else if hov {
-        t.s(0x2b3134)
-    } else {
-        t.s(0x26292c)
-    };
-    ui.c.fill_rrect(r, 2.0, base);
-    ui.c.text(
-        fnt(13.0),
-        r.x + 6.0,
-        r.y + 1.0,
-        if on { t.glyph } else { t.text_dim },
-        label,
-    );
 }
 
 /// One slot's short line: what it is and how fast ("sine 1/4", "random 1/2", "low band").

@@ -1139,10 +1139,12 @@ impl Plugins {
     /// not come the plain lock still waits for it, or the drag's last move would go missing.
     pub fn set_param(&self, key: usize, id: u32, value: f64) -> bool {
         let Some(h) = self.hosted.get(&key) else { return false };
-        let mut p = match h.lock_between_blocks().or_else(|| h.plugin.lock().ok()) {
-            Some(p) => p,
-            None => return false,
-        };
+        // A drag writes on every mouse move, so a write must not wait for the gap between two blocks: that cost up to
+        // `STATE_WAIT` each while playing. An instance whose holds are short is locked as soon as it is free (the audio
+        // thread waits 2 ms for a busy one); only one with long holds waits for its moment.
+        let long = h.meter.as_deref().is_some_and(os_host::Meter::holds_long);
+        let moment = if long { h.lock_between_blocks() } else { None };
+        let Some(mut p) = moment.or_else(|| h.plugin.lock().ok()) else { return false };
         p.set_param(id, value.clamp(0.0, 1.0))
     }
 
@@ -4614,6 +4616,29 @@ mod tests {
         fn param_text(&self, _: u32, value: f64) -> Option<String> {
             Some(format!("{value:.2}"))
         }
+    }
+
+    /// A drag writes a parameter on every mouse move: while the audio thread is playing the instance, a write must not
+    /// wait for the gap between two of its blocks (a docked EQ band moved seconds behind the mouse).
+    #[test]
+    fn a_parameter_write_does_not_wait_for_the_audio_block() {
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let plugin: SharedPlugin = Arc::new(Mutex::new(Listing(builtin()[0].desc.clone(), 8, reads)));
+        let mut pl = Plugins { scale: 1.0, rate: 48000, ..Plugins::default() };
+        let mut h = Hosted::new(plugin);
+        let meter = Arc::new(os_host::Meter::default());
+        h.meter = Some(meter.clone());
+        pl.hosted.insert(1, h);
+        let mut spent = Duration::ZERO;
+        for _ in 0..20 {
+            // A block ended 2 ms ago: too late for "just after one", too early for "idle".
+            meter.add(Duration::from_micros(100));
+            std::thread::sleep(Duration::from_millis(2));
+            let t0 = Instant::now();
+            pl.set_param(1, 0, 0.5);
+            spent += t0.elapsed();
+        }
+        assert!(spent < Duration::from_millis(40), "20 writes took {spent:?}");
     }
 
     /// A tile's parameter list is read from the instance once and kept: refreshing the tile reads the values, never
