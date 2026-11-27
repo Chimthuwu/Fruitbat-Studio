@@ -7278,8 +7278,8 @@ impl App {
                     Act::Launch(track, scene) => Act::Menu(MenuTarget::Clip(track, scene), (x, y)),
                     Act::LaunchScene(scene) => Act::Menu(MenuTarget::Scene(scene), (x, y)),
                     Act::SelectTrack(track) => Act::Menu(MenuTarget::Track(track), (x, y)),
-                    Act::Mute(track) => Act::Menu(MenuTarget::Track(track), (x, y)),
-                    Act::Solo(track) => Act::Menu(MenuTarget::Track(track), (x, y)),
+                    // The LEDs: right-click solos, as on the playlist's LED.
+                    Act::Mute(track) | Act::Solo(track) => Act::Solo(track),
                     other => other,
                 };
                 crate::launcher::run(self, act);
@@ -8064,6 +8064,8 @@ impl App {
             self.palette_wheel(dy + dx);
             return Some(Win::PluginPalette);
         }
+        // The piano roll floats over the docked panels below, which take the wheel by place: over it, it is the piano's.
+        let on_piano = hit.as_ref().is_some_and(|(_, w)| *w == Some(Win::PianoRoll));
         // The docked Parametric EQ: once a band's point has been pressed, the wheel over that tile's graph turns the
         // band's width (its Q / resonance) instead of scrolling the chain under the pointer.
         if let Some((key, band)) = self.state.device_rack_eq_band {
@@ -8080,7 +8082,8 @@ impl App {
             }
         }
         // The device rack's body: the wheel scrolls its chain horizontally (up = left, as the mixer's).
-        if crate::device_rack::visible(&self.state)
+        if !on_piano
+            && crate::device_rack::visible(&self.state)
             && crate::launcher::rack_visible(&self.state)
             && !self.state.device_rack_collapsed
         {
@@ -8093,7 +8096,8 @@ impl App {
         let area = hit.map(|(a, _)| a);
         // The clip launcher's grid (Tab in the Playlist window): the wheel scrolls its track rows, sideways (Shift)
         // its scene columns, so the cells a small window cannot show are reachable.
-        if self.state.launcher_open
+        if !on_piano
+            && self.state.launcher_open
             && self.state.shown(Win::Playlist)
             && crate::views::launcher::wheel(&mut self.state, x, y, dx, dy, shift)
         {
@@ -8199,6 +8203,19 @@ impl App {
             crate::patterns::select(&mut self.state, n);
             return None;
         }
+        // Piano roll zoom, with the playlist's controls (spec: ui/piano-roll.md §3a): Alt+wheel anywhere on it changes
+        // the key row height; else Ctrl+wheel anywhere on it, or the plain wheel over the ruler, zooms time.
+        if on_piano && (self.alt || ctrl || (!shift && matches!(area, Some(Action::PianoRuler)))) {
+            let Some(g) = self.piano_geom() else { return None };
+            if self.alt {
+                let row = self.state.piano.row_h + piano::ROW_WHEEL_STEP * (dy + dx).round();
+                piano::set_rows(&mut self.state, g.grid, y, row);
+            } else {
+                piano::zoom_time(&mut self.state, &g, x, dy + dx);
+                piano::clamp_scroll(&mut self.state, g.grid.h);
+            }
+            return Some(Win::PianoRoll);
+        }
         if let Some(Action::Scrollbar(t)) = area {
             let step = if t == Scroll::PianoY { self.state.piano.row_h * 3.0 } else { 60.0 };
             // An editor's bar scrolls at the scrolling speeds (`crate::scroll_speed`); the picker list keeps its step.
@@ -8206,21 +8223,9 @@ impl App {
             self.scroll_set(t, self.scroll_get(t) - (dy + dx) * step);
             return scroll_win(t);
         }
-        // Piano roll (spec: ui/piano-roll.md §3a): Alt+wheel over the ruler zooms time; the keyboard takes the wheel
-        // like the grid (scroll, Ctrl = time zoom); the keys zoom with Ctrl+middle-drag.
-        if matches!(area, Some(Action::PianoRuler)) && self.alt {
-            let Some(g) = self.piano_geom() else { return None };
-            piano::zoom_time(&mut self.state, &g, x, dy + dx);
-            return Some(Win::PianoRoll);
-        }
+        // Piano roll scrolling (spec: ui/piano-roll.md §3a): the keyboard takes the wheel like the grid.
         if matches!(area, Some(Action::PianoGrid | Action::PianoNote(_) | Action::PianoKeys | Action::PianoVelocity)) {
             let Some(g) = self.piano_geom() else { return None };
-            if ctrl {
-                // Zoom time around the mouse.
-                piano::zoom_time(&mut self.state, &g, x, dy + dx);
-                piano::clamp_scroll(&mut self.state, g.grid.h);
-                return Some(Win::PianoRoll);
-            }
             let row = self.state.piano.row_h;
             let p = &mut self.state.piano;
             if shift {
@@ -19166,7 +19171,7 @@ mod tests {
         frame(&mut app, &mut c, None);
 
         // The wheel over the keyboard scrolls like the grid and Ctrl+wheel there zooms time; Ctrl+middle-drag zooms
-        // the keys around the press (up = taller); Alt+wheel over the ruler and PgUp / PgDn zoom time.
+        // the keys around the press (up = taller); zooming by wheel is as in the playlist; PgUp / PgDn zoom time.
         let keys = hit_rect(&app, &Action::PianoKeys);
         app.mouse_move(keys.cx(), keys.cy());
         let sy = app.state.piano.scroll_y;
@@ -19208,10 +19213,31 @@ mod tests {
         let z = app.state.piano.px_per_beat;
         let ruler = hit_rect(&app, &Action::PianoRuler);
         app.mouse_move(ruler.cx(), ruler.cy());
-        app.alt = true;
         app.wheel(0.0, 1.0, false, false);
-        app.alt = false;
-        assert!(app.state.piano.px_per_beat > z);
+        assert!(app.state.piano.px_per_beat > z, "the plain wheel over the ruler zooms time");
+        // Alt+wheel changes the row height and Ctrl+wheel the time scale, wherever the pointer is on the piano roll.
+        for area in [Action::PianoRuler, Action::PianoKeys, Action::PianoGrid, Action::PianoVelocity] {
+            frame(&mut app, &mut c, None);
+            let r = hit_rect(&app, &area);
+            app.mouse_move(r.cx(), r.cy());
+            app.state.piano.row_h = views::piano::ROW;
+            let z = app.state.piano.px_per_beat;
+            app.alt = true;
+            app.wheel(0.0, 1.0, false, false);
+            assert_eq!(app.state.piano.row_h, views::piano::ROW + piano::ROW_WHEEL_STEP, "{area:?}: Alt+wheel up: taller rows");
+            app.wheel(0.0, -2.0, false, false);
+            assert_eq!(app.state.piano.row_h, views::piano::ROW - piano::ROW_WHEEL_STEP, "{area:?}");
+            app.alt = false;
+            assert_eq!(app.state.piano.px_per_beat, z, "{area:?}: Alt+wheel leaves the time scale");
+            let row = app.state.piano.row_h;
+            app.wheel(0.0, 1.0, false, true);
+            assert!(app.state.piano.px_per_beat > z, "{area:?}: Ctrl+wheel up zooms time in");
+            app.wheel(0.0, -2.0, false, true);
+            assert!(app.state.piano.px_per_beat < z, "{area:?}: and down zooms out");
+            assert_eq!(app.state.piano.row_h, row, "{area:?}: Ctrl+wheel leaves the rows");
+        }
+        app.state.piano.row_h = views::piano::ROW;
+        frame(&mut app, &mut c, None);
         let z = app.state.piano.px_per_beat;
         app.key(&Key::Named(NamedKey::PageDown), false, false);
         assert!(app.state.piano.px_per_beat < z);

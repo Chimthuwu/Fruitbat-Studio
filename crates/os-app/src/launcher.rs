@@ -1864,6 +1864,8 @@ pub fn run(app: &mut App, act: Act) {
             }
             app.invalidate();
         }
+        // Ctrl+click on the mute LED solos, as on the playlist's LED.
+        Act::Mute(track) if app.ctrl => run(app, Act::Solo(track)),
         Act::Mute(track) => {
             // The same track mute the playlist's LED does (§6): one snapshot, then flip `enabled`.
             if let Some(lane) = lane_of(&app.state, track) {
@@ -2715,6 +2717,32 @@ mod tests {
         assert!(crate::playlist::track_soloed(&app.state, lane), "the track is soloed");
         run(&mut app, Act::Solo(id));
         assert!(!crate::playlist::track_soloed(&app.state, lane), "solo released");
+        // The mouse reaches both LEDs: the track row under them does not take their clicks.
+        let click = |app: &mut App, c: &mut os_ui::Canvas, act: Act, right: bool| {
+            app.paint(c, None);
+            let r = app.hits.iter().find(|h| h.action == Action::Launcher(act.clone())).expect("painted").rect;
+            app.mouse_move(r.cx(), r.cy());
+            if right {
+                app.mouse_down_right();
+            } else {
+                app.mouse_down();
+            }
+            app.mouse_up();
+        };
+        click(&mut app, &mut c, Act::Mute(id), false);
+        assert_ne!(crate::playlist::track_enabled(&app.state, lane), before, "a click on M mutes");
+        click(&mut app, &mut c, Act::Mute(id), false);
+        assert_eq!(crate::playlist::track_enabled(&app.state, lane), before);
+        click(&mut app, &mut c, Act::Solo(id), false);
+        assert!(crate::playlist::track_soloed(&app.state, lane), "a click on S solos");
+        click(&mut app, &mut c, Act::Solo(id), false);
+        assert!(!crate::playlist::track_soloed(&app.state, lane));
+        // Right-click and Ctrl+click on M solo, as its hint says.
+        click(&mut app, &mut c, Act::Mute(id), true);
+        assert!(crate::playlist::track_soloed(&app.state, lane), "right-click on M solos");
+        app.ctrl = true;
+        click(&mut app, &mut c, Act::Mute(id), false);
+        assert!(!crate::playlist::track_soloed(&app.state, lane), "Ctrl+click on M releases the solo");
     }
 
     /// A double click on a filled slot opens its clip in the piano roll (the first click launched it).

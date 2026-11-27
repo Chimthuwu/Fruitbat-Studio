@@ -259,6 +259,14 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
         } else {
             ui.c.fill_rrect(row.inset(1.0), 2.0, ui.t.track_header);
         }
+        // The row's own hit comes first: a click goes to the last hit registered, so the controls on the row win theirs.
+        let hov = hit_in(
+            ui,
+            row,
+            label,
+            Action::Launcher(Act::SelectTrack(c.id)),
+            "Click: select this track, Shift+click: select a range of tracks (right-click: rename and colour it)",
+        );
         // Mute / solo LEDs in the track header, matching the playlist's track LED (§6): a click mutes, a
         // Ctrl/right-click solos. They read the same track state, so the launcher and the playlist stay in step.
         let led_y = row.y + (g.row_h - 14.0) / 2.0;
@@ -272,13 +280,6 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect) {
         let shov = hit_in(ui, solo_led, label, Action::Launcher(Act::Solo(c.id)), "Solo this track (Ctrl/right-click also solos)");
         ui.c.fill_rrect(solo_led, 2.0, if soloed { t.accent } else if shov { t.s(0x2b3134) } else { t.s(0x222629) });
         ui.c.text(fnt(10.0), solo_led.x + 3.5, led_y + 1.5, if soloed { t.text } else { t.text_dim }, "S");
-        let hov = hit_in(
-            ui,
-            row,
-            label,
-            Action::Launcher(Act::SelectTrack(c.id)),
-            "Click: select this track, Shift+click: select a range of tracks (right-click: rename and colour it)",
-        );
         // A MIDI track with no instrument plays nothing: a mark after its name says why (the rack has the same hint).
         let mark_w = if c.no_instrument { ui.c.text_width(fnt(12.0), "!") + 4.0 } else { 0.0 };
         // Track-mode badge (A/I) matching the playlist header: an audio or instrument track wears its letter.

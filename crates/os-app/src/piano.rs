@@ -959,6 +959,9 @@ pub fn clamp_scroll(s: &mut State, view_h: f32) {
 pub const MIN_ROW: f32 = 6.0;
 pub const MAX_ROW: f32 = 48.0;
 
+/// Alt+wheel changes the key row pitch by this much a notch.
+pub const ROW_WHEEL_STEP: f32 = 2.0;
+
 /// Ctrl+middle-drag zooms the key rows by [`ROW_ZOOM_STEP`] per [`ROW_ZOOM_PX`] of vertical movement (§3a).
 pub const ROW_ZOOM_STEP: f32 = 1.15;
 pub const ROW_ZOOM_PX: f32 = 12.0;
