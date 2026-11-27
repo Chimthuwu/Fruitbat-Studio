@@ -1166,8 +1166,7 @@ impl Engine {
     pub fn note_on_midi(&mut self, channel: usize, key: u16, velocity: u8, midi: u8) {
         let Some(ch) = self.channels.get(channel) else { return };
         self.tail_done = false;
-        // Update voice pool for per-voice modulation sources (VoiceAdsr).
-        self.mods.voice_pool.note_on(channel, key.min(127) as u8, velocity);
+        // An instrument's note reaches the voice pool with its events (`render_generators`).
         if ch.instrument.0.is_some() {
             self.inst_live.push((channel, key.min(127) as u8, f32::from(velocity) / 128.0, midi & 15));
             self.sounding.push((channel, key, u64::MAX));
@@ -1185,6 +1184,8 @@ impl Engine {
             None => (0, laws::playback_rate(key, 0)),
         };
         self.note_off(channel, key); // retrigger
+        // The voice pool, which per-voice modulation sources read: after the retrigger, which would release it.
+        self.mods.voice_pool.note_on(channel, key.min(127) as u8, velocity);
         self.voices.push(Voice {
             channel,
             pos: 0.0,
@@ -1215,8 +1216,9 @@ impl Engine {
 
     /// Release a live note with a short fade.
     pub fn note_off(&mut self, channel: usize, key: u16) {
-        // Update voice pool for per-voice modulation sources (VoiceAdsr).
-        self.mods.voice_pool.note_off(channel, key.min(127) as u8);
+        if !self.has_instrument(channel) {
+            self.mods.voice_pool.note_off(channel, key.min(127) as u8);
+        }
         if self.has_instrument(channel) && self.sounding.iter().any(|&(c, k, end)| c == channel && k == key && end == u64::MAX) {
             self.inst_live.push((channel, key.min(127) as u8, -1.0, 0));
         }
@@ -1340,6 +1342,7 @@ impl Engine {
         self.pause_at = None;
         self.frame = self.clock.next_start();
         self.next_trigger = self.triggers.partition_point(|t| t.tick < tick);
+        self.mods.voice_pool.clear();
         for t in &mut self.tracks {
             t.restore(true);
         }
@@ -2686,6 +2689,8 @@ impl Engine {
         let rules: Vec<notes::Rules> = self.channels.iter().map(|c| c.rules).collect();
         self.note_voices.resize(self.channels.len(), notes::Voices::default());
         notes::apply(&self.inst_events, &rules, &mut self.note_voices, n as u32, &mut self.inst_notes);
+        // The voices that were sounding are a tick older.
+        self.mods.advance_voices(n as f32 / self.rate.max(1) as f32);
         // Every channel's newest note, which the note sources read (velocity and key tracking). A tick fed twice is
         // harmless: it holds the same note.
         for e in &self.inst_events {
@@ -2698,8 +2703,6 @@ impl Engine {
                 self.mods.voice_pool.note_off(e.ch, e.key);
             }
         }
-        // Advance voice pool age for per-voice modulation sources.
-        self.mods.voice_pool.advance_tick();
         let held = !self.inst_offs.is_empty()
             || self.sounding.iter().any(|&(c, _, end)| end == u64::MAX && self.channels.get(c).is_some_and(|ch| ch.instrument.0.is_some()));
         if held || !self.inst_events.is_empty() {

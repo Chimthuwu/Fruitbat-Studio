@@ -244,7 +244,7 @@ impl App {
     /// Applies a theme state: the window, the skin and theme tiles, and `current.flstheme` (removed for none).
     pub(crate) fn theme_restore(&mut self, s: Snap) {
         self.theme = crate::app::skin_theme(self.design(), &self.theme.name.clone(), s.text.as_deref());
-        os_theme::set_current(&self.theme.colors);
+        crate::app::use_palette(&self.theme.colors);
         if let Some(d) = crate::app::theme_dir() {
             match &s.text {
                 Some(t) => {

@@ -16,7 +16,7 @@ use super::*;
 
 /// Text events: 8-bit text in files up to FL 11, UTF-16 later (spec: project/coverage.md, flp/engine-events.md
 /// "Events"). Event 199, the version, is 8-bit in every file.
-const TEXT_IDS: [u8; 19] = [192, 193, 194, 195, 196, 197, 198, 200, 201, 202, 203, 204, 205, 206, 207, 230, 231, 239, 241];
+pub(super) const TEXT_IDS: [u8; 19] = [192, 193, 194, 195, 196, 197, 198, 200, 201, 202, 203, 204, 205, 206, 207, 230, 231, 239, 241];
 
 /// Events that end the channel section in a file without channel end events: the playlist, the global events after
 /// it and the mixer (spec: project/engine-events.md "A channel": the last block runs to the first event of the playlist

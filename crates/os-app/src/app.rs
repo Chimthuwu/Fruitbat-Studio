@@ -2224,7 +2224,7 @@ impl App {
         };
         // Deleted, cloned and moved channels are written by `apply` (os-project `restructure`); it edits a copy so a
         // failed save leaves the loaded file as it was.
-        let lost = os_project::project::unsaved_parts(&s.project, &file);
+        let mut lost: Vec<String> = os_project::project::unsaved_parts(&s.project, &file).into_iter().map(String::from).collect();
         // Mixer parts the file format mapping does not write yet (spec: ui/mixer.md, Lemon Studio status).
         // Hosted CLAP / VST3 plugins are written as wrapped plugins with their current state (spec: project/events/plugins.md).
         let mut proj = s.project.clone();
@@ -2237,7 +2237,8 @@ impl App {
         edit(&mut proj);
         // Added mixer tracks are written before the hidden last track (spec: project/events/mixer.md "Adding tracks").
         let dawproject = crate::dawproject::is_project(&target);
-        let result = os_project::project::apply(&proj, &mut file)
+        let result = os_project::project::apply_reporting(&proj, &mut file)
+            .map(|dropped| lost.extend(dropped))
             .map_err(|e| e.to_string())
             .and_then(|()| lemon_or_flp(&mut file, &target, extra))
             .and_then(|()| file.to_bytes().map_err(|e| e.to_string()))
@@ -5407,8 +5408,7 @@ impl App {
                 // clip note colours").
                 self.state.theme_base = text.clone();
                 self.state.fl_text = text;
-                os_theme::set_current(&self.theme.colors);
-                publish_palette(&self.theme.colors);
+                use_palette(&self.theme.colors);
                 crate::wallpaper::forget();
                 if remember && to_citrus {
                     save_design(Design::Citrus);
@@ -5441,8 +5441,7 @@ impl App {
             Some(text) => skin_theme(d, &self.theme.name.clone(), Some(text)),
             None => design_theme(d, remember),
         };
-        os_theme::set_current(&self.theme.colors);
-        publish_palette(&self.theme.colors);
+        use_palette(&self.theme.colors);
         if remember {
             save_design(d);
         }
@@ -5461,8 +5460,7 @@ impl App {
         let text = os_theme::fl::set_key(text, "OverrideClips", if on { "1" } else { "0" });
         let palette = os_theme::design::palette(self.design(), Some(&os_theme::FlTheme::parse(&text)));
         self.theme = os_theme::Theme::new(&self.theme.name.clone(), palette, self.theme.adjust);
-        os_theme::set_current(&self.theme.colors);
-        publish_palette(&self.theme.colors);
+        use_palette(&self.theme.colors);
         if let Some(d) = theme_dir() {
             let _ = std::fs::create_dir_all(&d);
             let _ = std::fs::write(d.join("current.flstheme"), &text);
@@ -6007,7 +6005,7 @@ impl App {
             SAct::Button("Reset") => {
                 self.theme_mark(crate::theme_library::Step::Other);
                 self.theme = design_theme(self.design(), false);
-                os_theme::set_current(&self.theme.colors);
+                use_palette(&self.theme.colors);
                 if let Some(d) = theme_dir() {
                     let _ = std::fs::remove_file(d.join("current.flstheme"));
                 }
@@ -6020,7 +6018,7 @@ impl App {
                 if let Some((name, text)) = st.themes.get(i).cloned() {
                     self.theme_mark(crate::theme_library::Step::Other);
                     self.theme = skin_theme(self.design(), &name, Some(&text));
-                    os_theme::set_current(&self.theme.colors);
+                    use_palette(&self.theme.colors);
                     self.state.fl_text = Some(text.clone());
                     self.state.theme_base = Some(text.clone());
                     // Remembered like an imported theme (loaded at the next start).
@@ -11001,6 +10999,13 @@ pub fn design_theme(d: Design, saved: bool) -> Theme {
 /// theme change reaches them (os_plugkit keeps the last one and each editor refreshes its copy at its next paint).
 pub fn publish_palette(p: &os_theme::Palette) {
     os_plugkit::set_palette(p);
+}
+
+/// Makes `p` the palette of the app's own drawing and of the plugin editors. A skin or theme change goes through here,
+/// so popped-out editors cannot be left on the old colours.
+pub(crate) fn use_palette(p: &os_theme::Palette) {
+    os_theme::set_current(p);
+    publish_palette(p);
 }
 
 /// Skin `d` coloured by the `.flstheme` text `fl` (`None`: the skin's own colours; spec: ui/theme-presets.md "Skins").

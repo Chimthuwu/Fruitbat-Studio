@@ -3,7 +3,8 @@
 # OPEN TASKS (checklist index, 2026-11-27)
 
 From the 2026-11-27 audit at `351533d8`. Work top-down. Line numbers are from that commit. After the
-2026-11-27 fixes, a local Windows `cargo test --workspace --no-fail-fast` gave 2746 passed, 0 failed, 79 ignored. FreqBat is outside the workspace, so it was not tested.
+2026-11-27 fixes, a local Windows `cargo test --workspace --no-fail-fast` gave 2746 passed, 0 failed, 79 ignored (later the same day, with the next batch of fixes: 2750 passed,
+0 failed, 79 ignored, plus one `os-project` test added after that run). FreqBat is outside the workspace, so it was not tested.
 
 ## P0 - data loss and broken build
 
@@ -19,48 +20,58 @@ From the 2026-11-27 audit at `351533d8`. Work top-down. Line numbers are from th
 - [x] **Fix the source header test** [P1] [size:S] - `cargo test -p watermark` lists 14 files without the repository header: `crates/os-app/src/help_links.rs`, `crates/os-app/src/modulation.rs`, `crates/os-model/src/modulation.rs`, 10 under `vendor/asio-sys`, and the untracked `.prof.sh`. Add correct headers to our files; exclude vendored third-party code in `tools/watermark` instead of putting our header on it. Leave `.prof.sh` uncommitted (it is the owner's temporary script).
   Done when: the test passes on a clean checkout and no third-party file claims our copyright.
   Source: local test run 2026-11-27.
-- [ ] **Fix the Linux and macOS build** [P1] [size:M] - CI run 45351255688: `FrameWindow` in the X11 and Cocoa backends under `crates/os-app/src/plugin_window/` has no `set_pinned` or `move_to`. Add them to both, matching the win32 behaviour or as documented no-ops.
+- [~] **Fix the Linux and macOS build** [P1] [size:M] - CI run 45351255688: `FrameWindow` in the X11 and Cocoa backends under `crates/os-app/src/plugin_window/` has no `set_pinned` or `move_to`. Add them to both, matching the win32 behaviour or as documented no-ops.
   Done when: the Build step passes on the Linux and macOS CI jobs.
   Source: `gh run view 45351255688 --log-failed`.
+  2026-11-27: both methods added to both backends. Not compiled (only a Windows toolchain here), so a CI run must confirm it.
 - [ ] **Get CI green** [P1] [size:M] - the last successful run seen was 2026-11-04; of the runs `gh` listed, 44 failed, 36 were cancelled and 2 succeeded. After the two tasks above, fix what the next run reports.
   Done when: one push to main passes on all three platforms.
   Source: `gh run list`.
 - [x] **Deleting a track must not corrupt launcher data** [P1] [size:S] - neither `Command::TrackDelete` (`control/command.rs:1349`) nor playlist delete removes that track's `launcher.clips`. `lemon_state::launcher_state` (line 1038) writes `clips.len()` and then skips orphans, so `read_launcher` reads scene bytes as clips. Write the count of records actually written, and clear the track's clips, playing and pending entries on delete (keep undo working).
   Done when: a test deletes a track that has launcher clips, saves and reloads, and the other clips and all scenes are unchanged.
   Source: docs/AUDIT-2026-11-22-fruitbat-deep.md 1.3, rechecked in code 2026-11-27.
-- [ ] **Report FLP short-record writes** [P1] [size:M] - `os_project::project::patch_bytes` (project.rs:2435) still drops an edit silently when the stored payload is too short. Return or collect a warning and show it on save.
+- [x] **Report FLP short-record writes** [P1] [size:M] - `os_project::project::patch_bytes` (project.rs:2435) still drops an edit silently when the stored payload is too short. Return or collect a warning and show it on save.
   Done when: a test with a truncated event gets a warning instead of silent success.
   Source: AUDIT-2026-11-04.md section 3 (was hidden here under a DONE heading, so /sesh never counted it).
-- [ ] **Stop saving non-Latin-1 text as '?'** [P1] [size:M] - `os-project/src/project.rs:253` replaces every char >= U+0100 in its Latin-1 branch. Check when that branch is used and how the format marks UTF-16, keep the text, and test the round trip.
+  2026-11-27: `apply_reporting` names the events and the save message shows them. Tested on a truncated event 219. Not covered: writes that already grow or replace a short record.
+- [x] **Stop saving non-Latin-1 text as '?'** [P1] [size:M] - `os-project/src/project.rs:253` replaces every char >= U+0100 in its Latin-1 branch. Check when that branch is used and how the format marks UTF-16, keep the text, and test the round trip.
   Done when: a name with non-Latin-1 characters survives save and reload, or the user is warned before it is replaced.
   Source: AUDIT-2026-11-04.md section 3, line still present.
+  2026-11-27: not a bug (the audit was wrong). `apply` converts old files to UTF-16 before writing text; test `an_old_files_save_keeps_non_latin_text`.
 
 ## P1 - unfinished 2026-11-23 modulation work (ticked below, but incomplete)
 
-- [ ] **XY pad: make it work or hide it** [P2] [size:M] - `ModAct::AddXyPad` (`os-app/src/modulation.rs:2019`) calls `.unwrap()` on `add_in_slot(slot + 1, ..)`, which returns None when that slot is taken or out of range, so the app panics. `XyPadDrag` matches `ModulatorId.0` against separately numbered `MacroId.0`; a search finds no drag handler that updates its x/y; `views/device_rack.rs:1589` draws the first pad for every macro. Store the two ModulatorIds in the pad, or remove the menu row until it works.
+- [x] **XY pad: make it work or hide it** [P2] [size:M] - `ModAct::AddXyPad` (`os-app/src/modulation.rs:2019`) calls `.unwrap()` on `add_in_slot(slot + 1, ..)`, which returns None when that slot is taken or out of range, so the app panics. `XyPadDrag` matches `ModulatorId.0` against separately numbered `MacroId.0`; a search finds no drag handler that updates its x/y; `views/device_rack.rs:1589` draws the first pad for every macro. Store the two ModulatorIds in the pad, or remove the menu row until it works.
   Done when: adding a pad with the next slot occupied does not panic, and a test shows a drag changing the two intended macros only.
   Source: audit 2026-11-27, code read.
-- [ ] **Voice pool: bound the work on the audio thread** [P2] [size:M] - every note feeds `os-dsp/src/voice_pool.rs` (`engine.rs:1170`, `2695`), but `remove_voice` has no engine caller, so released voices stay until 512 per channel; HashMap growth allocates, and each tick walks them all. Check whether live notes are fed twice (`note_on_midi` and `inst_events`). Preallocate and drop voices after release, or stop feeding the pool while no VoiceAdsr exists.
+  2026-11-27: hidden (menu row, actions and painting removed). The model and file format still keep `xy_pads`.
+- [x] **Voice pool: bound the work on the audio thread** [P2] [size:M] - every note feeds `os-dsp/src/voice_pool.rs` (`engine.rs:1170`, `2695`), but `remove_voice` has no engine caller, so released voices stay until 512 per channel; HashMap growth allocates, and each tick walks them all. Check whether live notes are fed twice (`note_on_midi` and `inst_events`). Preallocate and drop voices after release, or stop feeding the pool while no VoiceAdsr exists.
   Done when: tests show the pool empties after note-offs and note processing does not allocate after setup.
   Source: audit 2026-11-27, code read.
-- [ ] **Full per-voice envelope state** [P2] [size:M] - `adsr_level` (`os-engine/src/engine/modulation.rs`) is a placeholder: sustain while held, 0 on release. `voice_adsr_value` also collects a Vec each tick and assumes 48 kHz.
+  2026-11-27: preallocated per channel; released voices leave after the longest envelope release; a seek clears it. Also fixed: live instrument notes were added twice, and a sampler retrigger released the new note. No test drives those two engine paths.
+- [x] **Full per-voice envelope state** [P2] [size:M] - `adsr_level` (`os-engine/src/engine/modulation.rs`) is a placeholder: sustain while held, 0 on release. `voice_adsr_value` also collects a Vec each tick and assumes 48 kHz.
   Done when: tests show attack, decay, sustain and release stages per voice at two sample rates, with no per-tick allocation.
   Source: Inbox item and HANDOFF.md 2026-11-23.
-- [ ] **Operator nodes: keep them out of saves until real** [P2] [size:S] - Math, Polynomial, Quantize, Map and Slew always output 0.5, and `write_graph` saves them as a macro. Confirm that no UI or control command can create one, and mark them model-only in this file.
+  2026-11-27: each stage is calculated from the voice's age in seconds; tested at 44.1 and 96 kHz. Sequenced notes on sampler channels still do not reach the pool.
+- [x] **Operator nodes: keep them out of saves until real** [P2] [size:S] - Math, Polynomial, Quantize, Map and Slew always output 0.5, and `write_graph` saves them as a macro. Confirm that no UI or control command can create one, and mark them model-only in this file.
   Done when: a search shows no creation path, and the ticked operator-node entry below says model-only.
   Source: audit 2026-11-27.
-- [ ] **FreqBat is not built** [P2] [size:M] - `plugins/freqbat` is not a member of the root `Cargo.toml`, and a search of the manifests found no reference to it, so the workspace does not compile or test it. Add it, fix compile errors, run its tests, update notices.
+  2026-11-27: model-only. A search of the code found no UI or command that creates Math, Polynomial, Quantize, Map or Slew.
+- [!] **FreqBat is not built** [P2] [size:M] - `plugins/freqbat` is not a member of the root `Cargo.toml`, and a search of the manifests found no reference to it, so the workspace does not compile or test it. Add it, fix compile errors, run its tests, update notices.
   Done when: `cargo test -p freqbat` passes and CI builds it.
   Source: audit 2026-11-27.
+  2026-11-27: tried adding it to the workspace; 14 compile errors in the lib test build. Its editor uses `os_ui` types and `Editor` methods that do not exist, so it needs a new editor (owner decision: rewrite, build without an editor, or drop).
 
 ## P2 - older findings and housekeeping
 
-- [ ] **Theme changes must reach popped-out editors** [P2] [size:S] - Reset and Preset (`app.rs:6006-6030`), `theme_edit` and `theme_restore` call `os_theme::set_current` without `publish_palette`. Route them through one function that does both.
+- [x] **Theme changes must reach popped-out editors** [P2] [size:S] - Reset and Preset (`app.rs:6006-6030`), `theme_edit` and `theme_restore` call `os_theme::set_current` without `publish_palette`. Route them through one function that does both.
   Done when: each of the four paths publishes the palette.
   Source: AUDIT-2026-11-22 section 2, rechecked.
-- [ ] **Limit formula parser depth** [P2] [size:S] - `os-engine/src/formula.rs` recurses (`unary`, parentheses) and no depth limit was found; deeply nested input can overflow the stack.
+  2026-11-27: theme changes go through `app::use_palette`. No automated test; check with a popped-out editor.
+- [x] **Limit formula parser depth** [P2] [size:S] - `os-engine/src/formula.rs` recurses (`unary`, parentheses) and no depth limit was found; deeply nested input can overflow the stack.
   Done when: a test with 100,000 nested terms gets a parse error.
   Source: AUDIT-2026-11-04.md section 2.
+  2026-11-27: 4096-byte and 128-level limits, tested with 100,000 nested terms.
 - [ ] **Reconcile stale open items below** [P2] [size:M] - some unchecked entries in later sections are already built. For each, check the code, then tick it with evidence or leave it open. Do this before working through older sections.
   Done when: every item in the 'In flight', 'Interop', M8, M9 and 'Device Rack' sections has been checked against code.
   Source: audit 2026-11-27.
@@ -685,23 +696,28 @@ Read `plugins/lemon-small-fx` first for layout/param/editor conventions.
 
 For each:
 - [x] Create `plugins/lemon-arp/`, `lemon-chord/`, `lemon-echo/` with `Cargo.toml`, `src/lib.rs`, `src/dsp/*.rs`, `src/editor.rs`
-- [ ] Unit tests in `src/dsp/*.rs` (no audio, pure logic)
+- [x] Unit tests in `src/dsp/*.rs` (no audio, pure logic)
+  (2026-11-27: lemon-arp, lemon-chord and lemon-echo have DSP tests, run by the workspace suite.)
 - [x] Minimal editor per OS UI conventions (os-ui)
-- [ ] Register in workspace `Cargo.toml` + `tools/notices` if that's the convention
+- [x] Register in workspace `Cargo.toml` + `tools/notices` if that's the convention
+  (2026-11-27: all three are members; the notices tests pass.)
 - [ ] `cargo test` green, no new warnings
 
 ## M8 — Track Model & Linear Mode (per `docs/track-model-plan.md` §7 + brief)
 - [x] `os-model/src/lib.rs`: `Track { kind: Audio|Midi|Bus, playlist_lane, mixer_strip, channel: Option<ChannelId> }`
 - [ ] Insert Track → creates playlist lane + mixer strip + channel atomically
-- [ ] Round-trip through `.flp` (LMex events 203 TRACKS, 204 LINEAR_MODE)
+- [x] Round-trip through `.flp` (LMex events 203 TRACKS, 204 LINEAR_MODE)
+  (2026-11-27: `linear_mode_and_its_tracks_round_trip_through_a_lemon_file` passes.)
 - [ ] Linear mode = default project template; Classic (FL) mode untouched
-- [ ] Mode stored in `.lemon` project property
+- [x] Mode stored in `.lemon` project property
+  (2026-11-27: same test.)
 - [ ] Automation lanes per track (Bitwig 5.2-style) — view + placement constraint, storage stays FL-compatible (automation-clip channels + clips)
 - [ ] Unassigned lane group for orphaned targets
 - [ ] `.lemon`-only data; Classic never shows MIDI FX slots
 
 ## Device Rack — Remaining Polish
 - [ ] Wire drag-to-reorder in `views/device_rack.rs` → `MoveEffect` command
+  (2026-11-27: `RackAct::Reorder` and its test exist, but no drag in `views/device_rack.rs` emits it.)
 - [ ] Dedicated drag handle on each tile header
 - [ ] Focus delegation to plugin editors (global keyboard rules already in `app::act`)
 - [ ] Container-nesting seam: `DeviceKind::Container` in chain for future Instrument Rack / Drum Machine step sequencer

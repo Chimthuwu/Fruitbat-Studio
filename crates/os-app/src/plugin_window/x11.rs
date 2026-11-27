@@ -304,6 +304,28 @@ impl FrameWindow {
         self.f.state.borrow().pinned
     }
 
+    /// Marks the window as living in a device-rack tile: the frame is then exactly the editor, the app places it, and
+    /// a title-bar drag does nothing (spec model/track-model.md §7).
+    pub fn set_pinned(&self, on: bool) {
+        if self.f.state.borrow().pinned != on {
+            self.f.state.borrow_mut().pinned = on;
+            self.f.layout();
+        }
+    }
+
+    /// Moves the docked window's top-left to `(x, y)` in the main window (physical px); a detached one stays.
+    pub fn move_to(&self, x: i32, y: i32) {
+        let f = &self.f;
+        if self.detached() || f.pos.get() == (x, y) {
+            return;
+        }
+        f.pos.set((x, y));
+        let _ = f.conn.c.configure_window(f.win, &ConfigureWindowAux::new().x(x).y(y));
+        f.apply_clip();
+        let _ = f.conn.c.flush();
+        expose();
+    }
+
     /// Docks the window into `owner` (a child, same place on screen) or detaches it (a top-level window transient for
     /// `owner`). The plugin's editor stays embedded. Only when the main window is an X11 one.
     pub fn set_detached(&self, owner: isize, on: bool) {

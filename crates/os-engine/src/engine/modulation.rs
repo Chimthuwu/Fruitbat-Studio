@@ -316,6 +316,8 @@ pub(super) struct Modulation {
     /// Per-voice note context for voice-triggered modulation sources (VoiceAdsr).
     /// Updated from the engine's note events before each evaluation tick.
     pub(super) voice_pool: VoicePool,
+    /// The longest release of the graph's VoiceAdsr sources as last evaluated (0 with none).
+    voice_release: f32,
     /// The live values the UI reads.
     pub(super) snapshot: Option<Arc<ModSnapshot>>,
 }
@@ -398,8 +400,8 @@ impl Modulation {
         self.last.clear();
         self.by.clear();
         self.host_by.clear();
-        // Initialize voice pool for per-voice modulation sources.
-        self.voice_pool = VoicePool::new(self.channels);
+        // The held notes stay: they are the transport's, not the graph's.
+        self.voice_release = 0.0;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -468,6 +470,7 @@ impl Modulation {
     /// Allocates nothing: `order` and `outputs` were sized when the graph was installed.
     pub(super) fn evaluate(&mut self, beats: f64, secs: f64) {
         let snap = self.snapshot.clone();
+        self.voice_release = 0.0;
         // Every depth starts the tick at what the user set: nothing builds on last tick's swing.
         for (i, m) in self.modulators.iter().enumerate() {
             let Some(start) = self.at.get(i).copied() else { break };
@@ -514,11 +517,11 @@ impl Modulation {
             // A note source reads one note per channel: every channel's value is read here, so a destination on a
             // channel takes its own channel's note rather than whichever channel played last.
             let note_source = matches!(source, ModSource::Velocity(_) | ModSource::KeyTrack(_));
-            let voice_adsr = matches!(source, ModSource::VoiceAdsr(_));
             let u = if note_source {
                 self.notes.value_latest(&source)
-            } else if voice_adsr {
-                self.voice_adsr_value(&source, j)
+            } else if let ModSource::VoiceAdsr(adsr) = &source {
+                self.voice_release = self.voice_release.max(adsr.release);
+                self.voice_adsr_value(adsr, j)
             } else {
                 self.value_of(&source, id, beats, secs)
             };
@@ -557,88 +560,45 @@ impl Modulation {
         }
     }
 
-    /// Computes the output of a VoiceAdsr modulator for modulator index `modulator_idx`.
-    /// The output is the average envelope level across all active voices in the target's channel,
-    /// scaled by the source's amount around the middle (bipolar or unipolar).
-    fn voice_adsr_value(&self, source: &ModSource, modulator_idx: usize) -> f32 {
-        let ModSource::VoiceAdsr(adsr) = source else { return 0.5 };
-        let Some(m) = self.modulators.get(modulator_idx) else { return 0.5 };
-
-        // Determine the channel this modulator's targets are on.
-        // For VoiceAdsr, we look at the first target that has a channel.
-        let mut channel = None;
-        for t in &m.targets {
-            if let Some(c) = self.channel_of(t.target) {
-                channel = Some(c);
-                break;
-            }
-        }
-        let channel = match channel {
-            Some(c) => c,
-            None => return self.voice_adsr_global(adsr), // No channel-specific target, use global average
-        };
-
-        let Some(pool) = self.voice_pool.channel(channel) else { return 0.5 };
-        let voices: Vec<&VoiceContext> = pool.iter().map(|(_, ctx)| ctx).collect();
-        if voices.is_empty() {
-            // No voices: return middle for bipolar, 0 for unipolar (since amount scales around middle)
-            return if adsr.bipolar { 0.5 } else { 0.5 };
-        }
-
-        // Compute average envelope level across all voices.
-        let dt = 1.0 / 48000.0; // Approximate tick duration at 48kHz, PARAM_STEP=64 frames
-        let mut sum = 0.0f32;
-        for ctx in &voices {
-            let level = Self::adsr_level(adsr, ctx, dt);
-            sum += level;
-        }
-        let avg = sum / voices.len() as f32;
-
-        // Apply amount and bipolar/unipolar scaling (same as other sources).
-        let amount = adsr.amount.clamp(0.0, 1.0);
-        let centered = avg; // avg is 0..1
-        let shaped = if adsr.bipolar { centered } else { 0.5 + centered * 0.5 };
-        0.5 + (shaped - 0.5) * amount
+    /// A VoiceAdsr modulator's output: the average envelope level of the voices on the channel of its first target
+    /// that has one (else of every channel's voices; 0 with none sounding), mapped like the other sources.
+    fn voice_adsr_value(&self, adsr: &VoiceAdsr, modulator: usize) -> f32 {
+        let channel = self.modulators.get(modulator).and_then(|m| m.targets.iter().find_map(|t| self.channel_of(t.target)));
+        let (sum, count) = self
+            .voice_pool
+            .channels()
+            .filter(|pool| channel.is_none_or(|c| pool.channel() == c))
+            .flat_map(|pool| pool.iter())
+            .fold((0.0f32, 0u32), |(sum, n), (_, ctx)| (sum + adsr_level(adsr, ctx), n + 1));
+        let level = if count == 0 { 0.0 } else { sum / count as f32 };
+        let shaped = if adsr.bipolar { level } else { 0.5 + level * 0.5 };
+        0.5 + (shaped - 0.5) * adsr.amount.clamp(0.0, 1.0)
     }
 
-    /// Computes VoiceAdsr output globally (average across all channels) when no specific channel target.
-    fn voice_adsr_global(&self, adsr: &VoiceAdsr) -> f32 {
-        let mut sum = 0.0f32;
-        let mut count = 0usize;
-        for pool in self.voice_pool.channels() {
-            for (_, ctx) in pool.iter() {
-                let dt = 1.0 / 48000.0;
-                sum += Self::adsr_level(adsr, ctx, dt);
-                count += 1;
-            }
-        }
-        if count == 0 {
-            return if adsr.bipolar { 0.5 } else { 0.5 };
-        }
-        let avg = sum / count as f32;
-        let amount = adsr.amount.clamp(0.0, 1.0);
-        let centered = avg;
-        let shaped = if adsr.bipolar { centered } else { 0.5 + centered * 0.5 };
-        0.5 + (shaped - 0.5) * amount
+    /// Ages the note voices by `secs`; a released one stays for the longest release any envelope has now.
+    pub(super) fn advance_voices(&mut self, secs: f32) {
+        self.voice_pool.advance(secs, self.voice_release);
     }
+}
 
-    /// Computes the ADSR envelope level (0..1) for a single voice context.
-    fn adsr_level(adsr: &VoiceAdsr, ctx: &VoiceContext, dt: f32) -> f32 {
-        // This is a simplified per-tick ADSR computation.
-        // In a real implementation, each voice would maintain its own envelope state.
-        // For now, we approximate: if gate is high, we're in attack/decay/sustain; if low, in release.
-        // The actual per-voice state would be stored in the voice pool or a parallel structure.
-        
-        // Simplified: return a level based on gate state and time since note-on/off.
-        // This is a placeholder - a full implementation would track per-voice envelope state.
-        if ctx.gate {
-            // Note is held: assume attack is done, at sustain level
-            adsr.sustain.clamp(0.0, 1.0)
+/// One voice's envelope level (`0..=1`) at its age: a linear attack to 1, a linear decay to the sustain level, and
+/// from the gate's fall a linear release from the level it had then.
+fn adsr_level(adsr: &VoiceAdsr, ctx: &VoiceContext) -> f32 {
+    let sustain = adsr.sustain.clamp(0.0, 1.0);
+    let held = |t: f32| {
+        if t < adsr.attack {
+            t / adsr.attack
+        } else if t - adsr.attack < adsr.decay {
+            1.0 - (1.0 - sustain) * (t - adsr.attack) / adsr.decay
         } else {
-            // Note released: assume release is done, at 0
-            0.0
+            sustain
         }
+    };
+    if ctx.gate {
+        return held(ctx.age);
     }
+    let left = if adsr.release > 0.0 { 1.0 - (ctx.age - ctx.released_at) / adsr.release } else { 0.0 };
+    held(ctx.released_at) * left.clamp(0.0, 1.0)
 }
 
 /// The source's value at a position, `0..=1`: `beats` from the transport's start (quarter notes) and `secs`.
@@ -1413,6 +1373,32 @@ mod tests {
             source: ModSource::Lfo(Lfo { shape, period: Timebase::Sync(sixteenths), ..Lfo::default() }),
             enabled: true,
             targets: vec![ModTarget { target: Target::ChannelParam(0, 7), depth, curve: Curve::Linear, polarity, enabled: true }],
+        }
+    }
+
+    /// Each stage of a voice's envelope, in seconds, so it is the same at any sample rate and tick length.
+    #[test]
+    fn a_voice_envelope_has_four_stages_at_any_rate() {
+        let adsr = VoiceAdsr { attack: 0.1, decay: 0.2, sustain: 0.5, release: 0.4, amount: 1.0, bipolar: true };
+        for (rate, frames) in [(44100.0f32, 441usize), (96000.0, 960)] {
+            let mut pool = VoicePool::new(1);
+            pool.note_on(0, 60, 100);
+            // Steps of 10 ms, up to step `to`.
+            let mut done = 0;
+            let mut at = |pool: &mut VoicePool, to: usize| {
+                while done < to {
+                    pool.advance(frames as f32 / rate, adsr.release);
+                    done += 1;
+                }
+                pool.channel(0).unwrap().get(1).map(|ctx| adsr_level(&adsr, ctx))
+            };
+            let near = |got: Option<f32>, want: f32| assert!(got.is_some_and(|g| (g - want).abs() < 1e-3), "{rate}: {got:?} for {want}");
+            near(at(&mut pool, 5), 0.5);
+            near(at(&mut pool, 20), 0.75);
+            near(at(&mut pool, 50), 0.5);
+            pool.note_off(0, 60);
+            near(at(&mut pool, 70), 0.25);
+            assert_eq!(at(&mut pool, 95), None, "{rate}: gone after the release");
         }
     }
 

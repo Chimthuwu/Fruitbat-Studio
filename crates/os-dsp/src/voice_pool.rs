@@ -10,10 +10,8 @@
 //! that can be used by both the articulation system (channel voices) and the modulation system
 //! (per-voice modulation sources like ADSR).
 //!
-//! The pool is designed to be shared: the engine's `VoiceLedger` (per plugin instance) and the
-//! modulation system's per-voice note context can both reference the same voice identities.
-
-use std::collections::HashMap;
+//! The engine feeds and ages it on the audio thread: each channel's storage is allocated when the channel is made, so
+//! note events and ageing allocate nothing, and a released voice is dropped once its release time has passed.
 
 /// Maximum voices per channel (matches `os-engine::MAX_VOICES`).
 pub const MAX_VOICES_PER_CHANNEL: usize = 512;
@@ -37,8 +35,10 @@ pub struct VoiceContext {
     pub key: u8,
     pub velocity: u8,
     pub gate: bool,
-    /// The voice's age in ticks (for voice stealing priority).
-    pub age_ticks: u32,
+    /// Seconds since the note started.
+    pub age: f32,
+    /// The age at which the gate fell (meaningless while it is high).
+    pub released_at: f32,
 }
 
 impl VoiceContext {
@@ -48,13 +48,15 @@ impl VoiceContext {
             key: note.key,
             velocity: note.velocity,
             gate: true,
-            age_ticks: 0,
+            age: 0.0,
+            released_at: 0.0,
         }
     }
 
     /// Update from a note-off event (sets gate low, keeps key/velocity for release stage).
     pub fn note_off(&mut self) {
         self.gate = false;
+        self.released_at = self.age;
     }
 
     /// The velocity as a normalized 0..1 value.
@@ -71,8 +73,8 @@ impl VoiceContext {
 /// A pool of voices for a single channel.
 #[derive(Debug, Default, Clone)]
 pub struct ChannelVoicePool {
-    /// Active voices, keyed by voice_id.
-    voices: HashMap<u32, VoiceContext>,
+    /// Active voices with their ids, oldest first. Never grows past [`MAX_VOICES_PER_CHANNEL`], its capacity.
+    voices: Vec<(u32, VoiceContext)>,
     /// Next voice id to assign (monotonic within the channel).
     next_voice_id: u32,
     /// The channel index this pool belongs to.
@@ -83,7 +85,7 @@ impl ChannelVoicePool {
     /// Create a new voice pool for a channel.
     pub fn new(channel: usize) -> Self {
         ChannelVoicePool {
-            voices: HashMap::new(),
+            voices: Vec::with_capacity(MAX_VOICES_PER_CHANNEL),
             next_voice_id: 1, // 0 = no voice
             channel,
         }
@@ -114,57 +116,45 @@ impl ChannelVoicePool {
             voice_id,
             gate: true,
         });
-        self.voices.insert(voice_id, ctx);
+        self.voices.push((voice_id, ctx));
         voice_id
     }
 
     /// Handle a note-off event: mark the voice's gate as low.
     /// The voice stays in the pool until explicitly removed (by the voice ledger or modulation system).
     pub fn note_off(&mut self, key: u8) {
-        // Find the oldest held voice with this key and release it.
-        // This matches the behavior of `VoiceLedger::release`.
-        let mut best: Option<u32> = None;
-        let mut best_age = 0u32;
-        for (id, ctx) in &self.voices {
-            if ctx.key == key && ctx.gate {
-                if best.is_none() || ctx.age_ticks > best_age {
-                    best = Some(*id);
-                    best_age = ctx.age_ticks;
-                }
-            }
-        }
-        if let Some(id) = best {
-            if let Some(ctx) = self.voices.get_mut(&id) {
-                ctx.note_off();
-            }
+        // The oldest held voice with this key, as `VoiceLedger::release` picks it.
+        if let Some((_, ctx)) = self.voices.iter_mut().find(|(_, ctx)| ctx.key == key && ctx.gate) {
+            ctx.note_off();
         }
     }
 
     /// Handle a choke event: immediately remove all voices with this key.
     pub fn choke(&mut self, key: u8) {
-        self.voices.retain(|_, ctx| ctx.key != key);
+        self.voices.retain(|(_, ctx)| ctx.key != key);
     }
 
-    /// Advance all voices by one tick (increment age_ticks).
-    pub fn advance_tick(&mut self) {
-        for ctx in self.voices.values_mut() {
-            ctx.age_ticks = ctx.age_ticks.saturating_add(1);
+    /// Ages every voice by `secs`, then drops the released ones whose gate fell `release` seconds ago or more.
+    pub fn advance(&mut self, secs: f32, release: f32) {
+        for (_, ctx) in &mut self.voices {
+            ctx.age += secs;
         }
+        self.voices.retain(|(_, ctx)| ctx.gate || ctx.age - ctx.released_at < release);
     }
 
     /// Remove a specific voice by id (when the voice ledger reports it ended).
     pub fn remove_voice(&mut self, voice_id: u32) {
-        self.voices.remove(&voice_id);
+        self.voices.retain(|(id, _)| *id != voice_id);
     }
 
     /// Get the context for a voice, if it exists.
     pub fn get(&self, voice_id: u32) -> Option<&VoiceContext> {
-        self.voices.get(&voice_id)
+        self.voices.iter().find(|(id, _)| *id == voice_id).map(|(_, ctx)| ctx)
     }
 
     /// Get a mutable reference to a voice's context.
     pub fn get_mut(&mut self, voice_id: u32) -> Option<&mut VoiceContext> {
-        self.voices.get_mut(&voice_id)
+        self.voices.iter_mut().find(|(id, _)| *id == voice_id).map(|(_, ctx)| ctx)
     }
 
     /// Iterate over all active voices.
@@ -192,29 +182,11 @@ impl ChannelVoicePool {
         self.voices.is_empty()
     }
 
-    /// Steal the oldest released voice to make room for a new one.
+    /// Steal the oldest released voice to make room, or with none released the oldest held one.
     fn steal_oldest_released(&mut self) {
-        let mut oldest: Option<u32> = None;
-        let mut oldest_age = 0u32;
-        for (id, ctx) in &self.voices {
-            if !ctx.gate {
-                if oldest.is_none() || ctx.age_ticks > oldest_age {
-                    oldest = Some(*id);
-                    oldest_age = ctx.age_ticks;
-                }
-            }
-        }
-        // If no released voice, steal the oldest held voice (last resort).
-        if oldest.is_none() {
-            for (id, ctx) in &self.voices {
-                if oldest.is_none() || ctx.age_ticks > oldest_age {
-                    oldest = Some(*id);
-                    oldest_age = ctx.age_ticks;
-                }
-            }
-        }
-        if let Some(id) = oldest {
-            self.voices.remove(&id);
+        let at = self.voices.iter().position(|(_, ctx)| !ctx.gate).unwrap_or(0);
+        if at < self.voices.len() {
+            self.voices.remove(at);
         }
     }
 
@@ -230,7 +202,7 @@ impl ChannelVoicePool {
 
     /// The youngest voice; of those started in the same tick, the one with the later id.
     fn newest(&self) -> Option<(u32, &VoiceContext)> {
-        self.iter().min_by_key(|(id, ctx)| (ctx.age_ticks, std::cmp::Reverse(*id)))
+        self.iter().min_by(|(a, x), (b, y)| x.age.total_cmp(&y.age).then(b.cmp(a)))
     }
 
     fn note_of(ctx: &VoiceContext) -> VoiceNote {
@@ -302,10 +274,10 @@ impl VoicePool {
         }
     }
 
-    /// Advance all channels by one tick.
-    pub fn advance_tick(&mut self) {
+    /// [`ChannelVoicePool::advance`] on every channel.
+    pub fn advance(&mut self, secs: f32, release: f32) {
         for c in &mut self.channels {
-            c.advance_tick();
+            c.advance(secs, release);
         }
     }
 
@@ -329,7 +301,7 @@ impl VoicePool {
         self.channels
             .iter()
             .filter_map(|c| c.newest())
-            .min_by_key(|(_, ctx)| ctx.age_ticks)
+            .min_by(|(_, x), (_, y)| x.age.total_cmp(&y.age))
             .map(|(_, ctx)| ChannelVoicePool::note_of(ctx))
     }
 }
@@ -381,7 +353,7 @@ mod tests {
         for i in 0..(MAX_VOICES_PER_CHANNEL / 2) {
             pool.note_off(i as u8);
         }
-        pool.advance_tick(); // Age the released voices
+        pool.advance(0.1, 1.0); // Age the released voices
         // Add one more - should steal oldest released
         let new_id = pool.note_on(100, 100);
         assert_eq!(pool.len(), MAX_VOICES_PER_CHANNEL);
@@ -400,20 +372,39 @@ mod tests {
     }
 
     #[test]
-    fn voice_pool_advance_tick() {
+    fn released_voices_leave_after_their_release_time() {
         let mut pool = VoicePool::new(1);
         pool.note_on(0, 60, 100);
-        assert_eq!(pool.channel(0).unwrap().get(1).unwrap().age_ticks, 0);
-        pool.advance_tick();
-        assert_eq!(pool.channel(0).unwrap().get(1).unwrap().age_ticks, 1);
+        pool.advance(0.25, 0.5);
+        pool.note_off(0, 60);
+        pool.advance(0.25, 0.5);
+        assert_eq!(pool.channel(0).unwrap().len(), 1, "still releasing");
+        pool.advance(0.25, 0.5);
+        assert!(pool.channel(0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn notes_do_not_grow_the_storage() {
+        let mut pool = ChannelVoicePool::new(0);
+        let room = pool.voices.capacity();
+        for i in 0..4 * MAX_VOICES_PER_CHANNEL {
+            pool.note_on((i % 128) as u8, 100);
+        }
+        assert_eq!((pool.voices.len(), pool.voices.capacity()), (MAX_VOICES_PER_CHANNEL, room));
+        for key in 0..128 {
+            while pool.iter_held().any(|(_, c)| c.key == key) {
+                pool.note_off(key);
+            }
+        }
+        pool.advance(0.01, 0.0);
+        assert!(pool.is_empty());
     }
 
     #[test]
     fn latest_note_returns_newest() {
         let mut pool = VoicePool::new(1);
         pool.note_on(0, 60, 100);
-        pool.advance_tick();
-        pool.advance_tick();
+        pool.advance(0.02, 0.0);
         pool.note_on(0, 64, 80); // newer
         let latest = pool.latest_note_any().expect("has latest");
         assert_eq!(latest.key, 64);
@@ -422,7 +413,7 @@ mod tests {
 
         let mut two = VoicePool::new(2);
         two.note_on(0, 60, 127);
-        two.advance_tick();
+        two.advance(0.01, 0.0);
         two.note_on(1, 67, 1);
         assert_eq!(two.latest_note_any().map(|n| n.key), Some(67));
     }

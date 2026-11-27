@@ -243,7 +243,7 @@ impl App {
         let th = FlTheme::parse(&text);
         let palette = os_theme::design::palette(self.design(), Some(&th));
         self.theme = os_theme::Theme::new(&self.theme.name.clone(), palette, self.theme.adjust);
-        os_theme::set_current(&self.theme.colors);
+        crate::app::use_palette(&self.theme.colors);
         self.state.fl_text = Some(text);
         if self.state.settings.open {
             self.state.settings.skin_previews = os_theme::design::Design::ALL.iter().map(|d| os_theme::design::palette(*d, Some(&th))).collect();
@@ -360,7 +360,7 @@ impl App {
             Some(text) => self.theme_edit(text),
             None => {
                 self.theme = crate::app::design_theme(self.design(), false);
-                os_theme::set_current(&self.theme.colors);
+                crate::app::use_palette(&self.theme.colors);
                 self.state.fl_text = None;
                 self.sync_preset();
             }

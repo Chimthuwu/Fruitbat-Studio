@@ -162,7 +162,15 @@ pub enum Error {
     Arguments,
     /// Something else where it does not belong (its byte offset).
     Syntax(usize),
+    /// Longer than [`MAX_LEN`], or nested deeper than the parser goes.
+    TooLong,
 }
+
+/// The longest formula taken, in bytes. It bounds the depth of the tree that working out and dropping recurse over (a
+/// project file can carry any text).
+const MAX_LEN: usize = 4096;
+/// How deep the parser recurses; a pair of brackets takes two levels.
+const MAX_DEPTH: u32 = 128;
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -171,6 +179,7 @@ impl std::fmt::Display for Error {
             Error::Unknown(n) => write!(f, "unknown name {n}"),
             Error::Arguments => write!(f, "function or operand has too few arguments"),
             Error::Syntax(at) => write!(f, "unexpected character at {}", at + 1),
+            Error::TooLong => write!(f, "formula too long or nested too deeply"),
         }
     }
 }
@@ -183,7 +192,10 @@ impl Formula {
 
     /// Parses `text`, saying what is wrong with it.
     pub fn compile(text: &str) -> Result<Formula, Error> {
-        let mut p = Parser { s: text.as_bytes(), at: 0 };
+        if text.len() > MAX_LEN {
+            return Err(Error::TooLong);
+        }
+        let mut p = Parser { s: text.as_bytes(), at: 0, depth: 0 };
         if p.peek().is_none() {
             return Err(Error::Empty);
         }
@@ -396,6 +408,7 @@ fn tension(x: f64, t: f64) -> f64 {
 struct Parser<'a> {
     s: &'a [u8],
     at: usize,
+    depth: u32,
 }
 
 impl Parser<'_> {
@@ -467,10 +480,21 @@ impl Parser<'_> {
         Ok(a)
     }
 
+    /// Runs one level of recursion, refusing past [`MAX_DEPTH`].
+    fn nested(&mut self, f: fn(&mut Self) -> Result<Node, Error>) -> Result<Node, Error> {
+        if self.depth == MAX_DEPTH {
+            return Err(Error::TooLong);
+        }
+        self.depth += 1;
+        let n = f(self);
+        self.depth -= 1;
+        n
+    }
+
     /// not := 'not' not | relation
     fn not(&mut self) -> Result<Node, Error> {
         if self.eat_word("not") {
-            return Ok(Node::Not(Box::new(self.not()?)));
+            return Ok(Node::Not(Box::new(self.nested(Self::not)?)));
         }
         self.relation()
     }
@@ -576,10 +600,10 @@ impl Parser<'_> {
     /// unary := ('-' | '+') unary | postfix
     fn unary(&mut self) -> Result<Node, Error> {
         if self.eat(b'-') {
-            return Ok(Node::Neg(Box::new(self.unary()?)));
+            return Ok(Node::Neg(Box::new(self.nested(Self::unary)?)));
         }
         if self.eat(b'+') {
-            return self.unary();
+            return self.nested(Self::unary);
         }
         self.postfix()
     }
@@ -602,7 +626,7 @@ impl Parser<'_> {
         let Some(c) = self.peek() else { return Err(Error::Arguments) };
         if c == b'(' {
             self.at += 1;
-            let n = self.expr()?;
+            let n = self.nested(Self::expr)?;
             return if self.eat(b')') { Ok(n) } else { Err(Error::Syntax(self.at)) };
         }
         if c.is_ascii_digit() || c == b'.' {
@@ -651,9 +675,9 @@ impl Parser<'_> {
         if !self.eat(b'(') {
             return Err(Error::Arguments);
         }
-        let mut args = vec![self.expr()?];
+        let mut args = vec![self.nested(Self::expr)?];
         while self.eat(b',') {
-            args.push(self.expr()?);
+            args.push(self.nested(Self::expr)?);
         }
         if args.len() < n {
             return Err(Error::Arguments);
@@ -679,6 +703,22 @@ mod tests {
 
     fn x(s: &str) -> f64 {
         at(s, Vars::default())
+    }
+
+    #[test]
+    fn deep_or_long_input_is_refused_without_overflowing() {
+        let n = 100_000;
+        for s in [
+            format!("{}1{}", "(".repeat(n), ")".repeat(n)),
+            format!("{}1", "-".repeat(n)),
+            format!("{}1", "not ".repeat(n)),
+            format!("1{}", "+1".repeat(n)),
+            format!("{}1{}", "(".repeat(1000), ")".repeat(1000)),
+        ] {
+            assert_eq!(Formula::compile(&s), Err(Error::TooLong));
+        }
+        assert!(Formula::parse(&format!("{}1{}", "(".repeat(60), ")".repeat(60))).is_some());
+        assert_eq!(x(&format!("0{}", "+1".repeat(2000))), 2000.0);
     }
 
     /// The formulas the corpus links carry.

@@ -772,6 +772,14 @@ fn clip_len(events: &[Event], version: Option<usize>) -> usize {
 // ---------------------------------------------------------------------------------------
 // Load
 
+/// [`apply`], also saying which changes could not be written because the file's record is too short for them (older
+/// files hold shorter records). The rest is written as usual.
+pub fn apply_reporting(project: &Project, file: &mut FlpFile) -> Result<Vec<String>, ProjectError> {
+    apply(project, file)?;
+    let ids = DROPPED.with(|d| std::mem::take(&mut *d.borrow_mut()));
+    Ok(ids.into_iter().map(|id| format!("a change to event {id}, whose record in this file is too short")).collect())
+}
+
 /// Reads the typed project from a parsed file.
 pub fn load(file: &FlpFile) -> Result<Project, ProjectError> {
     let events = events_of(file)?;
@@ -1191,6 +1199,9 @@ fn write_misc(block: &mut [Event], ch: &Channel, old: &ChannelMisc) -> Vec<Event
     // The plugin's CPU switches, in its window record (a channel without one keeps the defaults).
     if m.cpu != n.cpu {
         if let Some(i) = find(block, id::PLUGIN_REC) {
+            if block[i].data().is_some_and(|d| d.len() <= 16) {
+                dropped(id::PLUGIN_REC);
+            }
             patch_cpu(&mut block[i], m.cpu);
         }
     }
@@ -1242,8 +1253,10 @@ fn write_misc(block: &mut [Event], ch: &Channel, old: &ChannelMisc) -> Vec<Event
                     patch_bytes(&mut block[i], 4, &slide(m).to_le_bytes());
                 }
                 // The byte's other bits are kept.
-                if let Some(&b) = block[i].data().and_then(|d| d.get(8)) {
-                    patch_bytes(&mut block[i], 8, &[b & !3 | bits(m)]);
+                match block[i].data().and_then(|d| d.get(8)) {
+                    Some(&b) => patch_bytes(&mut block[i], 8, &[b & !3 | bits(m)]),
+                    None if bits(m) != bits(n) => dropped(id::CH_POLY),
+                    None => {}
                 }
             }
             None => {
@@ -2433,13 +2446,23 @@ fn set_data(e: &mut Event, data: Vec<u8>) {
 }
 
 fn patch_bytes(e: &mut Event, offset: usize, bytes: &[u8]) {
-    if let Some(d) = e.data() {
-        if d.len() >= offset + bytes.len() && &d[offset..offset + bytes.len()] != bytes {
-            let mut d = d.to_vec();
-            d[offset..offset + bytes.len()].copy_from_slice(bytes);
-            e.value = Value::var(d);
-        }
+    let Some(d) = e.data() else { return };
+    if d.len() < offset + bytes.len() {
+        dropped(e.id);
+    } else if &d[offset..offset + bytes.len()] != bytes {
+        let mut d = d.to_vec();
+        d[offset..offset + bytes.len()].copy_from_slice(bytes);
+        e.value = Value::var(d);
     }
+}
+
+thread_local! {
+    /// The ids of events whose record was too short for a change, since the last [`apply`] on this thread began.
+    static DROPPED: std::cell::RefCell<std::collections::BTreeSet<u8>> = Default::default();
+}
+
+fn dropped(event: u8) {
+    DROPPED.with(|d| d.borrow_mut().insert(event));
 }
 
 /// Beats per bar or steps per beat as their one-byte event holds them (17, 18; spec: project/engine-events.md).
@@ -2549,12 +2572,16 @@ fn write_sampler(
         }
     }
     let fields = sample_settings_fields(ch);
-    let changed = fields != sample_settings_fields(old);
+    let was = sample_settings_fields(old);
+    let changed = fields != was;
     match find(events, id::CH_SAMPLE_SETTINGS) {
         // A shorter record (older files) keeps what does not fit. The stretch ints are written above.
         Some(i) if changed => {
-            for (at, bytes) in &fields {
-                patch_bytes(&mut events[i], *at, bytes);
+            for ((at, bytes), old) in fields.iter().zip(&was) {
+                let fits = events[i].data().is_some_and(|d| d.len() >= at + bytes.len());
+                if fits || *bytes != old.1 {
+                    patch_bytes(&mut events[i], *at, bytes);
+                }
             }
         }
         Some(_) => {}
@@ -2597,6 +2624,7 @@ fn write_sampler(
 /// removing objects isn't supported yet. A file of an older generation is first converted to the current layout
 /// ([`upgrade`]), which is the layout it is saved in.
 pub fn apply(project: &Project, file: &mut FlpFile) -> Result<(), ProjectError> {
+    DROPPED.with(|d| d.borrow_mut().clear());
     upgrade(file)?;
     restructure(project, file)?;
     // The file's effect slots as they are before inserts are added or removed: a renumbered track takes its own.
@@ -4832,6 +4860,45 @@ mod tests {
         let m = plain.channels[0].misc;
         assert_eq!((m.add_key, m.key_range), (false, [0, 256]));
         assert_eq!((m.cut, m.cut_by, m.max_poly, m.mono, m.porta, m.slide), (0, 0, 0, false, false, 500.0 / 1024.0));
+    }
+
+    /// A file saved by FL 11 holds 8-bit text, but saving converts it to the current layout first, so text outside
+    /// Latin-1 is written as UTF-16 and kept.
+    #[test]
+    fn an_old_files_save_keeps_non_latin_text() {
+        let mut file = create(&new_project()).unwrap();
+        for e in events_of_mut(&mut file).unwrap().iter_mut() {
+            if e.id == id::VERSION {
+                e.value = Value::var(b"11.5.0\0".to_vec());
+            } else if legacy::TEXT_IDS.contains(&e.id) {
+                if let Some(text) = e.data().map(|d| decode_text(d, TextEnc::Utf16)) {
+                    e.value = Value::var(encode_text(&text, TextEnc::Ansi));
+                }
+            }
+        }
+        let mut p = load(&file).unwrap();
+        let name = "\u{411}\u{430}\u{441} \u{4f4e}\u{97f3}";
+        p.channels[0].name = Some(name.into());
+        apply(&p, &mut file).unwrap();
+        let back = load(&FlpFile::parse(&file.to_bytes().unwrap()).unwrap()).unwrap();
+        assert_eq!(back.channels[0].name.as_deref(), Some(name));
+    }
+
+    /// A change that does not fit a shortened record is reported, not dropped in silence; a save that changes nothing
+    /// there reports nothing.
+    #[test]
+    fn a_change_too_long_for_its_record_is_reported() {
+        let mut file = create(&new_project()).unwrap();
+        for e in events_of_mut(&mut file).unwrap().iter_mut().filter(|e| e.id == id::CH_LEVELS) {
+            let d = e.data().unwrap()[..8].to_vec();
+            e.value = Value::var(d);
+        }
+        let mut p = load(&file).unwrap();
+        assert_eq!(apply_reporting(&p, &mut file.clone()).unwrap(), Vec::<String>::new());
+        p.channels[0].pitch_cents += 10;
+        let lost = apply_reporting(&p, &mut file).unwrap();
+        assert_eq!(lost.len(), 1, "{lost:?}");
+        assert!(lost[0].contains("event 219"), "{lost:?}");
     }
 
     /// A sample channel's start, length, loop options and precomputed effects are read in the file's units (spec:
