@@ -1,5 +1,70 @@
 # Fruitbat Studio — todo.md (roadmap reference)
 
+# OPEN TASKS (checklist index, 2026-11-27)
+
+From the 2026-11-27 audit at `351533d8`. Work top-down. Line numbers are from that commit. After the
+2026-11-27 fixes, a local Windows `cargo test --workspace --no-fail-fast` gave 2746 passed, 0 failed, 79 ignored. FreqBat is outside the workspace, so it was not tested.
+
+## P0 - data loss and broken build
+
+- [x] **Load layout-3 modulation graphs again** [P1] [size:S] - `crates/os-app/src/lemon_state.rs:463`: `GRAPH_LAYOUT` went 3 -> 4 (`cb6815a5`) but `read_graph` accepts only 4, 2 and 1. A project saved with layout 3 opens with no modulation graph, and saving it again would lose the graph. Accept 3.
+  Done when: a test builds a layout-3 payload (with `next_route`, no macro or XY pad fields) and reads back every modulator and route.
+  Source: audit 2026-11-27, code read (`git show 9c03665f:crates/os-app/src/lemon_state.rs` has GRAPH_LAYOUT 3).
+- [x] **Make os-engine tests compile** [P1] [size:S] - `crates/os-engine/src/engine/modulation.rs:1524` calls `os_model::target::decode(Target::ChannelParam(0, 7))`, but `ModSnapshot::new` takes `&[Target]`. Pass the target itself, then run `cargo test --workspace --locked --no-fail-fast` and add a task here for each failure.
+  Done when: the workspace test targets compile and every remaining failure is listed in this section.
+  Source: local `cargo test` (E0308), same error on Windows CI.
+- [x] **Fix the 3 failing voice pool tests** [P1] [size:S] - `os-dsp/src/voice_pool.rs`. `latest_note_returns_newest`: a real bug, `latest_note` takes the largest `age_ticks` (the oldest voice), and `latest_note_any` compares velocity, not age. `channel_pool_choke_removes_voices`: the test reads voice id 1, which it just choked; the survivor is id 2. `voice_pool_multichannel`: the test expects ids unique across channels, but they are numbered per channel as documented.
+  Done when: `cargo test -p os-dsp` passes, with the newest-note behaviour fixed in code rather than in the test.
+  Source: local test run 2026-11-27.
+- [x] **Fix the source header test** [P1] [size:S] - `cargo test -p watermark` lists 14 files without the repository header: `crates/os-app/src/help_links.rs`, `crates/os-app/src/modulation.rs`, `crates/os-model/src/modulation.rs`, 10 under `vendor/asio-sys`, and the untracked `.prof.sh`. Add correct headers to our files; exclude vendored third-party code in `tools/watermark` instead of putting our header on it. Leave `.prof.sh` uncommitted (it is the owner's temporary script).
+  Done when: the test passes on a clean checkout and no third-party file claims our copyright.
+  Source: local test run 2026-11-27.
+- [ ] **Fix the Linux and macOS build** [P1] [size:M] - CI run 45351255688: `FrameWindow` in the X11 and Cocoa backends under `crates/os-app/src/plugin_window/` has no `set_pinned` or `move_to`. Add them to both, matching the win32 behaviour or as documented no-ops.
+  Done when: the Build step passes on the Linux and macOS CI jobs.
+  Source: `gh run view 45351255688 --log-failed`.
+- [ ] **Get CI green** [P1] [size:M] - the last successful run seen was 2026-11-04; of the runs `gh` listed, 44 failed, 36 were cancelled and 2 succeeded. After the two tasks above, fix what the next run reports.
+  Done when: one push to main passes on all three platforms.
+  Source: `gh run list`.
+- [x] **Deleting a track must not corrupt launcher data** [P1] [size:S] - neither `Command::TrackDelete` (`control/command.rs:1349`) nor playlist delete removes that track's `launcher.clips`. `lemon_state::launcher_state` (line 1038) writes `clips.len()` and then skips orphans, so `read_launcher` reads scene bytes as clips. Write the count of records actually written, and clear the track's clips, playing and pending entries on delete (keep undo working).
+  Done when: a test deletes a track that has launcher clips, saves and reloads, and the other clips and all scenes are unchanged.
+  Source: docs/AUDIT-2026-11-22-fruitbat-deep.md 1.3, rechecked in code 2026-11-27.
+- [ ] **Report FLP short-record writes** [P1] [size:M] - `os_project::project::patch_bytes` (project.rs:2435) still drops an edit silently when the stored payload is too short. Return or collect a warning and show it on save.
+  Done when: a test with a truncated event gets a warning instead of silent success.
+  Source: AUDIT-2026-11-04.md section 3 (was hidden here under a DONE heading, so /sesh never counted it).
+- [ ] **Stop saving non-Latin-1 text as '?'** [P1] [size:M] - `os-project/src/project.rs:253` replaces every char >= U+0100 in its Latin-1 branch. Check when that branch is used and how the format marks UTF-16, keep the text, and test the round trip.
+  Done when: a name with non-Latin-1 characters survives save and reload, or the user is warned before it is replaced.
+  Source: AUDIT-2026-11-04.md section 3, line still present.
+
+## P1 - unfinished 2026-11-23 modulation work (ticked below, but incomplete)
+
+- [ ] **XY pad: make it work or hide it** [P2] [size:M] - `ModAct::AddXyPad` (`os-app/src/modulation.rs:2019`) calls `.unwrap()` on `add_in_slot(slot + 1, ..)`, which returns None when that slot is taken or out of range, so the app panics. `XyPadDrag` matches `ModulatorId.0` against separately numbered `MacroId.0`; a search finds no drag handler that updates its x/y; `views/device_rack.rs:1589` draws the first pad for every macro. Store the two ModulatorIds in the pad, or remove the menu row until it works.
+  Done when: adding a pad with the next slot occupied does not panic, and a test shows a drag changing the two intended macros only.
+  Source: audit 2026-11-27, code read.
+- [ ] **Voice pool: bound the work on the audio thread** [P2] [size:M] - every note feeds `os-dsp/src/voice_pool.rs` (`engine.rs:1170`, `2695`), but `remove_voice` has no engine caller, so released voices stay until 512 per channel; HashMap growth allocates, and each tick walks them all. Check whether live notes are fed twice (`note_on_midi` and `inst_events`). Preallocate and drop voices after release, or stop feeding the pool while no VoiceAdsr exists.
+  Done when: tests show the pool empties after note-offs and note processing does not allocate after setup.
+  Source: audit 2026-11-27, code read.
+- [ ] **Full per-voice envelope state** [P2] [size:M] - `adsr_level` (`os-engine/src/engine/modulation.rs`) is a placeholder: sustain while held, 0 on release. `voice_adsr_value` also collects a Vec each tick and assumes 48 kHz.
+  Done when: tests show attack, decay, sustain and release stages per voice at two sample rates, with no per-tick allocation.
+  Source: Inbox item and HANDOFF.md 2026-11-23.
+- [ ] **Operator nodes: keep them out of saves until real** [P2] [size:S] - Math, Polynomial, Quantize, Map and Slew always output 0.5, and `write_graph` saves them as a macro. Confirm that no UI or control command can create one, and mark them model-only in this file.
+  Done when: a search shows no creation path, and the ticked operator-node entry below says model-only.
+  Source: audit 2026-11-27.
+- [ ] **FreqBat is not built** [P2] [size:M] - `plugins/freqbat` is not a member of the root `Cargo.toml`, and a search of the manifests found no reference to it, so the workspace does not compile or test it. Add it, fix compile errors, run its tests, update notices.
+  Done when: `cargo test -p freqbat` passes and CI builds it.
+  Source: audit 2026-11-27.
+
+## P2 - older findings and housekeeping
+
+- [ ] **Theme changes must reach popped-out editors** [P2] [size:S] - Reset and Preset (`app.rs:6006-6030`), `theme_edit` and `theme_restore` call `os_theme::set_current` without `publish_palette`. Route them through one function that does both.
+  Done when: each of the four paths publishes the palette.
+  Source: AUDIT-2026-11-22 section 2, rechecked.
+- [ ] **Limit formula parser depth** [P2] [size:S] - `os-engine/src/formula.rs` recurses (`unary`, parentheses) and no depth limit was found; deeply nested input can overflow the stack.
+  Done when: a test with 100,000 nested terms gets a parse error.
+  Source: AUDIT-2026-11-04.md section 2.
+- [ ] **Reconcile stale open items below** [P2] [size:M] - some unchecked entries in later sections are already built. For each, check the code, then tick it with evidence or leave it open. Do this before working through older sections.
+  Done when: every item in the 'In flight', 'Interop', M8, M9 and 'Device Rack' sections has been checked against code.
+  Source: audit 2026-11-27.
+
 ## ▶ NEXT — the modulation handoff (2026-11-14, in progress)
 - [x] **The graph is a DAG** (`5b2b7e8f`): a modulator's own rate/amount/phase/offset are parameters
       (`ModParam`, `Target::ModulatorParam` in the reserved `0x6000` range), so a route into the graph is an
@@ -190,7 +255,7 @@
       add tile, wraps onto a new line when a line is full (the strip's height follows), and the separate
       "add row" button is gone; a full strip grows another line when the add tile is used. Every populated tile
       has a visible `×` remove button (plus its menu and Delete).
-- [ ] **FLP short-record writes** (`os_project::project::patch_bytes`) still skip silently when the stored
+- Moved to OPEN TASKS 2026-11-27: **FLP short-record writes** (`os_project::project::patch_bytes`) still skip silently when the stored
       payload is shorter than the record, so a truncated project event is not reported. Needs a warning
       path before writing.
 - [ ] Launcher drag-and-drop, full playlist-style track headers, and the scene/automation polish remain in
@@ -351,7 +416,7 @@ writing code.
       still load, the stored range simply stops being read.
 - [ ] Update the specs/docs and tests that mention the range.
 
-## 🎯 NEW — Clip Launcher polish (2026-11-09 23:12, plan only — DO NOT EXECUTE yet)
+## 🎯 NEW — Clip Launcher polish (2026-11-09 23:12, NOT READY: plan only — DO NOT EXECUTE yet)
 Reported after testing the fd73cb54 build. Needs a short audit pass (launcher cell rendering + hit handling,
 views/launcher.rs + launcher.rs) before executing — the F1 drop fix from wave 2 did NOT hold in practice.
 - [ ] **Drag & drop of audio samples into launcher cells still doesn't work** — no clip appears. Wave 2 claimed
@@ -596,7 +661,7 @@ Full plans with file:line refs in `docs/audit-2026-11-09-device-racks.md`, `-cli
 
 ## Interop research queue (Ableton/Bitwig ideas)
 - [ ] Read .als (Ableton Live sets): gzip+XML — reference abletoolz / dawtool (both Python, format-level)
-- [ ] Adopt DAWproject in/out (bitwig/dawproject, MIT) — interop with Bitwig/Cubase/Studio One
+- [x] Adopt DAWproject in/out (bitwig/dawproject, MIT) — interop with Bitwig/Cubase/Studio One
 - [ ] Study bitwig-nitro-tools format docs for device/Grid architecture ideas (clean-room: specs only)
 - [ ] Evaluate .flp ↔ DAWproject ↔ .als conversion via DawVert as reference
 - [x] Session/clip-launcher view: survey suhina-daw, beatlayer, nxtakt for clean-room design ideas (landed as
@@ -619,14 +684,14 @@ Read `plugins/lemon-small-fx` first for layout/param/editor conventions.
 | `lemon-echo` | Note Echo (delay lines, feedback, sync) | `echo.rs` | minimal os-ui | echo scheduling |
 
 For each:
-- [ ] Create `plugins/lemon-arp/`, `lemon-chord/`, `lemon-echo/` with `Cargo.toml`, `src/lib.rs`, `src/dsp/*.rs`, `src/editor.rs`
+- [x] Create `plugins/lemon-arp/`, `lemon-chord/`, `lemon-echo/` with `Cargo.toml`, `src/lib.rs`, `src/dsp/*.rs`, `src/editor.rs`
 - [ ] Unit tests in `src/dsp/*.rs` (no audio, pure logic)
-- [ ] Minimal editor per OS UI conventions (os-ui)
+- [x] Minimal editor per OS UI conventions (os-ui)
 - [ ] Register in workspace `Cargo.toml` + `tools/notices` if that's the convention
 - [ ] `cargo test` green, no new warnings
 
 ## M8 — Track Model & Linear Mode (per `docs/track-model-plan.md` §7 + brief)
-- [ ] `os-model/src/lib.rs`: `Track { kind: Audio|Midi|Bus, playlist_lane, mixer_strip, channel: Option<ChannelId> }`
+- [x] `os-model/src/lib.rs`: `Track { kind: Audio|Midi|Bus, playlist_lane, mixer_strip, channel: Option<ChannelId> }`
 - [ ] Insert Track → creates playlist lane + mixer strip + channel atomically
 - [ ] Round-trip through `.flp` (LMex events 203 TRACKS, 204 LINEAR_MODE)
 - [ ] Linear mode = default project template; Classic (FL) mode untouched
@@ -797,7 +862,7 @@ tests stay untouched. To bring it back, rebuild it as ONE self-contained group i
 - Keep `THIRD-PARTY-NOTICES.txt` in sync with Cargo.lock (`cargo run -p notices`) — cargo test enforces it.
 
 ## Inbox (agent-proposed)
-- [ ] **Full per-voice envelope state tracking** [P2] [engine] [size:M]
+- Promoted to OPEN TASKS 2026-11-27: **Full per-voice envelope state tracking** [P2] [engine] [size:M]
   Why: The current VoiceAdsr implementation returns sustain level when gate is high and 0 when low, but doesn't track actual attack/decay/sustain/release stages per voice. A complete implementation would maintain per-voice envelope state (stage, time in stage, output level) updated each tick.
   Done when: VoiceAdsr produces correct ADSR curves per voice with configurable attack/decay/sustain/release times.
   Hints: Store per-voice envelope state in ChannelVoicePool or a parallel VoiceEnvelopePool; update in evaluate() before computing voice_adsr_value; use dt from PARAM_STEP frames.
@@ -1017,7 +1082,7 @@ I suspect this is related to the inconsistent relationship between Playlist trac
 
 **Important:** Do not simply patch the visible automation interface. Investigate and correct the underlying track/channel relationship first.
 
-### 7. General Verification
+### 7. General Verification (NOT READY: owner checks at the GUI)
 
 After implementing the above changes:
 

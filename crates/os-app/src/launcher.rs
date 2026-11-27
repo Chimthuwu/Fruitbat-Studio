@@ -1338,6 +1338,10 @@ pub fn advance(app: &mut App) -> bool {
     app.state.engine_tick = now;
     let prev_tick = app.state.launcher.last_tick;
     let before = app.state.launcher.playing.clone();
+    // A deleted track cannot stay on the air or queued (its clips are kept for undo).
+    let tracks = &app.state.project.tracks;
+    app.state.launcher.playing.retain(|id, _| tracks.iter().any(|t| t.id.0 == *id));
+    app.state.launcher.pending.retain(|id, _| tracks.iter().any(|t| t.id.0 == *id));
     let launched = advance_at(app, now, running);
     let fired = next_actions(app, now);
     let changed = app.state.launcher.playing != before;

@@ -1521,7 +1521,7 @@ mod tests {
                     Vec::new()
                 },
             };
-            let snap = Arc::new(ModSnapshot::new(&[2, 1], &[os_model::target::decode(Target::ChannelParam(0, 7))]));
+            let snap = Arc::new(ModSnapshot::new(&[2, 1], &[Target::ChannelParam(0, 7)]));
             e.set_mod_snapshot(snap.clone());
             e.set_modulation(vec![lfo, driver]);
             let mut out = vec![0.0f32; 400 * 2];

@@ -39,6 +39,8 @@ const LAYOUT: u8 = 2;
 const GRAPH_LAYOUT: u8 = 4;
 /// The layout written before project slots, random follow shape edits and per-routing enable. Still read.
 const LAYOUT_1: u8 = 1;
+/// The graph layout with route identities, before the macro counter and XY pads.
+const LAYOUT_3: u8 = 3;
 
 /// Icon owner kinds in [`lemon::ICONS`].
 const CHANNEL: u8 = 0;
@@ -460,7 +462,7 @@ fn read_graph(d: &[u8]) -> Option<ModGraph> {
     // The graph's own layout, or one it shared with the file's before it had one. A file layout this build does not
     // know does not matter here: the graph event is versioned on its own.
     let layout = r.u8()?;
-    if layout != GRAPH_LAYOUT && layout != LAYOUT && layout != LAYOUT_1 {
+    if layout != GRAPH_LAYOUT && layout != LAYOUT_3 && layout != LAYOUT && layout != LAYOUT_1 {
         return None;
     }
     let count = r.u32()? as usize;
@@ -1036,9 +1038,15 @@ fn lane_bindings(s: &State) -> Event {
 /// colour, comment, the Override Launch Settings flag (u8) and its MAIN and ALT launch settings. The track is stored
 /// by position because the file holds no ids; `apply` resolves it after the tracks were given theirs.
 fn launcher_state(s: &State) -> Event {
-    let mut b = start(s.launcher.clips.len());
-    for (&(track, scene), slot) in &s.launcher.clips {
-        let Some(at) = s.project.tracks.iter().position(|t| t.id.0 == track) else { continue };
+    // A deleted track's clips stay in memory for undo but are not written, so the count is of those that are.
+    let clips: Vec<_> = s
+        .launcher
+        .clips
+        .iter()
+        .filter_map(|(&(track, scene), slot)| Some((s.project.tracks.iter().position(|t| t.id.0 == track)?, scene, slot)))
+        .collect();
+    let mut b = start(clips.len());
+    for (at, scene, slot) in clips {
         b.extend_from_slice(&(at as u32).to_le_bytes());
         b.extend_from_slice(&(scene as u32).to_le_bytes());
         b.extend_from_slice(&slot.pattern.to_le_bytes());
@@ -1710,6 +1718,48 @@ mod modulation_graph_tests {
             back.get(a).and_then(|m| m.targets.first()).and_then(|t| t.path.modulator()),
             Some((b, os_model::modulation::ModParam::Rate))
         );
+    }
+
+    /// Layout 3 had route identities but no macro counter or XY pads. Projects saved with it must keep their graph.
+    #[test]
+    fn a_layout_three_graph_still_loads() {
+        let g = graph();
+        let mut b = write_graph(&g);
+        b[0] = LAYOUT_3;
+        // After the layout byte, count, next id and next route: layout 4's macro counter (u32) and pad count (u16).
+        b.drain(13..19);
+        assert_eq!(read_graph(&b), Some(g));
+    }
+
+    /// A deleted track's launcher clips stay in memory for undo; the file must count only the clips it writes, or
+    /// the reader takes scene bytes for clip records.
+    #[test]
+    fn a_deleted_tracks_clips_do_not_corrupt_the_saved_launcher() {
+        use crate::launcher::{Scene, Slot};
+        let d = dir("launcher_orphan");
+        let path = d.join("Orphan.lemon");
+        let mut app = App::new(None);
+        app.state.project = crate::app::test_project();
+        for (i, kind) in [os_model::TrackKind::Midi, os_model::TrackKind::Audio].into_iter().enumerate() {
+            app.state.project.tracks.push(os_model::Track::new(kind, i as u32 + 1, i as u16 + 1, Some(i as u16)));
+        }
+        app.state.control.settle(&mut app.state.project);
+        let (gone, kept) = (app.state.project.tracks[0].id.0, app.state.project.tracks[1].id.0);
+        app.state.launcher.clips.insert((gone, 0), Slot { pattern: 1, ..Default::default() });
+        app.state.launcher.clips.insert((kept, 3), Slot { pattern: 1, name: Some("Kept".into()), ..Default::default() });
+        app.state.launcher.scenes = vec![Scene::default(); crate::launcher::SCENES];
+        app.state.launcher.scenes[2].name = "Break".into();
+        app.state.project.tracks.remove(0);
+        app.save_to(path.clone());
+        assert_eq!(app.state.launcher.clips.len(), 2, "saving keeps the clips undo needs");
+
+        let mut back = App::new(None);
+        back.open(path);
+        let s = &back.state;
+        let kept = s.project.tracks[0].id.0;
+        assert_eq!(s.launcher.clips.keys().copied().collect::<Vec<_>>(), vec![(kept, 3)]);
+        assert_eq!(s.launcher.clips[&(kept, 3)].name.as_deref(), Some("Kept"));
+        assert_eq!(s.launcher.scenes[2].name, "Break");
     }
 
     /// The graph event carries its own layout byte: the file's layout stays at 2, so every other event still reads in an

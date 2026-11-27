@@ -1,6 +1,6 @@
 // Copyright (C) 2026 ItsAlphaNeon
 // SPDX-License-Identifier: GPL-3.0-or-later
-// This file is part of Lemon Studio: https://github.com/Chimthuwu/Fruitbat-Studio
+// This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
 
 //! HELP ▸ Help index, Tutorials ▸ and What's new (Fruitbat Studio's design): Fruitbat Studio has no help files or tutorials
 //! of its own yet, so they open the project's pages in the default web browser: its README (what works and how to

@@ -50,9 +50,11 @@ mod tests {
     const SHARED_NOTE: &str = "It also holds others' work, which keeps its authors' copyright and licence, named below.";
 
     /// The folders of third-party sources kept unchanged (paths from the repository root), which keep their own headers.
-    const VENDORED: [&str; 1] = [
+    const VENDORED: [&str; 2] = [
         // The ASIO SDK's host files (GPL-3.0 option), built by asio-sys.
         "crates/os-app/asiosdk/",
+        // The asio-sys crate, patched here to build with the GNU toolchain (see the root Cargo.toml).
+        "vendor/asio-sys/",
     ];
 
     /// The files that hold others' work (paths from the repository root) and their licence expression.
@@ -164,7 +166,8 @@ mod tests {
     }
 
     /// The source files under `dir`, leaving out what `.gitignore` keeps out of the repository: build output (`target`,
-    /// `target-*`) and `.claude`, which holds worktrees (whole copies of the repository); and `.git`.
+    /// `target-*`) and `.claude`, which holds worktrees (whole copies of the repository); `.git`; and hidden files,
+    /// which are local scripts.
     fn sources(dir: &Path, out: &mut Vec<(PathBuf, Style)>) {
         let list = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot list {}: {e}", dir.display()));
         for entry in list {
@@ -176,7 +179,7 @@ mod tests {
                 if !matches!(&*name, ".git" | ".claude" | "target") && !name.starts_with("target-") {
                     sources(&path, out);
                 }
-            } else if let Some(style) = style(&path) {
+            } else if let Some(style) = style(&path).filter(|_| !name.starts_with('.')) {
                 out.push((path, style));
             }
         }

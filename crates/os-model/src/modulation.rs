@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Chimthuwu
+// SPDX-License-Identifier: GPL-3.0-or-later
+// This file is part of Lemon Studio: https://github.com/ItsAlphaNeon/Lemon-Studio
+
 //! Persistent parameter identity for the DAW-wide modulation system (M0).
 //!
 //! This module defines the project-persistent identity types that the modulation graph (later

@@ -225,15 +225,21 @@ impl ChannelVoicePool {
 
     /// Get the newest note across all voices (for modulation sources that read "latest note").
     pub fn latest_note(&self) -> Option<VoiceNote> {
-        self.voices
-            .values()
-            .max_by_key(|ctx| ctx.age_ticks)
-            .map(|ctx| VoiceNote {
-                key: ctx.key,
-                velocity: ctx.velocity,
-                voice_id: 0, // Not a specific voice
-                gate: ctx.gate,
-            })
+        self.newest().map(|(_, ctx)| Self::note_of(ctx))
+    }
+
+    /// The youngest voice; of those started in the same tick, the one with the later id.
+    fn newest(&self) -> Option<(u32, &VoiceContext)> {
+        self.iter().min_by_key(|(id, ctx)| (ctx.age_ticks, std::cmp::Reverse(*id)))
+    }
+
+    fn note_of(ctx: &VoiceContext) -> VoiceNote {
+        VoiceNote {
+            key: ctx.key,
+            velocity: ctx.velocity,
+            voice_id: 0, // Not a specific voice
+            gate: ctx.gate,
+        }
     }
 }
 
@@ -317,9 +323,14 @@ impl VoicePool {
         }
     }
 
-    /// Get the newest note across all channels (for modulation sources that read "latest note anywhere").
+    /// Get the newest note across all channels (for modulation sources that read "latest note anywhere"). Notes of
+    /// different channels started in the same tick have no order between them.
     pub fn latest_note_any(&self) -> Option<VoiceNote> {
-        self.channels.iter().filter_map(|c| c.latest_note()).max_by_key(|n| n.velocity as u32)
+        self.channels
+            .iter()
+            .filter_map(|c| c.newest())
+            .min_by_key(|(_, ctx)| ctx.age_ticks)
+            .map(|(_, ctx)| ChannelVoicePool::note_of(ctx))
     }
 }
 
@@ -356,7 +367,7 @@ mod tests {
         pool.note_on(64, 80);
         pool.choke(60);
         assert_eq!(pool.len(), 1);
-        assert_eq!(pool.get_mut(1).map(|ctx| ctx.key), Some(64));
+        assert_eq!(pool.get_mut(2).map(|ctx| ctx.key), Some(64));
     }
 
     #[test]
@@ -382,7 +393,7 @@ mod tests {
         let mut pool = VoicePool::new(4);
         let id1 = pool.note_on(0, 60, 100).expect("channel 0");
         let id2 = pool.note_on(1, 64, 80).expect("channel 1");
-        assert_ne!(id1, id2);
+        assert_eq!((id1, id2), (1, 1), "ids are numbered per channel");
         assert_eq!(pool.channel(0).unwrap().len(), 1);
         assert_eq!(pool.channel(1).unwrap().len(), 1);
         assert_eq!(pool.channel(2).unwrap().len(), 0);
@@ -407,5 +418,12 @@ mod tests {
         let latest = pool.latest_note_any().expect("has latest");
         assert_eq!(latest.key, 64);
         assert_eq!(latest.velocity, 80);
+        assert_eq!(pool.channel(0).unwrap().latest_note().map(|n| n.key), Some(64));
+
+        let mut two = VoicePool::new(2);
+        two.note_on(0, 60, 127);
+        two.advance_tick();
+        two.note_on(1, 67, 1);
+        assert_eq!(two.latest_note_any().map(|n| n.key), Some(67));
     }
 }
