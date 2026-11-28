@@ -1,10 +1,77 @@
 # Fruitbat Studio — todo.md (roadmap reference)
 
-# OPEN TASKS (checklist index, 2026-11-27)
+# OPEN TASKS (checklist index, 2026-11-29)
 
 From the 2026-11-27 audit at `351533d8`. Work top-down. Line numbers are from that commit. After the
 2026-11-27 fixes, a local Windows `cargo test --workspace --no-fail-fast` gave 2746 passed, 0 failed, 79 ignored (later the same day, with the next batch of fixes: 2750 passed,
 0 failed, 79 ignored, plus one `os-project` test added after that run). FreqBat is outside the workspace, so it was not tested.
+
+2026-11-29 prep run: new items are under **Added 2026-11-29** below; the tree was checked against them at
+`50c8da1b`. Piano-roll Alt+wheel zoom (roadmap §2) and the blank-project starter tracks (roadmap §6.3) are
+already in the tree — no tasks for those.
+
+## Added 2026-11-29 (prep run)
+
+- [ ] **Unified-track identity audit** [P1] [size:M] - the 2026-11-23 roadmap calls the split between MIDI/Audio/playlist/launcher/mixer track representations the likely root of the broken automation (§6, marked high priority). Investigation first, no behaviour change: trace every place a track-like thing is created and referenced (`crates/os-app/src/playlist.rs`, `launcher.rs`, `track_links.rs`, `control/command.rs`, `os-model` `Track`), how automation targets resolve to them (`ParamAuto`/`Target`), and where the representations can drift apart.
+  Done when: `docs/unified-track-audit.md` exists with a table of each representation, file:line for every creation/sync path, the duplicate or disconnected ones named, and a bounded task list for the single track model.
+  Source: todo roadmap 2026-11-23 §6.1-6.4.
+- [ ] **Tests for the two engine paths fixed in a08e2eb5** [P2] [size:S] - the 2026-11-27 voice-pool pass fixed live instrument notes being fed twice and a sampler retrigger releasing the new note, but (in this file's own words) no test drives those two engine paths.
+  Done when: two os-engine regression tests cover them (a live note lands in the pool once; a retrigger keeps the new note alive) and pass.
+  Source: todo OPEN TASKS voice-pool note, 2026-11-27.
+- [ ] **Feed sequenced sampler notes into the voice pool** [P2] [size:M] - pattern notes on sampler channels never reach `crates/os-dsp/src/voice_pool.rs`, so a VoiceAdsr never shapes them; only live/hosted notes do.
+  Done when: a test plays a pattern note on a sampler channel and the pool carries the voice with its envelope through release.
+  Source: todo OPEN TASKS envelope note, 2026-11-27 ("Sequenced notes on sampler channels still do not reach the pool").
+- [ ] **Cover the grow/replace short-record write paths in patch_bytes** [P2] [size:S] - `crates/os-project/src/project.rs` (`patch_bytes`, ~line 2435): the 2026-11-27 reporting work covered the truncated case; its own note says writes that already grow or replace a short record are not covered.
+  Done when: tests exercise both remaining paths and they report through `apply_reporting` like the truncated one.
+  Source: todo OPEN TASKS "Report FLP short-record writes", 2026-11-27 note.
+- [ ] **Note-path Echo stage** [P2] [size:M] - `crates/os-app/src/note_fx.rs:706` has only Arp/Transpose/Chord; HANDOFF.md §6 "What is still open" documents the recipe for the other 14 MIDI FX (one `Stage` variant, its `*Values` + atomics, a branch in `Plugins::set_note_fx`, a params decoder next to `arp_values`). Lemon Echo is the first.
+  Done when: `Stage::Echo` produces delayed repeats from the hosted plugin's parameters, composes in a chain with the other stages, and its tests pass.
+  Source: HANDOFF.md §6.
+- [ ] **Add a Device rack row to the VIEW menu** [P2] [size:S] - `crates/os-app/src/views/menus.rs:331` (`VIEW_ITEMS`) has no Device rack entry (roadmap §1.2). Add it under "Windows" with the Ctrl+R shortcut shown; the click toggles `device_rack_collapsed` (`app.rs:9540`) and the row's tick reflects the state.
+  Done when: a test finds the row, its tick matches `device_rack_collapsed`, and activating it toggles the rack.
+  Source: todo roadmap 2026-11-23 §1.2.
+- [ ] **Reusable HSV colour picker widget** [P2] [size:M] - roadmap §3.1: the palette is limited; build one picker widget (hue control + saturation/value area, arbitrary colours, preview before apply) that the track/clip/mixer colour menus can all open.
+  Done when: the widget exists with a test that dragging it selects an arbitrary RGB and preview-then-apply round-trips; one menu uses it.
+  Source: todo roadmap 2026-11-23 §3.1.
+- [ ] **Apply one colour to all selected playlist tracks** [P2] [size:S] - roadmap §4.1/4.2: Shift+click range selection already exists (`select_track`); the track header's colour entry should apply to every selected track, one undo step.
+  Done when: a test selects a range, applies a colour, all selected tracks change, and undo reverts all of them.
+  Source: todo roadmap 2026-11-23 §4.1-4.2.
+- [ ] **Gradient track colouring** [P2] [size:M] - roadmap §4.3: with several tracks selected, take a start and an end colour and interpolate them across the selection in track order (build on the previous task's selection plumbing).
+  Done when: a test with five tracks and two endpoint colours gets an even interpolation applied in track order, one undo step.
+  Source: todo roadmap 2026-11-23 §4.3.
+- [ ] **Device tile rename** [P2] [size:S] - the tile context menu has no Rename (this file's ACTIVE Dock UI section): add it with the arranger's audio-clip rename UX — inline edit on the device name, written back to the device/plugin state, one undo step.
+  Done when: a test renames a device tile and the name survives a re-open of the rack.
+  Source: todo ACTIVE Dock UI section, "Device rename missing".
+- [ ] **Rack drag-to-reorder** [P2] [size:M] - `RackAct::Reorder` and its test exist but no drag in `crates/os-app/src/views/device_rack.rs` emits it (2026-11-27 note in this file). Wire a tile-header drag (or a dedicated handle) to emit `Reorder`.
+  Done when: dragging a tile past a neighbour reorders the chain and the existing Reorder test still passes.
+  Source: todo Device Rack — Remaining Polish, 2026-11-27 note.
+- [ ] **Remove the dead pin-window machinery** [P3] [size:S] - `Plugins::pin_window` (`crates/os-app/src/plugins.rs:1749`) has no callers and HANDOFF.md §2 says it is "kept only until someone decides to delete it". Delete `pin_window`, the `pinned` chrome-free `size()`/`area_y()` special cases and their test; pop-out and the in-canvas tiles must be unaffected.
+  Done when: grep finds no `pin_window`, `cargo test -p os-app` passes.
+  Source: HANDOFF.md §2.
+- [ ] **Lemon Delay renders its real UI docked** [P3] [size:M] - it still falls back to the generic panel in the tile (this file's ACTIVE section): fix the fit check or provide a compact variant.
+  Done when: the docked tile paints Lemon Delay's own editor (or a compact variant of it) — same test pattern as the other tiles' editor assertions.
+  Source: todo ACTIVE Dock UI section, "Lemon Delay still shows generic UI in the dock".
+- [ ] **Parametric EQ dock slim-down** [P3] [size:M] - remove the right-hand fader bank from the docked EQ view (pop-out keeps it); the FREQ knob row and band handles stay docked (this file's ACTIVE section).
+  Done when: the docked view paints without the fader bank and the popped-out editor still has it.
+  Source: todo ACTIVE Dock UI section, "Parametric EQ dock UI slim-down".
+- [ ] **Rack geometry in prefs/session** [P3] [size:S] - persist the device rack's height and collapsed state in prefs/session (no new `.lemon` data, per this file's Device Rack polish list).
+  Done when: a prefs round-trip test restores both after a restart.
+  Source: todo Device Rack — Remaining Polish.
+- [ ] **Document the Windows GNU build environment** [P3] [size:S] - HANDOFF.md §7's env (RUSTUP_HOME, CARGO_TARGET_DIR, mingw64 PATH, LIBCLANG_PATH, BINDGEN_EXTRA_CLANG_ARGS, RUSTFLAGS, the `+stable-x86_64-pc-windows-gnu` toolchain) is not in README.md's Quick Start, so a fresh Windows machine cannot build from the README alone.
+  Done when: README (or CONTRIBUTING) lists the toolchain and exports and they match HANDOFF §7.
+  Source: HANDOFF.md §7 vs README Quick Start.
+- [ ] **Mixer multi-channel colouring + gradient** [P3] [size:M] - roadmap §5: Shift+click multi-select of mixer channels, one colour applied to all of them, and the same two-endpoint gradient as the playlist — sharing the picker/gradient helpers from the tasks above.
+  Done when: tests select channels, apply one colour, then a gradient, in channel order, one undo step each.
+  Source: todo roadmap 2026-11-23 §5.1-5.3.
+- [ ] **In-app changelog panel (zero network)** [P3] [size:M] - this file's Import queue "Community" item 1: compile-time bundled JSON changelog + a simple panel. No HTTP, no credentials.
+  Done when: the panel lists the bundled entries and a test parses the bundled JSON.
+  Source: todo Import queue, "Community feature voting" item 1.
+- [ ] **.als reader spike** [P3] [size:M] - Interop queue: Ableton Live sets are gzip+XML. Build a minimal format-level reader against a hand-made gzip XML fixture (tempo, track names, clip names), citing abletoolz/dawtool as format references only (clean-room).
+  Done when: a test reads a fixture's tempo and track names into a struct, and a short doc records the format notes.
+  Source: todo Interop research queue, "Read .als".
+- [ ] **Record knob automation into clips, first slice** [P3] [size:L] - In-flight list: "record into automation clips (clip curves + LFO exist)". First slice only: a knob drag on a mixer track during playback records into that track's automation clip.
+  Done when: a test drags a knob during playback and the clip gains matching points, one undo step.
+  Source: todo In flight / partial, "Automation".
 
 ## P0 - data loss and broken build
 
@@ -57,10 +124,11 @@ From the 2026-11-27 audit at `351533d8`. Work top-down. Line numbers are from th
   Done when: a search shows no creation path, and the ticked operator-node entry below says model-only.
   Source: audit 2026-11-27.
   2026-11-27: model-only. A search of the code found no UI or command that creates Math, Polynomial, Quantize, Map or Slew.
-- [!] **FreqBat is not built** [P2] [size:M] - `plugins/freqbat` is not a member of the root `Cargo.toml`, and a search of the manifests found no reference to it, so the workspace does not compile or test it. Add it, fix compile errors, run its tests, update notices.
+- [ ] **FreqBat is not built** [P2] [size:M] - `plugins/freqbat` is not a member of the root `Cargo.toml`, and a search of the manifests found no reference to it, so the workspace does not compile or test it. Add it, fix compile errors, run its tests, update notices.
   Done when: `cargo test -p freqbat` passes and CI builds it.
   Source: audit 2026-11-27.
   2026-11-27: tried adding it to the workspace; 14 compile errors in the lib test build. Its editor uses `os_ui` types and `Editor` methods that do not exist, so it needs a new editor (owner decision: rewrite, build without an editor, or drop).
+  2026-11-29: un-parked — recommended: build without an editor (drop the stale editor code, keep the DSP and its tests in the workspace, wire a new editor later). Take that path unless the owner says otherwise.
 
 ## P2 - older findings and housekeeping
 
