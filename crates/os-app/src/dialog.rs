@@ -160,8 +160,6 @@ pub enum Next {
     Revert(PathBuf),
     /// FILE ▸ New from template ▸: a new project from this template file (None: Empty).
     Template(Option<PathBuf>),
-    /// New from template ▸ Linear: the built-in Linear-mode template (`crate::templates::LINEAR`).
-    LinearTemplate,
 }
 
 /// A dialog's answer.

@@ -75,7 +75,6 @@ pub fn events(s: &State, plugins: &Plugins) -> Vec<Event> {
     v.push(track_locks(s));
     v.push(note_locks(s));
     v.push(linear_tracks(s));
-    v.push(linear_mode(s));
     // The lanes only when there are any: Classic mode's file has none (zero change).
     if !s.project.auto_lanes.is_empty() {
         v.push(lane_bindings(s));
@@ -635,9 +634,6 @@ pub fn apply(s: &mut State, plugins: &mut Plugins, file: &FlpFile) {
         return;
     }
     let read = |id| lemon::data(file, id).filter(|d| d.first() == Some(&LAYOUT));
-    if let Some(&on) = read(lemon::LINEAR_MODE).as_deref().and_then(|d| d.get(1)) {
-        s.project.linear_mode = on != 0;
-    }
     // The modulation system's persistent device/owner identity registry (M0, K.2/K.3) and its graph (M1): the graph
     // names parameters by the ids the registry holds, so they are read together.
     if let Some(d) = read(lemon::OWNER_IDS) {
@@ -660,6 +656,7 @@ pub fn apply(s: &mut State, plugins: &mut Plugins, file: &FlpFile) {
     if let Some(d) = read(lemon::LANE_BINDINGS) {
         s.project.auto_lanes = read_lane_bindings(&d[1..], &s.project.tracks);
     }
+    crate::playlist::home_automation(s);
     if let Some(d) = read(lemon::LAUNCHER) {
         read_launcher(s, &d[1..]);
     }
@@ -754,8 +751,7 @@ pub fn apply(s: &mut State, plugins: &mut Plugins, file: &FlpFile) {
 /// the Change icon... list ([`crate::playlist::legacy project_ICONS`]). A `.lemon` file's icons are its own (event 193), so a
 /// choice made in Lemon Studio, None too, wins over the numbers its legacy project events keep.
 fn from_flp(s: &mut State) {
-    // A legacy project has no Linear mode of its own: the defaults (Classic, no tracks), as for every other kind of state.
-    s.project.linear_mode = false;
+    // A legacy project has no tracks of its own, as for every other kind of state.
     s.project.tracks.clear();
     let p = &s.project;
     let channels = p.channels.iter().filter_map(|c| Some((IconOwner::Channel(c.id.0), crate::playlist::flp_icon(c.rack.icon)?)));
@@ -994,11 +990,6 @@ fn linear_tracks(s: &State) -> Event {
         b.extend_from_slice(&t.channel.unwrap_or(NO_CHANNEL).to_le_bytes());
     }
     Event::new(lemon::TRACKS, Value::var(b))
-}
-
-/// [`lemon::LINEAR_MODE`]: one u8, 1 = Linear mode.
-fn linear_mode(s: &State) -> Event {
-    Event::new(lemon::LINEAR_MODE, Value::var([LAYOUT, u8::from(s.project.linear_mode)]))
 }
 
 /// Reads [`lemon::LANE_BINDINGS`]'s payload after its layout byte, resolving each lane's track position against the
@@ -1287,7 +1278,7 @@ mod tests {
         want.extend([lemon::SCALING, lemon::CHANNEL_CHECKS]);
         #[cfg(any(windows, target_os = "macos"))]
         want.push(lemon::KEY_FOCUS);
-        want.extend([lemon::TRACK_LOCKS, lemon::NOTE_LOCKS, lemon::TRACKS, lemon::LINEAR_MODE]);
+        want.extend([lemon::TRACK_LOCKS, lemon::NOTE_LOCKS, lemon::TRACKS]);
         // The modulation identity registry (M0) and its graph (M1): a state with devices in it has owners, and
         // both are written (an empty graph too, so a saved file holds no stale one).
         want.push(lemon::OWNER_IDS);
@@ -1389,14 +1380,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
-    /// The linear mode's tracks (event 203) and mode flag (204) come back through a .lemon file (ids are not saved, so
+    /// The tracks (event 203) come back through a .lemon file (ids are not saved, so
     /// they are new); a legacy project saved from the same state has none of them.
     #[test]
-    fn linear_mode_and_its_tracks_round_trip_through_a_lemon_file() {
+    fn tracks_round_trip_through_a_lemon_file() {
         let d = dir("linear");
         let (lemon_path, flp_path) = (d.join("Linear.lemon"), d.join("Linear.flp"));
         let mut app = with_state();
-        app.state.project.linear_mode = true;
         app.state.project.tracks.push(os_model::Track::new(os_model::TrackKind::Midi, 3, 5, Some(1)));
         app.state.project.tracks.push(os_model::Track::new(os_model::TrackKind::Bus, 0, 6, None));
         app.save_to(lemon_path.clone());
@@ -1408,12 +1398,10 @@ mod tests {
         want.extend_from_slice(&midi);
         want.extend_from_slice(&bus);
         assert_eq!(lemon::data(&file, lemon::TRACKS), Some(want));
-        assert_eq!(lemon::data(&file, lemon::LINEAR_MODE), Some(vec![LAYOUT, 1]));
         let mut back = App::new(None);
         back.open(lemon_path.clone());
         assert!(!back.unsaved(), "the tracks read back are the saved ones");
         let s = &back.state;
-        assert!(s.project.linear_mode);
         assert_eq!(s.project.tracks.len(), 2);
         assert_eq!(
             (s.project.tracks[0].kind, s.project.tracks[0].playlist_lane, s.project.tracks[0].mixer_strip, s.project.tracks[0].channel),
@@ -1423,7 +1411,7 @@ mod tests {
         // The legacy project saved from the same state: no tracks and no Linear mode (a legacy project has no place for them).
         back.open(flp_path);
         let s = &back.state;
-        assert!(!s.project.linear_mode && s.project.tracks.is_empty());
+        assert!(s.project.tracks.is_empty());
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -1435,7 +1423,6 @@ mod tests {
         let d = dir("lanes");
         let (lemon_path, flp_path) = (d.join("Lanes.lemon"), d.join("Lanes.flp"));
         let mut app = with_state();
-        app.state.project.linear_mode = true;
         app.state.project.tracks.push(os_model::Track::new(os_model::TrackKind::Midi, 1, 5, Some(0)));
         let tgt = os_model::target::channel(0, os_model::target::CHANNEL_VOLUME);
         let gone = os_model::target::mixer(9, os_model::target::MIXER_VOLUME);

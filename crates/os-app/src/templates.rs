@@ -20,12 +20,9 @@ use std::path::{Path, PathBuf};
 use crate::app::App;
 use crate::prefs;
 
-/// The built-in template: Lemon Studio's own new project (one Lemon Sampler channel, 130 BPM).
+/// The built-in template: a new project with one MIDI track (a Lemon Sampler channel) and one audio track, 130 BPM
+/// (`App::empty_project`).
 pub const EMPTY: &str = "Empty";
-/// The built-in Linear-mode template (spec: model/track-model.md §2): a new project in Linear mode, with the Track
-/// layer's starter tracks (`App::linear_project`). Not a file in the Templates folder: it is always offered, before
-/// the user's templates.
-pub const LINEAR: &str = "Linear";
 /// The settings file's keys: the picked template and the project file last opened or saved.
 const TEMPLATE_KEY: &str = "default_template";
 const LAST_KEY: &str = "last_project";
@@ -86,11 +83,9 @@ pub fn scan(root: &Path) -> Vec<Category> {
         .collect()
 }
 
-/// The pick as kept: "Linear", "Empty" or "<category>/<template>".
+/// The pick as kept: "Empty" or "<category>/<template>".
 fn picked() -> String {
-    // Linear mode is the default template (spec: model/track-model.md §2 "Make it the default project mode"): a new
-    // session and FILE ▸ New open the built-in Linear project until another template is picked.
-    prefs::text(TEMPLATE_KEY).unwrap_or_else(|| LINEAR.into())
+    prefs::text(TEMPLATE_KEY).unwrap_or_else(|| EMPTY.into())
 }
 
 /// The picked template's file; `None` for Empty, and for a template whose file has gone (FILE ▸ New gives Empty then).
@@ -103,9 +98,6 @@ pub fn file() -> Option<PathBuf> {
 /// The Default template as the FILE menu ("New (<name>)") and the settings page show it: the template's name, or
 /// "Empty".
 pub fn name() -> String {
-    if picked() == LINEAR {
-        return LINEAR.into();
-    }
     match file() {
         Some(_) => picked().split_once('/').map_or_else(|| EMPTY.into(), |(_, n)| n.to_string()),
         None => EMPTY.into(),
@@ -137,9 +129,8 @@ impl App {
     /// then a submenu per category, the current pick marked.
     pub(crate) fn template_menu(&mut self, x: f32, y: f32) {
         use crate::playlist::{Cmd, Mark, PItem, Popup};
-        let now = if picked() == LINEAR { LINEAR.into() } else if file().is_some() { picked() } else { EMPTY.into() };
+        let now = if file().is_some() { picked() } else { EMPTY.into() };
         let mut items = vec![
-            PItem::new(LINEAR, Cmd::Template(LINEAR.into())).mark(Mark::Radio(now == LINEAR)),
             PItem::new(EMPTY, Cmd::Template(EMPTY.into())).mark(Mark::Radio(now == EMPTY)),
         ];
         for c in root().map(|r| scan(&r)).unwrap_or_default() {
@@ -168,12 +159,6 @@ impl App {
     /// FILE ▸ New with a template picked: the template opened as an untitled project (Save asks where), started now.
     /// False for Empty and when the template does not load: the caller makes the built-in project then.
     pub(crate) fn new_from_template(&mut self) -> bool {
-        // The built-in Linear template has no file: it is the project `linear_project` makes (spec:
-        // model/track-model.md §2).
-        if picked() == LINEAR {
-            self.linear_project();
-            return true;
-        }
         let Some(path) = file() else { return false };
         self.new_from_file(&path, &name())
     }
@@ -205,6 +190,7 @@ impl App {
     pub fn startup_project(&mut self) {
         let choice = prefs::index(&prefs::STARTUP_PROJECT);
         if choice == 0 {
+            self.empty_project();
             return;
         }
         if choice == 2 {
@@ -215,7 +201,7 @@ impl App {
                 }
             }
         }
-        self.new_from_template();
+        self.new_project();
     }
 }
 
@@ -251,53 +237,32 @@ mod tests {
         dir
     }
 
-    /// The built-in Linear-mode template (spec: model/track-model.md §2): offered in New from template ▸ after the
-    /// user's categories, its project is Linear with the starter tracks (one MIDI track with its instrument channel,
-    /// one audio track), linked to their lanes and strips; every other template stays Classic.
+    /// The built-in "Empty" project: one MIDI track with its instrument channel and one audio track, linked to their
+    /// lanes and strips, with nothing else on a lane. FILE ▸ New and both built-in startup choices make it.
     #[test]
-    fn the_linear_template_starts_a_linear_project() {
+    fn the_built_in_project_starts_with_a_midi_and_an_audio_track() {
         let mut app = App::new(None);
         let items = crate::project_files::template_items(&app.state);
         assert_eq!(items.last().map(|i| i.label.as_ref()), Some(EMPTY));
-        let linear = items.iter().find(|i| i.label == LINEAR).expect("the Linear row");
-        assert_eq!(linear.cmd, Cmd::NewTemplate(LINEAR.into()));
-        // The startup default (Startup project = "Default template", the default pick "Linear"): the Linear project;
-        // the plain built-in project stays Classic, and so does every other template and project file.
-        let fresh = App::new(None);
-        assert!(!fresh.state.project.linear_mode && fresh.state.project.tracks.is_empty());
-        let mut started = App::new(None);
-        started.startup_project();
-        assert!(started.state.project.linear_mode && !started.state.project.tracks.is_empty());
-        // FILE ▸ New with the pick "Linear": the Linear project.
-        app.set_template(LINEAR);
-        assert_eq!(name(), "Linear");
-        assert!(app.new_from_template());
+        app.set_template(EMPTY);
+        assert!(!app.new_from_template());
+        app.startup_project();
         assert_eq!(app.state.path, None, "untitled: Save asks where");
-        assert!(app.state.project.linear_mode);
+        assert!(!app.unsaved());
         let tracks = app.state.project.tracks.clone();
         assert_eq!(tracks.len(), 2);
         assert_eq!(tracks[0].kind, os_model::TrackKind::Midi);
         assert_eq!(tracks[1].kind, os_model::TrackKind::Audio);
         assert!(tracks[1].channel.is_none(), "an audio track holds no channel");
-        // The pieces are linked: the lane carries the name, the MIDI channel is routed to its strip.
-        for t in &tracks {
-            let tr = crate::playlist::track_info(&app.state, t.playlist_lane as u16 - 1).unwrap();
-            assert_eq!(tr.name.as_deref().map(str::to_owned), Some(format!("{} 1", if t.kind == os_model::TrackKind::Midi { "MIDI" } else { "Audio" })));
-            assert!(!crate::track_links::link(&app.state, t.playlist_lane as u16 - 1).is_none(), "the lane is linked");
+        assert_eq!(app.state.project.channels.len(), 1, "no channel without a track");
+        for (row, t) in tracks.iter().enumerate() {
+            assert_eq!(t.playlist_lane, row as u32 + 1);
+            assert!(!crate::track_links::link(&app.state, row as u16).is_none(), "the lane is linked");
         }
         let midi = &tracks[0];
-        assert_eq!(app.state.project.channels.last().unwrap().mixer_track, midi.mixer_strip);
-        assert_eq!(crate::track_links::link(&app.state, midi.playlist_lane as u16 - 1), os_model::TrackLink::instrument(midi.channel.unwrap()));
-        assert_eq!(crate::track_links::link(&app.state, tracks[1].playlist_lane as u16 - 1), os_model::TrackLink::audio(tracks[1].mixer_strip));
-        // The Default template pick goes through too (FILE ▸ New, the Startup project).
-        let mut a = App::new(None);
-        a.set_template(LINEAR);
-        a.startup_project();
-        assert!(a.state.project.linear_mode);
-        // Empty stays the built-in Classic project.
-        app.set_template(EMPTY);
-        app.menu_item(0, crate::views::menus::FILE_NEW);
-        assert!(!app.state.project.linear_mode && app.state.project.tracks.is_empty());
+        assert_eq!(app.state.project.channels[0].mixer_track, midi.mixer_strip);
+        assert_eq!(crate::track_links::link(&app.state, 0), os_model::TrackLink::instrument(midi.channel.unwrap()));
+        assert_eq!(crate::track_links::link(&app.state, 1), os_model::TrackLink::audio(tracks[1].mixer_strip));
     }
 
     /// The FILE menu's first item as painted.
@@ -319,14 +284,14 @@ mod tests {
             ]
         );
         let mut app = App::new(None);
-        assert_eq!((name(), file_new_label()), ("Linear".to_string(), "New (Linear)".to_string()));
+        assert_eq!((name(), file_new_label()), ("Empty".to_string(), "New (Empty)".to_string()));
         app.open_settings(settings::GENERAL);
         app.act(Action::Settings(SAct::Combo(settings::DEFAULT_TEMPLATE, 10.0, 20.0)));
         let p = app.state.playlist.popup.as_ref().expect("the tree");
         let labels: Vec<&str> = p.items.iter().map(|i| i.label.as_ref()).collect();
-        assert_eq!(labels, ["Linear", "Empty", "Minimal", "Utility"]);
-        assert_eq!((p.items[0].mark, p.items[2].children.len()), (Mark::Radio(true), 1));
-        let pick = p.items[2].children[0].clone();
+        assert_eq!(labels, ["Empty", "Minimal", "Utility"]);
+        assert_eq!((p.items[0].mark, p.items[1].children.len()), (Mark::Radio(true), 1));
+        let pick = p.items[1].children[0].clone();
         assert_eq!((pick.label.as_ref(), &pick.cmd), ("Basic with limiter", &Cmd::Template("Minimal/Basic with limiter".into())));
         let msg = crate::playlist::run(&mut app, pick.cmd);
         assert_eq!(msg.as_deref(), Some("Default template: Basic with limiter"));
@@ -334,7 +299,7 @@ mod tests {
         assert_eq!(file_new_label(), "New (Basic with limiter)");
         app.act(Action::Settings(SAct::Combo(settings::DEFAULT_TEMPLATE, 10.0, 20.0)));
         let p = app.state.playlist.popup.as_ref().unwrap();
-        assert_eq!((p.items[1].mark, p.items[2].children[0].mark), (Mark::Radio(false), Mark::Radio(true)));
+        assert_eq!((p.items[0].mark, p.items[1].children[0].mark), (Mark::Radio(false), Mark::Radio(true)));
         // The settings page's combo shows the pick and opens the tree.
         if let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) {
             app.state.playlist.popup = None;
@@ -404,7 +369,7 @@ mod tests {
         prefs::set_choice(&prefs::STARTUP_PROJECT, 0);
         let mut a = App::new(None);
         a.startup_project();
-        assert_eq!((a.state.tempo, a.state.project.channels.len(), a.state.file.is_none()), (130.0, 5, true), "App::new's project, untouched");
+        assert_eq!((a.state.tempo, a.state.project.tracks.len(), a.state.file.is_none()), (130.0, 2, true), "the built-in project");
         // Last used project: the file last saved; a backup copy does not count.
         prefs::set_choice(&prefs::STARTUP_PROJECT, 2);
         let song = dir.join("Last.flp");
@@ -431,5 +396,24 @@ mod tests {
         a.startup_project();
         assert_eq!((a.state.tempo, a.state.path.clone()), (140.0, None));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod shot {
+    #[test]
+    fn shot() {
+        let mut c = os_ui::Canvas::new(1920, 1080, 1.0).unwrap();
+        let mut app = crate::app::App::new(None);
+        app.empty_project();
+        let strip = app.state.project.tracks[1].mixer_strip;
+        app.state.playlist.range = Some((0, 1536));
+        crate::playlist::create_automation(&mut app.state, os_model::target::mixer(strip, os_model::target::MIXER_VOLUME), "Audio 1 volume", 0.6);
+        crate::playlist::create_automation(&mut app.state, os_model::target::TEMPO, "Tempo", 0.3);
+        app.state.playlist.range = None;
+        app.state.playlist.sel.clear();
+        app.state.screen = (1920.0, 1080.0);
+        app.paint(&mut c, None);
+        c.pixmap.save_png("Z:/Temp/claude/f30779337f2b655f/8cfe0175-8eab-4512-8662-f93878e6fb61/scratchpad/auto2.png").unwrap();
     }
 }

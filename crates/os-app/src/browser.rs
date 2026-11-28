@@ -1051,7 +1051,7 @@ pub fn row_menu(s: &crate::app::State, row: &view::Row) -> Vec<PItem> {
             // track has one, a new linked channel when not), not an orphan channel in the channel rack.
             // Classic mode keeps the channel-rack add.
             let cmd = match crate::track_links::lane_track(s, s.playlist.track)
-                .filter(|tr| tr.kind == os_model::TrackKind::Midi && s.project.linear_mode)
+                .filter(|tr| tr.kind == os_model::TrackKind::Midi )
             {
                 Some(tr) => match tr.channel.and_then(|ch| s.project.channels.iter().position(|c| c.index == ch)) {
                     Some(row) => Cmd::Plugin(crate::plugin_menu::PlugCmd::Replace { index: index, row }),

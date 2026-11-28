@@ -2486,6 +2486,13 @@ pub fn run(app: &mut App, c: MCmd) -> Option<String> {
         crate::container::store_members(&mut app.state.project, &app.plugins);
         return app.wrap_slot(slot, all);
     }
+    if let MCmd::Delete(n) = c
+        && let Some(lane) = app.state.project.tracks.iter().find(|t| t.mixer_strip == n && t.playlist_lane > 0).map(|t| t.playlist_lane as u16)
+    {
+        let msg = crate::playlist::delete_lane(&mut app.state, lane - 1);
+        app.state.message = msg.clone().or(app.state.message.take());
+        return msg;
+    }
     // The commands that change the project are one undo step each (spec: roadmap/control-plane.md).
     let step = match &c {
         MCmd::Color(..) | MCmd::RandomColor(_) | MCmd::GradientColor | MCmd::AutoColorGroup(_) => Some("Mixer track color"),

@@ -184,6 +184,11 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
     let mut visible = Vec::new();
     let mut row = g.track_at(grid.y);
     while row <= TRACKS && g.y_of(row) < grid.bottom() {
+        // A lane no track owns has no height (`playlist::Rows`).
+        if g.rows.height(row) <= 0.0 {
+            row += 1;
+            continue;
+        }
         visible.push(row);
         row += 1;
     }
@@ -208,8 +213,9 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
         // The lane bands: darker panels, each followed by its gap (which a theme's line strength may make
         // see-through).
         for b in g.rows.lanes(row) {
-            ui.c.fill_rect(Rect::new(grid_x, b.y0, grid_w, b.h - gap_of(row)), t.grid.mix(t.grid_gap, 0.35));
-            ui.c.fill_rect(Rect::new(grid_x, b.y0 + b.h - gap_of(row), grid_w, gap_of(row)), t.grid);
+            let y = g.band_y(b);
+            ui.c.fill_rect(Rect::new(grid_x, y, grid_w, b.h - gap_of(row)), t.grid.mix(t.grid_gap, 0.35));
+            ui.c.fill_rect(Rect::new(grid_x, y + b.h - gap_of(row), grid_w, gap_of(row)), t.grid);
         }
     }
     let start = pl::start_marker(s);
@@ -225,7 +231,7 @@ pub fn paint(ui: &mut Ui, s: &State, r: Rect, f: &FrameInfo) {
         // lane band's own (spec: model/track-model.md §6b).
         ui.c.fill_rect(Rect::new(grid_x, y + main_h - gap_of(row), grid_w, gap_of(row)), t.pl_line(t.grid_gap));
         for b in g.rows.lanes(row) {
-            ui.c.fill_rect(Rect::new(grid_x, b.y0 + b.h - gap_of(row), grid_w, gap_of(row)), t.pl_line(t.grid_gap));
+            ui.c.fill_rect(Rect::new(grid_x, g.band_y(b) + b.h - gap_of(row), grid_w, gap_of(row)), t.pl_line(t.grid_gap));
         }
     }
     // Time selection (§7).
@@ -1148,14 +1154,14 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
     let (y, h) = (g.y_of(row), g.rows.height(row));
     let strip = g.rows.strip(row);
     if row == TRACKS {
-        // The Unassigned group's header (Linear mode, spec: model/track-model.md §6b): the band below the last track
+        // The Master band's header ( spec: model/track-model.md §6b): the band below the last track
         // holds the automation clips whose target no track owns.
         let hr = Rect::new(x, y, w, (h - 3.0).max(8.0));
         let base = t.track_header.shade(-0.15);
         let (top, bottom) = if super::lemon(ui) { (base, base) } else { (base.shade(0.035), base.shade(-0.03)) };
         ui.c.fill_rect_gradient(hr, top, bottom, 4.0);
-        ui.hit(hr, Action::PlHeader(row), "Unassigned: automation clips whose target no track owns");
-        ui.c.text_clip(Font::new(14), hr.x + 4.0, hr.y + 2.0, hr.w - 8.0, t.text_faint, "Unassigned");
+        ui.hit(hr, Action::PlHeader(row), "Master: tempo and other automation that belongs to no track");
+        ui.c.text_clip(Font::new(14), hr.x + 4.0, hr.y + 2.0, hr.w - 8.0, t.text_faint, "Master");
         return;
     }
     let leader = pl::group_track(s, row);
@@ -1246,7 +1252,7 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
         name_x += 14.0;
     }
     // The badge's hint names the menu the kinds are chosen in (Linear mode's Insert ▸, spec: model/track-model.md §5).
-    let mode_menu = if s.project.linear_mode { "Insert in the menu" } else { "Track mode in the menu" };
+    let mode_menu = if pl::is_bound(s) { "Insert in the menu" } else { "Track mode in the menu" };
     if let Some((letter, kind)) = badge {
         let hint = match kind {
             "A" => format!("Audio track: its audio clips play through its mixer track ({mode_menu})"),
@@ -1329,7 +1335,7 @@ fn header(ui: &mut Ui, s: &State, g: &PGeom, row: u16, x: f32, w: f32) {
     for b in g.rows.lanes(row) {
         let base = base.shade(-0.18);
         let (top, bottom) = if super::lemon(ui) { (base, base) } else { (base.shade(0.035), base.shade(-0.03)) };
-        let lr = Rect::new(bx, b.y0, bw, (b.h - 2.0).max(8.0));
+        let lr = Rect::new(bx, g.band_y(b), bw, (b.h - 2.0).max(8.0));
         ui.c.fill_rect_gradient(lr, top, bottom, k);
         ui.hit(lr, Action::PlHeader(row), "Automation lane (right-click: menu)");
         let a = Rect::new(lr.right() - 16.0, lr.y + 1.0, 14.0, 14.0);

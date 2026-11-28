@@ -1062,7 +1062,7 @@ fn track_create_set_and_delete_undo_and_redo() {
     let (lane, insert, channel) = {
         let t = a.state.project.tracks.last().unwrap().clone();
         assert_eq!(t.kind, os_model::TrackKind::Midi);
-        assert!(a.state.project.linear_mode);
+        assert!(!a.state.project.tracks.is_empty());
         (t.playlist_lane, t.mixer_strip, t.channel.unwrap())
     };
     assert_eq!(a.state.project.arrangements[0].tracks[lane as usize - 1].link, os_model::TrackLink::instrument(channel));

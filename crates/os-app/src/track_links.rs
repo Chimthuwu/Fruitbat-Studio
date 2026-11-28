@@ -49,9 +49,29 @@ fn set_link(s: &mut State, t: u16, l: TrackLink) {
 /// original skipped a track it had named, one with clips and linked ones).
 pub fn new_track(s: &State) -> Option<u16> {
     (0..TRACKS).find(|&t| {
+        if crate::playlist::is_bound(s) && crate::playlist::has_track(s, t) {
+            return false;
+        }
         let info = track_info(s, t);
         info.is_none_or(|x| x.link.is_none() && x.name.as_deref().is_none_or(str::is_empty)) && !clips(s).iter().any(|c| c.track == t)
     })
+}
+
+/// Lane `t`, which no track owns, becomes an audio track on mixer insert `mixer` (`None`: one added for it). Returns
+/// the insert. The caller's undo step must hold the whole project.
+pub fn bind_audio_lane(s: &mut State, t: u16, mixer: Option<u16>, name: Option<String>) -> u16 {
+    let m = mixer.unwrap_or_else(|| crate::mixer::add_track(s, None));
+    for a in &mut s.project.arrangements {
+        if let Some(tr) = a.tracks.get_mut(usize::from(t)) {
+            tr.link = TrackLink::audio(m);
+        }
+    }
+    if let Some(tr) = arr_mut(s).tracks.get_mut(usize::from(t)) {
+        tr.link = TrackLink::audio(m);
+        tr.name = name;
+    }
+    s.project.tracks.push(os_model::Track::new(os_model::TrackKind::Audio, u32::from(t) + 1, m, None));
+    m
 }
 
 /// The audio tracks linked to mixer track `m`, top to bottom.
@@ -76,7 +96,7 @@ pub fn can_assign_audio(s: &State, mixers: &[u16]) -> bool {
 }
 
 pub fn can_unassign_audio(s: &State, mixers: &[u16]) -> bool {
-    mixers.iter().any(|&m| !audio_tracks_of(s, m).is_empty())
+    !crate::playlist::is_bound(s) && mixers.iter().any(|&m| !audio_tracks_of(s, m).is_empty())
 }
 
 /// Assign to new Audio track(s) (spec: ui/mixer-track-commands.md §8): each of `mixers` without an audio track gets
@@ -87,8 +107,12 @@ pub fn assign_audio(s: &mut State, mixers: &[u16]) -> Option<String> {
     for m in todo {
         let Some(t) = new_track(s) else { break };
         let name = crate::mixer::name(s, m);
+        let bound = crate::playlist::is_bound(s);
         set_link(s, t, TrackLink::audio(m));
         arr_mut(s).tracks[usize::from(t)].name = Some(name);
+        if bound {
+            s.project.tracks.push(os_model::Track::new(os_model::TrackKind::Audio, u32::from(t) + 1, m, None));
+        }
         made.push((m, t));
     }
     let &(m, t) = made.last()?;
@@ -139,7 +163,12 @@ pub fn assign_instrument(s: &mut State, rows: &[usize]) -> Option<String> {
     let mut made = Vec::new();
     for r in todo {
         let Some(t) = new_track(s) else { break };
+        let bound = crate::playlist::is_bound(s);
         link_instrument(s, t, r);
+        if bound && let Some(c) = s.project.channels.get(r) {
+            let (index, strip) = (c.index, c.mixer_track);
+            s.project.tracks.push(os_model::Track::new(os_model::TrackKind::Midi, u32::from(t) + 1, strip, Some(index)));
+        }
         made.push((r, t));
     }
     let &(r, t) = made.last()?;
@@ -232,7 +261,7 @@ pub fn new_instrument(app: &mut crate::app::App, t: u16, index: usize) -> Option
         // Linear mode: the new channel plays the track's own strip (its FX chain, its fader) and the track
         // model's channel mirror follows, like the control plane's track_create keeps them — never an orphan
         // channel in the channel rack.
-        if app.state.project.linear_mode {
+        if crate::playlist::is_bound(&app.state) {
             let lane1 = u32::from(t) + 1;
             let index = app.state.project.channels.get(row).map(|c| c.index);
             let nm = crate::rack::channel_name(&app.state, row);
@@ -286,7 +315,6 @@ pub fn insert_linear(s: &mut State, m: Mode) -> Option<String> {
 /// The playlist lane (0-based row) the [`os_model::Track`] `tr` owns, `None` on a bus: Linear mode's track headers
 /// read their strip's data through it (spec: model/track-model.md §5).
 pub fn lane_track(s: &State, row: u16) -> Option<&os_model::Track> {
-    s.project.linear_mode.then_some(())?;
     s.project.tracks.iter().find(|tr| tr.playlist_lane > 0 && tr.playlist_lane as u16 == row + 1)
 }
 
@@ -296,8 +324,11 @@ pub fn lane_track(s: &State, row: u16) -> Option<&os_model::Track> {
 /// channel or strip belongs to no track's record.
 pub fn track_of_target(s: &State, tgt: u32) -> Option<usize> {
     let p = &s.project;
-    let at_channel = |ch: u16| p.tracks.iter().position(|t| t.channel == Some(ch));
-    let at_strip = |m: u16| p.tracks.iter().position(|t| t.mixer_strip == m);
+    let at_strip = |m: u16| p.tracks.iter().position(|t| t.mixer_strip == m && m != 0);
+    // A track's own channel, else (an audio clip's, say) the track whose strip the channel plays into.
+    let at_channel = |ch: u16| {
+        p.tracks.iter().position(|t| t.channel == Some(ch)).or_else(|| p.channel(ch).and_then(|c| at_strip(c.mixer_track)))
+    };
     match os_model::target::decode(tgt) {
         os_model::target::Target::ChannelVolume(ch)
         | os_model::target::Target::ChannelPan(ch)
@@ -343,7 +374,7 @@ pub fn mode_items(s: &State, t: u16, cmd: impl Fn(Mode) -> crate::playlist::Cmd)
     use crate::playlist::{Mark, PItem};
     // Linear mode (spec: model/track-model.md §5 "Insert ▸ Audio Track / MIDI Track"): the one-action inserts replace
     // Track mode's multi-step linking — each makes the track and its pieces together (`insert_linear`).
-    if s.project.linear_mode {
+    if crate::playlist::is_bound(s) {
         return vec![PItem::new("Audio track", cmd(Mode::LinearAudio)), PItem::new("MIDI track", cmd(Mode::LinearMidi))];
     }
     let l = link(s, t);
@@ -388,7 +419,7 @@ pub fn mode_items(s: &State, t: u16, cmd: impl Fn(Mode) -> crate::playlist::Cmd)
 
 /// Whether a clip of `src` may sit on track `t`: an instrument track takes no audio clips.
 pub fn fits(s: &State, src: ClipSource, t: u16) -> bool {
-    !(is_instrument(s, t) && is_audio_source(s, src))
+    crate::playlist::has_track(s, t) && !(is_instrument(s, t) && is_audio_source(s, src))
 }
 
 fn is_audio_source(s: &State, src: ClipSource) -> bool {
@@ -396,14 +427,20 @@ fn is_audio_source(s: &State, src: ClipSource) -> bool {
 }
 
 /// The track an audio clip dropped on `t` over ticks `a..b` goes to: `t`, or for an instrument track the first track
-/// below it that is free over the span and not an instrument track (the original asks first, then does this).
+/// below it that is free over the span and not an instrument track (the original asks first, then does this). With
+/// tracks, a drop under them, or with no audio track below, goes to a free lane, which becomes a new audio track.
 pub fn audio_drop_track(s: &State, t: u16, a: u32, b: u32) -> u16 {
-    if !is_instrument(s, t) {
+    let shown = crate::playlist::has_track(s, t);
+    if shown && !is_instrument(s, t) {
         return t;
     }
-    (t + 1..TRACKS)
-        .find(|&k| !is_instrument(s, k) && !clips(s).iter().any(|c| c.track == k && c.position < b && c.end() > a))
-        .unwrap_or(t)
+    let free = |k: u16| !clips(s).iter().any(|c| c.track == k && c.position < b && c.end() > a);
+    if shown {
+        if let Some(k) = (t + 1..TRACKS).find(|&k| crate::playlist::has_track(s, k) && !is_instrument(s, k) && free(k)) {
+            return k;
+        }
+    }
+    if crate::playlist::is_bound(s) { new_track(s).unwrap_or(t) } else { t }
 }
 
 /// Audio clips `idx` (of the current arrangement) on audio tracks: their channels go to the track's mixer track, as
@@ -645,26 +682,17 @@ mod tests {
 
     /// Linear mode's Insert ▸ (spec: model/track-model.md §5): the menu offers the one-action inserts; one makes the
     /// track and its pieces (lane, strip, channel) together in one atomic undo step, and undo takes all of them back.
-    /// Classic mode's Track mode ▸ is untouched.
     #[test]
     fn linear_insert_makes_the_pieces_together() {
         let mut app = app();
-        app.state.project.linear_mode = true;
+        // The rack shows in a project with tracks.
+        app.state.project.tracks.push(os_model::Track::new(os_model::TrackKind::Bus, 0, 1, None));
         let items = mode_items(&app.state, 0, |m| Cmd::TrackMode(0, m));
         assert_eq!(items.iter().map(|i| i.label.as_ref()).collect::<Vec<_>>(), ["Audio track", "MIDI track"]);
         let menu = crate::playlist::track_menu(&app.state, 0, 0.0, 0.0);
         assert!(menu.items.iter().any(|i| i.label.as_ref() == "Insert"), "linear mode offers the inserts");
         assert!(menu.items.iter().any(|i| i.label.as_ref() == "Auto name and color from first clip"), "and Auto name");
-        // Classic mode's menu keeps Track mode and its items.
-        app.state.project.linear_mode = false;
-        let classic = mode_items(&app.state, 0, |m| Cmd::TrackMode(0, m));
-        assert_eq!(classic[0].label.as_ref(), "Unassigned");
-        assert!(
-            crate::playlist::track_menu(&app.state, 0, 0.0, 0.0).items.iter().any(|i| i.label.as_ref() == "Track mode"),
-            "Classic mode's menu keeps Track mode"
-        );
         // Insert MIDI track: lane, strip and channel together.
-        app.state.project.linear_mode = true;
         let steps = app.state.history.at();
         let inserts = crate::mixer::inserts(&app.state);
         let chans = app.state.project.channels.len();
@@ -683,7 +711,7 @@ mod tests {
         // One atomic undo step: it takes the pieces back together.
         assert_eq!(app.state.history.at(), steps + 1);
         crate::history::undo(&mut app.state);
-        assert!(app.state.project.tracks.is_empty());
+        assert_eq!(app.state.project.tracks.len(), 1, "only the bus from before");
         assert_eq!(crate::mixer::inserts(&app.state), inserts);
         assert_eq!(app.state.project.channels.len(), chans);
         // Insert audio track: a lane and a strip, no channel.
@@ -701,7 +729,6 @@ mod tests {
     fn lane_track_finds_the_rows_track() {
         let mut app = app();
         assert!(lane_track(&app.state, 0).is_none(), "Classic mode has none");
-        app.state.project.linear_mode = true;
         crate::playlist::run(&mut app, Cmd::TrackMode(0, Mode::LinearAudio));
         let t = app.state.project.tracks.last().unwrap().clone();
         assert_eq!(lane_track(&app.state, t.playlist_lane as u16 - 1).unwrap().id, t.id);

@@ -70,7 +70,7 @@ pub fn tile_w(name: &str, body_h: f32) -> f32 {
 
 /// Whether the rack shows at all: Linear mode only (Classic mode = zero visual change).
 pub fn visible(s: &State) -> bool {
-    s.project.linear_mode && s.show_device_rack
+    !s.project.tracks.is_empty() && s.show_device_rack
 }
 
 /// The rack's tallest height: [`MAX_H`], and never more than half the window on a short screen.
@@ -1594,7 +1594,6 @@ mod tests {
     fn app() -> App {
         let mut app = App::new(None);
         app.state.project = crate::app::test_project();
-        app.state.project.linear_mode = true;
         app
     }
 
@@ -1798,18 +1797,18 @@ mod tests {
     /// Only Linear mode shows the rack: Classic mode's height is 0 (no layout change anywhere) and its chain is
     /// never read.
     #[test]
-    fn classic_mode_shows_no_rack() {
+    fn a_project_without_tracks_shows_no_rack() {
         let mut app = app();
         crate::playlist::run(
             &mut app,
             Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
         );
-        app.state.project.linear_mode = false;
+        let tracks = std::mem::take(&mut app.state.project.tracks);
         assert!(!visible(&app.state));
         assert_eq!(height(&app.state), 0.0);
         assert!(rack_chain(&app.state).is_empty());
-        // Linear mode: the panel is there, resizable within its bounds.
-        app.state.project.linear_mode = true;
+        app.state.project.tracks = tracks;
+        // With tracks: the panel is there, resizable within its bounds.
         assert!(visible(&app.state));
         assert!(height(&app.state) >= HEADER_H);
         app.state.device_rack_h = 40.0;
@@ -1846,6 +1845,8 @@ mod tests {
     fn the_strip_shows_every_modulator_and_one_add_tile() {
         let Ok(mut c) = os_ui::Canvas::new(1600, 900, 1.0) else { return };
         let mut app = app();
+        // The rack shows in a project with tracks.
+        app.state.project.tracks.push(os_model::Track::new(os_model::TrackKind::Bus, 0, 1, None));
         app.state.screen = (1600.0, 900.0);
         for kind in [crate::modulation::Kind::Lfo, crate::modulation::Kind::Random, crate::modulation::Kind::Lfo] {
             let slot = app.state.modulation.free_slot().expect("a free slot");
@@ -1878,6 +1879,8 @@ mod tests {
     fn ctrl_m_cycles_the_strip_and_ctrl_r_hides_the_rack() {
         use winit::keyboard::Key;
         let mut app = app();
+        // The rack shows in a project with tracks.
+        app.state.project.tracks.push(os_model::Track::new(os_model::TrackKind::Bus, 0, 1, None));
         app.state.screen = (1600.0, 900.0);
         crate::modulation::act(&mut app, crate::modulation::ModAct::AddKind(0, crate::modulation::Kind::Lfo));
         let rack = crate::device_rack::height(&app.state);
@@ -1952,6 +1955,8 @@ mod tests {
     fn a_modulator_tile_has_a_remove_button() {
         let Ok(mut c) = os_ui::Canvas::new(1600, 900, 1.0) else { return };
         let mut app = app();
+        // The rack shows in a project with tracks.
+        app.state.project.tracks.push(os_model::Track::new(os_model::TrackKind::Bus, 0, 1, None));
         app.state.screen = (1600.0, 900.0);
         crate::modulation::act(&mut app, crate::modulation::ModAct::AddKind(0, crate::modulation::Kind::Lfo));
         let id = app.state.modulation.modulator_at_slot(0).expect("the modulator").id;
@@ -2039,8 +2044,10 @@ mod tests {
     #[test]
     fn linear_template_shows_rack() {
         let mut app = app();
+        // The rack shows in a project with tracks.
+        app.state.project.tracks.push(os_model::Track::new(os_model::TrackKind::Bus, 0, 1, None));
         // Linear mode is on in app() via test_project, but ensure it's true and the rack is open.
-        assert!(app.state.project.linear_mode);
+        assert!(!app.state.project.tracks.is_empty());
         assert!(visible(&app.state));
         assert!(height(&app.state) >= DEFAULT_H.min(max_h(&app.state)));
     }
@@ -3285,6 +3292,8 @@ mod tests {
         use crate::views::device_rack::{MOD_EDITOR_H, MOD_EDITOR_W};
         let Ok(mut c) = os_ui::Canvas::new(MOD_EDITOR_W as u32, MOD_EDITOR_H as u32, 1.0) else { return };
         let mut app = app();
+        // The rack shows in a project with tracks.
+        app.state.project.tracks.push(os_model::Track::new(os_model::TrackKind::Bus, 0, 1, None));
         let id = app.state.modulation.add(os_model::modulation::ModSource::default());
         app.state.mod_editor = Some(id);
         assert!(app.detached_windows().contains(&crate::app::Win::ModEditor));
@@ -3459,6 +3468,8 @@ mod tests {
         use crate::modulation::ModAct;
         let Ok(mut main) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
         let mut app = app();
+        // The rack shows in a project with tracks.
+        app.state.project.tracks.push(os_model::Track::new(os_model::TrackKind::Bus, 0, 1, None));
         let a = app.state.modulation.add(os_model::modulation::ModSource::default());
         let b = app.state.modulation.add(os_model::modulation::ModSource::default());
         app.state.mod_editor = Some(a);

@@ -439,7 +439,7 @@ impl Window {
 
     /// Copies `px` (XRGB rows of `w`) into the window at (0, 0).
     pub fn blit(&self, px: &[u32], w: u32, h: u32) {
-        put(&self.c, self.win, self.gc, self.depth, self.lsb_first, self.max_request, px, w, h);
+        put(&self.c, self.win, self.gc, self.depth, self.lsb_first, self.max_request, &crate::themed(px), w, h);
         let _ = self.c.flush();
     }
 

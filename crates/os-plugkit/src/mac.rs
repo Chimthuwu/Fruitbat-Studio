@@ -841,7 +841,7 @@ impl Window {
 
     /// Copies `px` (XRGB rows of `w`) into the window at (0, 0).
     pub fn blit(&self, px: &[u32], w: u32, h: u32) {
-        show_frame(self.id, px, w, h);
+        show_frame(self.id, &crate::themed(px), w, h);
     }
 
     /// Resizes the window (device px).

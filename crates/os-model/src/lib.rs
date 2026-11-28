@@ -127,11 +127,6 @@ pub struct Project {
     /// the tracks' latency settings are (spec: audio/delay-compensation.md "Automatic"). Not in the legacy project (where the
     /// original keeps it was not found): a `.lemon` file keeps it in its own events (os-app `lemon_state`).
     pub pdc_off: bool,
-    /// Linear mode (Lemon Studio's track model, spec: model/track-model.md): one [`Track`] per instrument, audio or
-    /// bus, whose lane, mixer strip and channel are created together. Not in the legacy project (the original has no such
-    /// mode): a `.lemon` file keeps it in its own events (os-app `lemon_state`). Classic mode, `false`, is the
-    /// default and what every project that is not made Linear stays in.
-    pub linear_mode: bool,
     /// The linear mode's tracks, in creation order (Lemon Studio's design; spec: model/track-model.md). Not in the
     /// legacy project: a `.lemon` file keeps them in its own events (os-app `lemon_state`); an `.flp` round trip loses them,
     /// like the rest of the Lemon-only state.
@@ -2287,7 +2282,16 @@ impl Project {
                 }
             }
         }
-        self.tracks.retain_mut(|t| m(t.mixer_strip).map(|n| t.mixer_strip = n).is_some());
+        // From the last: a track that goes renumbers only those after it, its automation lanes with them.
+        for at in (0..self.tracks.len()).rev() {
+            match m(self.tracks[at].mixer_strip) {
+                Some(n) => self.tracks[at].mixer_strip = n,
+                None => {
+                    self.tracks.remove(at);
+                    self.auto_lane_track_deleted(at as u16);
+                }
+            }
+        }
     }
 
     /// The automation targets follow mixer places that moved ([`target::moved`]: `track` and `slot` give a place's new
@@ -2303,6 +2307,7 @@ impl Project {
             p.controls.retain_mut(|c| moved(&mut c.kind));
         }
         self.init_controls.retain_mut(|c| moved(&mut c.target));
+        self.auto_lanes.retain_mut(|l| moved(&mut l.target));
         self.controller_links.retain_mut(|l| {
             let mut t = l.target();
             if !moved(&mut t) {

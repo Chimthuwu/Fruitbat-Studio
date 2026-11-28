@@ -742,7 +742,7 @@ pub fn image(
     // The native editors' own painters use the fixed Lemon plugin palette (their windows are Lemon-branded), so
     // recolour the rendered pixels through the active theme: greys take its surfaces / text roles, the Lemon
     // accent takes its accent. This is what makes the device's panels, wells and highlights follow the theme.
-    retint(&mut e.buf, &os_theme::current());
+    os_plugkit::retint(&mut e.buf, &os_theme::current());
     // The drum's shown half, cropped out of the whole it painted.
     let (px, w, h, hits) = if drum {
         drum_half(&e.buf, dw, scale, flip, hits)
@@ -759,34 +759,6 @@ pub fn image(
         e.view = view;
     }
     Some(e.image.clone())
-}
-
-/// Recolours a rendered editor image through `t`: chromatic pixels (the Lemon accent and its lit states) take the
-/// theme accent, light neutrals its text, dark neutrals its surfaces. Lightness is kept, so the editor's hierarchy
-/// and anti-aliasing survive.
-fn retint(px: &mut [u32], t: &os_theme::Palette) {
-    // The editors are mostly runs of one colour, and a drag redraws the tile every frame: a run is converted once.
-    let mut last: Option<(u32, u32)> = None;
-    for p in px {
-        if let Some((from, to)) = last {
-            if *p == from {
-                *p = to;
-                continue;
-            }
-        }
-        let from = *p;
-        let c = os_theme::Color::rgb(*p);
-        let (_, s, l) = c.hsl();
-        let out = if s > 0.18 {
-            t.a(*p)
-        } else if l > 0.45 {
-            t.tx(*p)
-        } else {
-            t.s(*p)
-        };
-        *p = (u32::from(out.r) << 16) | (u32::from(out.g) << 8) | u32::from(out.b);
-        last = Some((from, *p));
-    }
 }
 
 /// A fingerprint of the tile's own editor state that the editor draws with: its page and sub-page, the drum's pad and
@@ -1114,7 +1086,7 @@ mod tests {
         let fl = os_theme::FlTheme::parse(text);
         let p = os_theme::design::palette(os_theme::Design::Lemon, Some(&fl));
         let mut px = [0x00333333, 0x00ffe066];
-        retint(&mut px, &p);
+        os_plugkit::retint(&mut px, &p);
         assert_ne!(px[0], 0x00333333, "a grey panel takes the theme's surface hue");
         assert_ne!(px[1], 0x00ffe066, "the Lemon accent takes the theme's accent");
     }

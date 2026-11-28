@@ -42,7 +42,7 @@ pub struct Docks {
 /// its separator are untouched (`crate::mixer` stays as it is).
 pub fn strip_order(s: &State) -> Vec<u16> {
     let n = mx::inserts(s);
-    if !s.project.linear_mode {
+    if s.project.tracks.is_empty() {
         return (1..=n).collect();
     }
     let mut v: Vec<u16> = Vec::new();
@@ -2042,12 +2042,12 @@ mod tests {
         assert!(up_meter.y > 400.0, "Extra large keeps its meter down by the fader: {up_meter:?}");
     }
 
-    /// Classic mode's strips: in index order, as always — the view ordering and the docks are unchanged.
+    /// A project without tracks: strips in index order, as always — the view ordering and the docks are unchanged.
     #[test]
-    fn classic_orders_by_index() {
+    fn without_tracks_strips_go_by_index() {
         let app = app();
         let n = mx::inserts(&app.state);
-        assert!(!app.state.project.linear_mode);
+        assert!(app.state.project.tracks.is_empty());
         assert_eq!(strip_order(&app.state), (1..=n).collect::<Vec<u16>>());
         let d = docks(&app.state);
         let parts: Vec<Vec<u16>> = d.parts.iter().map(|p| p.iter().map(|e| e.0).collect()).collect();
@@ -2063,7 +2063,6 @@ mod tests {
         track_create(&mut app.state, "audio");
         track_create(&mut app.state, "midi");
         track_create(&mut app.state, "bus");
-        app.state.project.linear_mode = true;
         let n = mx::inserts(&app.state);
         let tracks: Vec<u16> = app.state.project.tracks.iter().map(|t| t.mixer_strip).collect();
         let mut want = tracks.clone();
@@ -2073,11 +2072,11 @@ mod tests {
         let d = docks(&app.state);
         let ordered: Vec<u16> = d.parts.iter().flat_map(|p| p.iter().map(|e| e.0)).collect();
         assert_eq!(ordered.iter().filter(|m| tracks.contains(m)).cloned().collect::<Vec<_>>(), tracks);
-        // Every insert is there exactly once, then Classic is unchanged again when the project is not Linear.
+        // Every insert is there exactly once, and index order is back once there are no tracks.
         let mut all = ordered.clone();
         all.sort();
         assert_eq!(all, (1..=n).collect::<Vec<u16>>());
-        app.state.project.linear_mode = false;
+        app.state.project.tracks.clear();
         assert_eq!(strip_order(&app.state), (1..=n).collect::<Vec<u16>>());
     }
 }

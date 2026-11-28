@@ -67,8 +67,13 @@ pub fn to_screen(hwnd: HWND, x: i32, y: i32) -> (i32, i32) {
     (p.x, p.y)
 }
 
-/// Copies `px` (XRGB rows of `w`) into the device context at (0, 0).
+/// Copies an editor's `px` (XRGB rows of `w`) into the device context at (0, 0), in the app's colours ([`crate::themed`]).
 pub fn blit(hdc: HDC, px: &[u32], w: u32, h: u32) {
+    blit_raw(hdc, &crate::themed(px), w, h);
+}
+
+/// [`blit`] without the recolouring, for what is painted with the app's palette already (the menus).
+fn blit_raw(hdc: HDC, px: &[u32], w: u32, h: u32) {
     unsafe {
         let mut bmi: BITMAPINFO = std::mem::zeroed();
         bmi.bmiHeader = BITMAPINFOHEADER {
@@ -180,7 +185,7 @@ unsafe extern "system" fn pop_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 let (w, h) = ((pop.layout.w * pop.scale).ceil() as u32, (pop.layout.h * pop.scale).ceil() as u32);
                 pop.buf.resize((w * h) as usize, 0);
                 pop.canvas.copy_to_xrgb(&mut pop.buf);
-                blit(hdc, &pop.buf, w, h);
+                blit_raw(hdc, &pop.buf, w, h);
             }
             end_paint(hwnd, &ps);
             return 0;

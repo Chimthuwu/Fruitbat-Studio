@@ -1307,24 +1307,19 @@ impl Command {
                         }
                     }
                 }
-                // Creating a track is what makes the project Linear; Classic mode never has tracks.
-                s.project.linear_mode = true;
                 s.project.tracks.push(os_model::Track::new(kind, lane.map_or(0, |l| u32::from(l) + 1), insert, channel));
                 s.control.settle(&mut s.project);
                 let id = s.project.tracks.last().map_or(Id::NONE, |t| t.id);
                 Ok(id_result("track", id))
             }
             Command::AutomationLaneBind { track, target } => {
-                if !s.project.linear_mode {
-                    return Err("automation lanes are a Linear-mode feature (track_create makes a project Linear)".into());
-                }
                 let at = s.project.tracks.iter().position(|t| t.id.0 == track).ok_or_else(|| format!("no track {track}"))?;
                 if let Some(other) = crate::track_links::track_of_target(s, target) {
                     if other != at {
                         return Err(format!("the target is not one of track {track}'s controls"));
                     }
                 } else {
-                    return Err("the target has no track: the main controls and a Classic-mode mixer target take no lane".into());
+                    return Err("the target has no track: the main controls and a mixer strip without a track take no lane".into());
                 }
                 if s.project.auto_lanes.iter().any(|l| l.target == target) {
                     return Err(format!("target {target:#x} is bound already"));
@@ -1335,9 +1330,6 @@ impl Command {
                 none
             }
             Command::AutomationLaneUnbind { track, target } => {
-                if !s.project.linear_mode {
-                    return Err("automation lanes are a Linear-mode feature (track_create makes a project Linear)".into());
-                }
                 let n = s.project.tracks.iter().position(|t| t.id.0 == track).ok_or_else(|| format!("no track {track}"))?;
                 let before = s.project.auto_lanes.len();
                 s.project.auto_lanes.retain(|l| !(l.track as usize == n && l.target == target));
@@ -1348,55 +1340,7 @@ impl Command {
             }
             Command::TrackDelete { track } => {
                 let at = s.project.tracks.iter().position(|t| t.id.0 == track).ok_or_else(|| format!("no track {track}"))?;
-                let t = s.project.tracks.remove(at);
-                // The removed track's automation lanes go, the later tracks' follow the removal (`auto_lane_track_deleted`).
-                // For a bus (no lane) this is the only cleanup: `track_lane_deleted` below finds no track to remove.
-                s.project.auto_lane_track_deleted(at as u16);
-                // The lane first: it and its clips go (the playlist track's Delete, `playlist::delete_track`'s
-                // loops), in every arrangement (the lane's number is the same one in all of them).
-                if t.playlist_lane > 0 {
-                    let lane0 = (t.playlist_lane - 1) as u16;
-                    for a in &mut s.project.arrangements {
-                        let gone: Vec<usize> = a.clips.iter().enumerate().filter(|(_, c)| c.track == lane0).map(|(i, _)| i).collect();
-                        for &i in gone.iter().rev() {
-                            a.clips.remove(i);
-                        }
-                        for c in &mut a.clips {
-                            if c.track > lane0 {
-                                c.track -= 1;
-                            }
-                        }
-                        let n = a.tracks.len();
-                        for k in usize::from(lane0)..n.saturating_sub(1) {
-                            let next = a.tracks[k + 1].clone();
-                            a.tracks[k] = os_model::PlaylistTrack { number: a.tracks[k].number, ..next };
-                        }
-                        if n > 0 {
-                            a.tracks[n - 1] = os_model::PlaylistTrack::new(n as u32);
-                        }
-                    }
-                    s.playlist.sel.clear();
-                    s.playlist.hover_clip = None;
-                    s.piano.dirty = true;
-                    s.project.track_lane_deleted(lane0);
-                }
-                // The strip, unless the master or another track's.
-                let strip_taken = t.mixer_strip != 0 && s.project.tracks.iter().all(|x| x.mixer_strip != t.mixer_strip);
-                if strip_taken {
-                    crate::mixer::delete_track(s, t.mixer_strip);
-                }
-                // The channel, with its notes (DeleteChannel's semantics), unless a project's last one or another
-                // track's: then it stays, unlinked (the conservative choice).
-                if let Some(ch) = t.channel.filter(|_| t.kind == os_model::TrackKind::Midi) {
-                    if let Some(row) = s.project.channels.iter().position(|c| c.index == ch) {
-                        let n = s.project.channels.len();
-                        let shared = s.project.tracks.iter().any(|x| x.channel == Some(ch));
-                        if n > 1 && !shared {
-                            let map: Vec<Option<usize>> = (0..n).map(|r| (r != row).then(|| if r < row { r } else { r - 1 })).collect();
-                            crate::rack::remap_state(s, &map);
-                        }
-                    }
-                }
+                delete_whole_track(s, at);
                 none
             }
             Command::TrackSet { track, name, color } => {
@@ -1604,3 +1548,57 @@ fn notes_of(p: &Project, notes: &[NoteIn]) -> Result<Vec<Note>, Error> {
 pub fn move_effect(track: u32, from: u8, to: u8) -> Command {
     Command::MoveEffect { track, from, to }
 }
+/// Track `at` of [`os_model::Project::tracks`] goes with everything it is: its lane and the lane's clips, its mixer
+/// insert, its channel and its automation lanes. No undo step of its own.
+pub(crate) fn delete_whole_track(s: &mut State, at: usize) {
+    let t = s.project.tracks.remove(at);
+    // The removed track's automation lanes go, the later tracks' follow the removal (`auto_lane_track_deleted`).
+    // For a bus (no lane) this is the only cleanup: `track_lane_deleted` below finds no track to remove.
+    s.project.auto_lane_track_deleted(at as u16);
+    // The lane first: it and its clips go (the playlist track's Delete, `playlist::delete_track`'s
+    // loops), in every arrangement (the lane's number is the same one in all of them).
+    if t.playlist_lane > 0 {
+        let lane0 = (t.playlist_lane - 1) as u16;
+        for a in &mut s.project.arrangements {
+            let gone: Vec<usize> = a.clips.iter().enumerate().filter(|(_, c)| c.track == lane0).map(|(i, _)| i).collect();
+            for &i in gone.iter().rev() {
+                a.clips.remove(i);
+            }
+            for c in &mut a.clips {
+                if c.track > lane0 && c.track != crate::playlist::MASTER_ROW {
+                    c.track -= 1;
+                }
+            }
+            let n = a.tracks.len();
+            for k in usize::from(lane0)..n.saturating_sub(1) {
+                let next = a.tracks[k + 1].clone();
+                a.tracks[k] = os_model::PlaylistTrack { number: a.tracks[k].number, ..next };
+            }
+            if n > 0 {
+                a.tracks[n - 1] = os_model::PlaylistTrack::new(n as u32);
+            }
+        }
+        s.playlist.sel.clear();
+        s.playlist.hover_clip = None;
+        s.piano.dirty = true;
+        s.project.track_lane_deleted(lane0);
+    }
+    // The strip, unless the master or another track's.
+    let strip_taken = t.mixer_strip != 0 && s.project.tracks.iter().all(|x| x.mixer_strip != t.mixer_strip);
+    if strip_taken {
+        crate::mixer::delete_track(s, t.mixer_strip);
+    }
+    // The channel, with its notes (DeleteChannel's semantics), unless a project's last one or another
+    // track's: then it stays, unlinked (the conservative choice).
+    if let Some(ch) = t.channel.filter(|_| t.kind == os_model::TrackKind::Midi) {
+        if let Some(row) = s.project.channels.iter().position(|c| c.index == ch) {
+            let n = s.project.channels.len();
+            let shared = s.project.tracks.iter().any(|x| x.channel == Some(ch));
+            if n > 1 && !shared {
+                let map: Vec<Option<usize>> = (0..n).map(|r| (r != row).then(|| if r < row { r } else { r - 1 })).collect();
+                crate::rack::remap_state(s, &map);
+            }
+        }
+    }
+}
+

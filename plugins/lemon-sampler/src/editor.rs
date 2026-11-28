@@ -2064,7 +2064,7 @@ mod win32 {
                     biCompression: BI_RGB,
                     ..std::mem::zeroed()
                 };
-                SetDIBitsToDevice(hdc, 0, 0, w, h, 0, 0, 0, h, self.crop.as_ptr() as *const c_void, &bmi, DIB_RGB_COLORS);
+                SetDIBitsToDevice(hdc, 0, 0, w, h, 0, 0, 0, h, os_plugkit::themed(&self.crop).as_ptr() as *const c_void, &bmi, DIB_RGB_COLORS);
                 EndPaint(self.hwnd, &ps);
             }
         }

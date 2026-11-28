@@ -2371,10 +2371,6 @@ impl App {
             Next::ImportMidi(p) => self.import_pending(p),
             Next::Revert(b) => self.revert_from(b),
             Next::Template(f) => self.new_from_pick(f),
-            Next::LinearTemplate => {
-                self.linear_project();
-                self.offer_new_form();
-            }
         }
         self.invalidate();
     }
@@ -2616,7 +2612,7 @@ impl App {
 
     /// FILE > New project: the Default template (spec: ui/settings-choices.md "Miscellaneous: seven more checks,
     /// Default template and Startup project"); for Empty, or a template that does not load, the built-in project.
-    fn new_project(&mut self) {
+    pub(crate) fn new_project(&mut self) {
         if self.new_from_template() {
             return;
         }
@@ -2628,7 +2624,7 @@ impl App {
         self.transport.silence();
         self.reset_hosted();
         let s = &mut self.state;
-        s.project = default_project();
+        s.project = empty_project();
         crate::project_info::created(s);
         s.file = None;
         s.path = None;
@@ -2660,29 +2656,26 @@ impl App {
         crate::rack::from_model(s);
         s.piano.dirty = true;
         s.message = Some("New project".into());
+        self.starter_tracks();
         crate::modulation::sync(self);
         self.mark_saved();
     }
 
-    /// The built-in Linear-mode template ("Linear"; spec: model/track-model.md §2 "Make it the default project mode"):
-    /// the built-in project with `linear_mode` on and the Track layer's starter tracks — one MIDI track with its
-    /// instrument channel and one audio track — each made by the control plane's `track_create`, so lane, mixer strip
-    /// and channel come linked and named, as one atomic undo step. Every other template and every project file stays
-    /// Classic.
-    pub(crate) fn linear_project(&mut self) {
-        self.empty_project();
+    /// A new project's tracks: one MIDI track with its instrument channel and one audio track, each made by the
+    /// control plane's `track_create`, so lane, mixer strip and channel come linked and named (spec:
+    /// model/track-model.md §2). Not an undo step: it is how the project starts.
+    fn starter_tracks(&mut self) {
         // The playlist's arrangement materializes on first touch (`arr_mut`), so the tracks' links land in it.
         crate::playlist::arr_mut(&mut self.state);
         let cmds: Vec<crate::control::command::Command> = [("MIDI 1", "midi"), ("Audio 1", "audio")]
             .into_iter()
             .map(|(name, kind)| crate::control::command::Command::TrackCreate { kind: kind.into(), name: Some(name.into()), color: None })
             .collect();
-        if crate::control::apply(&mut self.state, &crate::control::By::User, Some("New project"), cmds).is_ok() {
-            let s = &mut self.state;
-            s.message = Some("New project (Linear mode)".into());
-            s.piano.dirty = true;
+        if let Err(e) = crate::control::apply(&mut self.state, &crate::control::By::User, None, cmds) {
+            self.state.message = Some(e);
         }
-        self.mark_saved();
+        self.state.history.reset();
+        self.state.piano.dirty = true;
     }
 
     /// FILE > Open: the open dialog, starting in the project's folder.
@@ -10943,7 +10936,9 @@ pub fn theme_from_file(path: &std::path::Path) -> Result<Theme, String> {
 /// (`os_paths::user_dir`), else the last imported `current.flstheme`, else the default.
 fn load_theme() -> Theme {
     let t = design_theme(saved_design(), true);
-    os_theme::set_current(&t.colors);
+    // Published to the plugin editors too: without this their popped-out windows keep the Lemon colours until the
+    // theme is changed.
+    use_palette(&t.colors);
     t
 }
 
@@ -12649,7 +12644,7 @@ mod tests {
     fn the_gap_plus_opens_the_device_browser_with_midi_fx() {
         let Ok(mut c) = Canvas::new(1920, 1080, 1.0) else { return };
         let mut app = App::new(None);
-        app.linear_project();
+        app.empty_project();
         crate::playlist::run(
             &mut app,
             crate::playlist::Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi),
@@ -13129,7 +13124,6 @@ mod tests {
         let Ok(mut c) = Canvas::new(1920, 1080, 1.0) else { return }; // no system font: skip
         let mut app = App::new(None);
         app.state.project = test_project();
-        app.state.project.linear_mode = true;
         crate::playlist::run(&mut app, crate::playlist::Cmd::TrackMode(0, crate::track_links::Mode::LinearMidi));
         frame(&mut app, &mut c, None);
         let strip = crate::track_links::lane_track(&app.state, 0).map(|tr| tr.mixer_strip).expect("a linear track on lane 0");
@@ -13213,7 +13207,6 @@ mod tests {
         let mut b = Canvas::new(1920, 1080, 1.0).unwrap();
         let mut app = App::new(None);
         app.state.project = test_project();
-        app.state.project.linear_mode = true;
         use crate::track_links::Mode;
         crate::playlist::run(&mut app, crate::playlist::Cmd::TrackMode(0, Mode::LinearMidi));
         crate::playlist::run(&mut app, crate::playlist::Cmd::TrackMode(1, Mode::LinearMidi));
@@ -13364,7 +13357,8 @@ mod tests {
         let Ok(mut c) = Canvas::new(1920, 1080, 1.0) else { return };
         let mut app = App::new(None);
         app.state.project = test_project();
-        app.state.project.linear_mode = true;
+        // The rack shows in a project with tracks.
+        app.state.project.tracks.push(os_model::Track::new(os_model::TrackKind::Bus, 0, 1, None));
         app.state.show_device_rack = true;
         app.state.modulation.add(os_model::modulation::ModSource::default());
         frame(&mut app, &mut c, None);
@@ -20289,7 +20283,7 @@ mod tests {
         use winit::keyboard::{Key, NamedKey, PhysicalKey};
         let Ok(mut c) = Canvas::new(1920, 1080, 1.0) else { return };
         let mut app = App::new(None);
-        app.linear_project();
+        app.empty_project();
         let before = app.state.project.tracks.len();
         app.key(&Key::Character("T".into()), true, false);
         assert_eq!(app.state.project.tracks.len(), before + 1, "Ctrl+T made a track");

@@ -145,7 +145,6 @@ mod tests {
     fn app_with_fx() -> (App, u32) {
         let mut app = App::new(None);
         app.state.project = crate::app::test_project();
-        app.state.project.linear_mode = true;
         // The built-ins, as the app has them (a bare `App::new` has not scanned any plugin yet).
         app.plugins = crate::plugins::Plugins::builtins();
         app.state.plugdb.rebuild(&app.plugins);

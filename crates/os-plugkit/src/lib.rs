@@ -71,6 +71,43 @@ pub fn refresh_palette(p: &mut Palette) -> bool {
     true
 }
 
+/// Recolours a rendered editor image through `t`: chromatic pixels (the Lemon accent and its lit states) take the
+/// theme accent, light neutrals its text, dark neutrals its surfaces. Lightness is kept, so the editor's hierarchy
+/// and anti-aliasing survive.
+pub fn retint(px: &mut [u32], t: &os_theme::Palette) {
+    // The editors are mostly runs of one colour, and a drag redraws the tile every frame: a run is converted once.
+    let mut last: Option<(u32, u32)> = None;
+    for p in px {
+        if let Some((from, to)) = last {
+            if *p == from {
+                *p = to;
+                continue;
+            }
+        }
+        let from = *p;
+        let c = os_theme::Color::rgb(*p);
+        let (_, s, l) = c.hsl();
+        let out = if s > 0.18 {
+            t.a(*p)
+        } else if l > 0.45 {
+            t.tx(*p)
+        } else {
+            t.s(*p)
+        };
+        *p = (u32::from(out.r) << 16) | (u32::from(out.g) << 8) | u32::from(out.b);
+        last = Some((from, *p));
+    }
+}
+
+/// An editor window's pixels as the screen shows them: recoloured as a rack tile's are, once the app has published its
+/// palette, so a popped-out editor and its tile match. Without one they are shown as painted.
+pub fn themed(px: &[u32]) -> std::borrow::Cow<'_, [u32]> {
+    let Some(t) = HOST.read().ok().and_then(|p| p.clone()) else { return px.into() };
+    let mut out = px.to_vec();
+    retint(&mut out, &t);
+    out.into()
+}
+
 /// A menu to show: rows, what each does, submenus by row.
 #[derive(Clone, Debug)]
 pub struct MenuDef<C> {

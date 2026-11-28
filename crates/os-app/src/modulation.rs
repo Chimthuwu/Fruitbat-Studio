@@ -2364,7 +2364,8 @@ mod tests {
     #[test]
     fn a_stopped_modulator_strip_repaints_itself() {
         let mut app = crate::app::App::new(None);
-        app.state.project.linear_mode = true;
+        // The rack shows in a project with tracks.
+        app.state.project.tracks.push(os_model::Track::new(os_model::TrackKind::Bus, 0, 1, None));
         app.state.show_device_rack = true;
         app.state.device_rack_collapsed = false;
         app.state.modulation.add(ModSource::default());
@@ -2625,7 +2626,8 @@ mod tests {
         let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
         let mut app = crate::app::App::new(None);
         app.state.project = crate::app::test_project();
-        app.state.project.linear_mode = true;
+        // The rack shows in a project with tracks.
+        app.state.project.tracks.push(os_model::Track::new(os_model::TrackKind::Bus, 0, 1, None));
         app.state.control.settle(&mut app.state.project);
         let ids: Vec<_> = (0..2).map(|_| app.state.modulation.add(ModSource::default())).collect();
         let at = |app: &crate::app::App, id| {

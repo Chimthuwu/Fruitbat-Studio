@@ -2257,7 +2257,6 @@ mod tests {
     fn app() -> App {
         let mut app = App::new(None);
         app.state.project = crate::app::test_project();
-        app.state.project.linear_mode = true;
         use crate::{playlist::Cmd, track_links::Mode};
         crate::playlist::run(&mut app, Cmd::TrackMode(0, Mode::LinearMidi));
         crate::playlist::run(&mut app, Cmd::TrackMode(1, Mode::LinearMidi));

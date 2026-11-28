@@ -1191,6 +1191,11 @@ pub fn remap_project(p: &mut Project, map: &[Option<usize>]) {
     }
     // Instrument tracks follow their channel; one whose channel goes is unassigned (spec: ui/playlist.md §6c).
     p.remap_link_channels(|c| idx.get(&c).copied());
+    // A folded automation lane is remembered by its control: a channel's follows the channel.
+    p.auto_lanes.retain_mut(|l| {
+        let hi = (l.target >> 16) as u16;
+        hi >= 0x2000 || idx.get(&hi).map(|&n| l.target = u32::from(n) << 16 | (l.target & 0xFFFF)).is_some()
+    });
     // Initial values: a place below 0x2000 is a channel's index (spec: project/layouts.md "Mixer places").
     p.init_controls.retain_mut(|c| {
         let hi = (c.target >> 16) as u16;

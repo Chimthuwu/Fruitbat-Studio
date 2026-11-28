@@ -9,7 +9,7 @@ use os_project::lemon;
 use os_project::project;
 
 /// A project with tracks round trips through a legacy project: the PlaylistTrack links come back (no new chunks needed), and
-/// `tracks` and `linear_mode` do not leak into the file's bytes (a `.lemon` file keeps them, in its own events).
+/// `tracks` do not leak into the file's bytes (a `.lemon` file keeps them, in its own events).
 #[test]
 fn an_flp_keeps_the_links_and_drops_the_linear_tracks() {
     // Channels first (the file's regions follow the original's order: prelude, channels, arrangements, mixer).
@@ -43,7 +43,6 @@ fn an_flp_keeps_the_links_and_drops_the_linear_tracks() {
     arr.tracks[2].name = Some("Lead".into());
     arr.tracks[0].link = os_model::TrackLink::audio(4);
     p.arrangements.push(arr);
-    p.linear_mode = true;
     p.tracks.push(os_model::Track::new(os_model::TrackKind::Midi, 3, 5, Some(1)));
     p.tracks.push(os_model::Track::new(os_model::TrackKind::Bus, 0, 6, None));
 
@@ -56,5 +55,5 @@ fn an_flp_keeps_the_links_and_drops_the_linear_tracks() {
     let lane = |link: os_model::TrackLink| back.arrangements[0].tracks.iter().find(|t| t.link == link).unwrap();
     assert_eq!(lane(os_model::TrackLink::instrument(1)).name.as_deref(), Some("Lead"));
     assert!(lane(os_model::TrackLink::audio(4)).name.is_none(), "the audio track kept its link, not the midi one's name");
-    assert!(back.tracks.is_empty() && !back.linear_mode, "the Lemon-only state is gone");
+    assert!(back.tracks.is_empty(), "the Lemon-only state is gone");
 }
