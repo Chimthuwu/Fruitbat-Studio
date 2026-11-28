@@ -510,6 +510,102 @@ pub enum Act {
     SceneOverride(usize),
     /// The clip editor panel's Devices button: the device rack takes the bottom panel back.
     PanelDevices,
+    /// An audio clip's badge: fit its sample to the tempo at the estimated length, or let it play at its own speed.
+    Fit(u32, usize),
+    /// Fit an audio clip to this many bars.
+    FitBars(u32, usize, u8),
+    /// Double (`true`) or halve a fitted clip's length in beats.
+    FitScale(u32, usize, bool),
+    /// A fitted clip's sound: keep the pitch, or tape (speed and pitch together).
+    FitSound(u32, usize),
+}
+
+/// An audio clip's fit to the tempo, as its badge and menu show it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Fit {
+    /// Whether the sample is fitted now; else the rest is what fitting would do.
+    pub on: bool,
+    /// The length in beats.
+    pub beats: f64,
+    /// The sample's own tempo at that length.
+    pub bpm: f64,
+    /// Speed and pitch move together.
+    pub tape: bool,
+}
+
+/// The longest and shortest fits, in beats.
+const FIT_BEATS: (f64, f64) = (1.0, 256.0);
+
+/// The beat count a WAV file states for itself, read once per file (the badge asks on every paint).
+fn file_beats(path: &str) -> Option<u32> {
+    thread_local!(static SEEN: std::cell::RefCell<std::collections::HashMap<String, Option<u32>>> = Default::default());
+    SEEN.with_borrow_mut(|seen| {
+        *seen
+            .entry(path.to_string())
+            .or_insert_with(|| os_engine::sample::wav_tags(std::path::Path::new(&crate::plugins::resolve_sample(path))).beats)
+    })
+}
+
+/// The fit of the audio clip in a cell: its channel's stretch time, or the estimate (the file's own beat count, else
+/// whole bars from its length: `os_dsp::transients::guess_tempo`). `None` for other cells and unreadable samples.
+pub fn fit_of(s: &State, track: u32, scene: usize) -> Option<Fit> {
+    let ch = clip(s, track, scene)?.audio?;
+    let chan = s.project.channels.iter().find(|c| c.index == ch)?;
+    let path = chan.sample_path.as_deref()?;
+    let wave = s.playlist.wave(path)?;
+    let secs = wave.secs();
+    if secs <= 0.0 {
+        return None;
+    }
+    let set = chan.sound.stretch_time().map(|b| b * chan.sound.stretch_multiplier());
+    let beats = set.unwrap_or_else(|| {
+        file_beats(path).map_or_else(|| f64::from(os_dsp::transients::guess_tempo(wave.frames, wave.rate).0), f64::from)
+    });
+    let tape = set.is_some() && chan.sound.stretch_mode() == os_model::stretch_mode::RESAMPLE;
+    Some(Fit { on: set.is_some(), beats, bpm: beats * 60.0 / secs, tape })
+}
+
+/// "2 bars", "1 beat", "6 beats": a length in beats, in bars where it is whole ones.
+pub fn beats_text(s: &State, beats: f64) -> String {
+    let bar = f64::from(s.project.bar_ticks()) / f64::from(crate::playlist::ppq(s));
+    let bars = beats / bar;
+    let (n, unit) = if bars >= 1.0 && (bars - bars.round()).abs() < 1e-3 { (bars.round(), "bar") } else { (beats, "beat") };
+    let n = (n * 100.0).round() / 100.0;
+    format!("{n} {unit}{}", if n == 1.0 { "" } else { "s" })
+}
+
+/// Gives the audio clip in a cell its fit: `beats` long (`None`: not fitted, the sample's own speed), keeping the
+/// pitch or as tape. One undo step. The settings are the channel's, so other clips of that channel follow.
+fn set_fit(app: &mut App, track: u32, scene: usize, beats: Option<f64>, tape: bool) {
+    let Some(ch) = clip(&app.state, track, scene).and_then(|sl| sl.audio) else { return };
+    let Some(row) = app.state.project.channels.iter().position(|c| c.index == ch) else { return };
+    crate::playlist::snapshot_as(&mut app.state, "Fit to tempo");
+    let sound = &mut app.state.project.channels[row].sound;
+    match beats {
+        Some(b) => {
+            sound.set_stretch_time(b.clamp(FIT_BEATS.0, FIT_BEATS.1));
+            let mode = if tape { os_model::stretch_mode::RESAMPLE } else { os_model::stretch_mode::AUTO };
+            sound.stretch[3] = mode as u32;
+        }
+        None => sound.stretch = [0; 4],
+    }
+    let sound = sound.clone();
+    app.plugins.set_sampler_stretch(row, &sound);
+    app.state.piano.dirty = true;
+    if app.transport.playing() {
+        let p = crate::rack::play_project(&app.state);
+        app.transport.update(&p);
+    }
+    app.state.message = Some(match fit_of(&app.state, track, scene).filter(|f| f.on) {
+        Some(f) => format!(
+            "Fitted to {} ({:.1} BPM sample), {}",
+            beats_text(&app.state, f.beats),
+            f.bpm,
+            if f.tape { "tape: pitch follows speed" } else { "pitch kept" }
+        ),
+        None => "The clip plays at its own speed".into(),
+    });
+    app.invalidate();
 }
 
 /// The launcher's keys while it is out (Bitwig's launcher navigation): the arrows walk the cells, Home / End jump to
@@ -794,7 +890,7 @@ pub fn menu_items(s: &State, target: MenuTarget) -> Vec<(&'static str, String, A
             let Some(sl) = clip(s, track, scene) else {
                 return vec![("Set current pattern".into(), String::new(), Act::Set(track, scene))];
             };
-            vec![
+            let mut items = vec![
                 ("Set current pattern", String::new(), Act::Set(track, scene)),
                 ("Record into this clip", String::new(), Act::Record(track, scene)),
                 // Bitwig's Launch section: each row shows what it holds and a click walks it to the next value.
@@ -811,7 +907,23 @@ pub fn menu_items(s: &State, target: MenuTarget) -> Vec<(&'static str, String, A
                 ("Rename...", String::new(), Act::RenameClip(track, scene)),
                 ("Open clip", String::new(), Act::OpenClip(track, scene)),
                 ("Clear clip", String::new(), Act::Clear(track, scene)),
-            ]
+            ];
+            // An audio clip's fit to the tempo, above its other commands.
+            if let Some(f) = fit_of(s, track, scene) {
+                let value = if f.on { beats_text(s, f.beats) } else { "Off".into() };
+                let mut fit = vec![("Fit to tempo", value, Act::Fit(track, scene))];
+                for (label, bars) in [("Fit to 1 bar", 1), ("Fit to 2 bars", 2), ("Fit to 4 bars", 4), ("Fit to 8 bars", 8)] {
+                    fit.push((label, String::new(), Act::FitBars(track, scene, bars)));
+                }
+                if f.on {
+                    fit.push(("Halve length (/2)", String::new(), Act::FitScale(track, scene, false)));
+                    fit.push(("Double length (x2)", String::new(), Act::FitScale(track, scene, true)));
+                    let sound = if f.tape { "Tape" } else { "Keep pitch" };
+                    fit.push(("Fitted sound", sound.into(), Act::FitSound(track, scene)));
+                }
+                items.splice(0..0, fit);
+            }
+            items
         }
         MenuTarget::Scene(scene) => {
             let sc = s.launcher.scenes.get(scene).cloned().unwrap_or_default();
@@ -1771,10 +1883,33 @@ pub fn run(app: &mut App, act: Act) {
             | Act::CycleNext(..)
             | Act::CycleNextTiming(..)
             | Act::SceneOverride(_)
+            | Act::FitScale(..)
+            | Act::FitSound(..)
     ) {
         app.state.launcher.menu = None;
     }
     match act {
+        Act::Fit(track, scene) => {
+            if let Some(f) = fit_of(&app.state, track, scene) {
+                set_fit(app, track, scene, (!f.on).then_some(f.beats), false);
+            }
+        }
+        Act::FitBars(track, scene, bars) => {
+            if let Some(f) = fit_of(&app.state, track, scene) {
+                let bar = f64::from(app.state.project.bar_ticks()) / f64::from(crate::playlist::ppq(&app.state));
+                set_fit(app, track, scene, Some(f64::from(bars) * bar), f.tape);
+            }
+        }
+        Act::FitScale(track, scene, double) => {
+            if let Some(f) = fit_of(&app.state, track, scene) {
+                set_fit(app, track, scene, Some(f.beats * if double { 2.0 } else { 0.5 }), f.tape);
+            }
+        }
+        Act::FitSound(track, scene) => {
+            if let Some(f) = fit_of(&app.state, track, scene) {
+                set_fit(app, track, scene, Some(f.beats), !f.tape);
+            }
+        }
         Act::Launch(track, scene) => {
             // Ctrl+click adds or removes one cell (no launch); Shift+click selects a range from the anchor (no
             // launch). Both are the grid's selection gestures, as in the arrangement.
@@ -2743,6 +2878,72 @@ mod tests {
         app.ctrl = true;
         click(&mut app, &mut c, Act::Mute(id), false);
         assert!(!crate::playlist::track_soloed(&app.state, lane), "Ctrl+click on M releases the solo");
+    }
+
+    /// A dropped loop is fitted to the tempo from its badge: the estimate from its length, ×2 / ÷2, and the menu's bar
+    /// lengths and sound; the channel's stretch settings carry it, so the clip lasts whole beats at any tempo.
+    #[test]
+    fn an_audio_clip_fits_the_tempo_from_its_badge() {
+        let Ok(mut c) = os_ui::Canvas::new(1920, 1080, 1.0) else { return };
+        // 8 beats at 160 BPM: 3 s of 16-bit mono.
+        let (rate, frames) = (8000u32, 24000u32);
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + frames * 2).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        for v in [1u16, 1] {
+            wav.extend_from_slice(&v.to_le_bytes());
+        }
+        wav.extend_from_slice(&rate.to_le_bytes());
+        wav.extend_from_slice(&(rate * 2).to_le_bytes());
+        for v in [2u16, 16] {
+            wav.extend_from_slice(&v.to_le_bytes());
+        }
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(frames * 2).to_le_bytes());
+        wav.extend((0..frames).flat_map(|i| (((i % 80) as i16 - 40) * 200).to_le_bytes()));
+        let path = std::env::temp_dir().join(format!("os_app_fit_{}.wav", std::process::id()));
+        std::fs::write(&path, wav).unwrap();
+        let mut app = app();
+        app.state.z = vec![crate::app::Win::Playlist];
+        app.key(&Key::Named(NamedKey::Tab), false, false);
+        let id = columns(&app.state)[0].id;
+        add_audio(&mut app, path.to_str().unwrap(), id, 0);
+        let ch = clip(&app.state, id, 0).unwrap().audio.unwrap();
+        let sound = |app: &App| app.state.project.channels.iter().find(|c| c.index == ch).unwrap().sound.clone();
+        let len = |app: &App| slot_len(&app.state, &clip(&app.state, id, 0).unwrap());
+        let beat = u64::from(crate::playlist::ppq(&app.state));
+        let f = fit_of(&app.state, id, 0).expect("an audio clip has a fit");
+        assert!(!f.on && f.beats == 8.0 && (f.bpm - 160.0).abs() < 0.01, "{f:?}");
+        assert_eq!(sound(&app).stretch, [0; 4], "dropping alone changes nothing");
+        let click = |app: &mut App, c: &mut os_ui::Canvas, act: Act| {
+            app.paint(c, None);
+            let hit = app.hits.iter().rev().find(|h| h.action == Action::Launcher(act.clone()));
+            let r = hit.unwrap_or_else(|| panic!("{act:?} is painted")).rect;
+            app.mouse_move(r.cx(), r.cy());
+            app.mouse_down();
+            app.mouse_up();
+        };
+        select_only(&mut app.state, id, 0);
+        click(&mut app, &mut c, Act::Fit(id, 0));
+        assert_eq!(sound(&app).stretch_time(), Some(8.0));
+        assert_eq!(sound(&app).stretch_mode(), os_model::stretch_mode::AUTO, "the pitch is kept");
+        assert_eq!(len(&app), 8 * beat);
+        click(&mut app, &mut c, Act::FitScale(id, 0, false));
+        assert_eq!(len(&app), 4 * beat);
+        click(&mut app, &mut c, Act::FitScale(id, 0, true));
+        assert_eq!(len(&app), 8 * beat);
+        run(&mut app, Act::FitSound(id, 0));
+        assert!(fit_of(&app.state, id, 0).unwrap().tape);
+        run(&mut app, Act::FitBars(id, 0, 4));
+        assert_eq!((len(&app), fit_of(&app.state, id, 0).unwrap().tape), (16 * beat, true), "the sound choice stays");
+        // The right-click menu offers it, and the badge turns it off again.
+        let menu = menu_items(&app.state, MenuTarget::Clip(id, 0));
+        assert!(menu.iter().any(|i| i.2 == Act::FitBars(id, 0, 2)) && menu.iter().any(|i| i.2 == Act::FitSound(id, 0)));
+        click(&mut app, &mut c, Act::Fit(id, 0));
+        assert_eq!(sound(&app).stretch, [0; 4]);
+        let _ = std::fs::remove_file(path);
     }
 
     /// A double click on a filled slot opens its clip in the piano roll (the first click launched it).

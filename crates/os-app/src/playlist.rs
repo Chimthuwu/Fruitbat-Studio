@@ -1354,7 +1354,7 @@ pub fn unlock_tracks(s: &mut State) -> usize {
     arr_mut(s).tracks.iter_mut().filter_map(|t| t.clip_lock.take()).count()
 }
 
-fn ppq(s: &State) -> u32 {
+pub(crate) fn ppq(s: &State) -> u32 {
     u32::from(s.project.ppq.max(4))
 }
 

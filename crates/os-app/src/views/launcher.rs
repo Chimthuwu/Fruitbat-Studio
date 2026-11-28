@@ -452,6 +452,9 @@ fn slot_paint(ui: &mut Ui, s: &State, c: &launcher::Column, scene: usize, cell: 
     if launcher::is_selected(s, c.id, scene) {
         ui.c.stroke_rrect(cell.inset(3.0), 2.0, 1.0, t.glyph);
     }
+    if cursor || launcher::is_selected(s, c.id, scene) {
+        fit_paint(ui, s, c.id, scene, cell, area);
+    }
     // The arrow keys' cell: a bright inner ring, so keyboard navigation is visible even over a playing or queued
     // cell's own rings.
     if cursor {
@@ -535,6 +538,41 @@ fn audio_paint(ui: &mut Ui, s: &State, slot: &launcher::Slot, cell: Rect, col: C
             ui.c.line(x, mid - hi * amp, x, mid - lo * amp, 2.0, col);
         }
         x += 2.0;
+    }
+}
+
+/// A selected audio clip's badge along the bottom of its cell: its length and own tempo. A click fits it to the
+/// project tempo or lets it go; while fitted, ÷2 and ×2 beside it correct the length.
+fn fit_paint(ui: &mut Ui, s: &State, track: u32, scene: usize, cell: Rect, area: Rect) {
+    if cell.w < 110.0 || cell.h < 36.0 {
+        return;
+    }
+    let Some(f) = launcher::fit_of(s, track, scene) else { return };
+    let t = ui.t;
+    let y = cell.bottom() - 21.0;
+    let chip = |ui: &mut Ui, r: Rect, text: &str, on: bool, act: Act, hint: &'static str| {
+        let hov = hit_in(ui, r, area, Action::Launcher(act), hint);
+        ui.c.fill_rrect(r, 3.0, if on { t.accent } else if hov { t.s(0x2f363a) } else { t.s(0x14181a) });
+        ui.c.text_center(fnt(10.0), r, if on { t.s(0x14181a) } else { t.text }, text);
+        if hov {
+            ui.c.stroke_rrect(r, 3.0, 1.0, t.glyph);
+        }
+    };
+    let prefix = if f.on { "" } else { "Fit " };
+    let label = format!("{prefix}{} \u{b7} {:.0}", launcher::beats_text(s, f.beats), f.bpm);
+    let w = (ui.c.text_width(fnt(10.0), &label) + 12.0).min(cell.w - 62.0);
+    let badge = Rect::new(cell.x + 4.0, y, w, 14.0);
+    let hint = if f.on {
+        "Fitted to the tempo: click to play at its own speed"
+    } else {
+        "Click to fit this clip to the project tempo (right-click: more)"
+    };
+    chip(ui, badge, &label, f.on, Act::Fit(track, scene), hint);
+    if f.on {
+        let half = Rect::new(badge.right() + 3.0, y, 24.0, 14.0);
+        chip(ui, half, "\u{f7}2", false, Act::FitScale(track, scene, false), "Halve the length");
+        let double = Rect::new(half.right() + 3.0, y, 24.0, 14.0);
+        chip(ui, double, "\u{d7}2", false, Act::FitScale(track, scene, true), "Double the length");
     }
 }
 
